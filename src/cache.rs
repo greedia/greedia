@@ -10,6 +10,7 @@ use std::{
     path::PathBuf,
     sync::Arc,
 };
+use tokio::sync::Mutex;
 
 pub struct Cache {}
 
@@ -49,10 +50,10 @@ impl Cache {
             column_families,
         )?);
 
-        let sclru = Arc::new(SoftCacheLru::new(
+        let sclru = Arc::new(Mutex::new(SoftCacheLru::new(
             &cache_path.join("soft_cache"),
             soft_cache.limit,
-        ));
+        )));
 
         // Create downloaders that will be deduplicated by client_id (for the sake of rate limiting)
         // and create the DriveCaches

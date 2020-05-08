@@ -5,6 +5,7 @@ use crate::{
 use anyhow::Result;
 use rocksdb::DB;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[derive(Clone)]
 pub struct DriveCache {
@@ -12,7 +13,7 @@ pub struct DriveCache {
     pub id: String,
     downloader: Arc<Downloader>,
     db: Arc<DB>,
-    sclru: Arc<SoftCacheLru>,
+    sclru: Arc<Mutex<SoftCacheLru>>,
     crypt_context: Option<CryptContext>,
 }
 
@@ -21,7 +22,7 @@ impl DriveCache {
         name: String,
         downloader: Arc<Downloader>,
         db: Arc<DB>,
-        sclru: Arc<SoftCacheLru>,
+        sclru: Arc<Mutex<SoftCacheLru>>,
         drive: &ConfigDrive,
     ) -> Result<DriveCache> {
         let id = drive.drive_id.clone();

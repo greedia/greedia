@@ -1,0 +1,22 @@
+namespace Db;
+
+union DriveItem { File, Dir }
+
+table File {
+    md5:[ubyte];
+    size:uint64;
+    modified_time:uint64;
+}
+
+table Dir {
+    items:[DirItem];
+}
+
+table DirItem {
+    name:string;
+    id:string;
+}
+
+table ReverseItem {
+    parent_ids:[string];
+}

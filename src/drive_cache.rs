@@ -230,9 +230,6 @@ impl DriveCache {
     }
 
     pub async fn add_items(&self, parent: &str, items: Vec<ScannedItem>) -> Result<()> {
-        if parent == self.id {
-            dbg!(&items);
-        }
         // If not set, 1 is set as the next available inode. Inode 0 is reserved for the root of the drive.
         let mut next_inode = self
             .get_db_key(&self.cf_keys.scan_key, NEXT_INODE)?
@@ -364,12 +361,10 @@ impl DriveCache {
         Ok(())
     }
 
-    pub async fn update_parent(&self, parent: &ScannedItem) -> Result<()> {
+    pub async fn update_parent(&self, access_key: &str, modified_time: u64) -> Result<()> {
         let existing_inode = self
-            .get_db_key(&self.cf_keys.access_key, parent.id.as_bytes())?
+            .get_db_key(&self.cf_keys.access_key, access_key.as_bytes())?
             .map(|x| x.to_vec());
-
-        //dbg!(existing_inode.is_some());
 
         let existing_inode_clone = existing_inode.clone();
 
@@ -377,14 +372,10 @@ impl DriveCache {
             .and_then(|i| self.get_db_key(&self.cf_keys.inode_key, &i).transpose())
             .transpose()?;
 
-        //dbg!(existing_parent.is_some());
-
         let existing_parent = existing_parent
             .as_ref()
             .map(|ep| flatbuffers::get_root::<DriveItem>(&ep))
             .and_then(|di| di.data_as_dir());
-
-        //dbg!(existing_parent.is_some());
 
         if let Some(existing_parent) = existing_parent {
             if let Some(items) = existing_parent.items() {
@@ -418,7 +409,7 @@ impl DriveCache {
                     &mut fbb,
                     &DirArgs {
                         items: dir_items_vector,
-                        modified_time: existing_parent.modified_time(),
+                        modified_time: modified_time,
                     },
                 );
 
@@ -593,34 +584,37 @@ fn merge_parent(existing_parent: DriveItem, items: &mut Vec<(String, String, u64
 }
 
 fn build_drive_item(fbb: &mut FlatBufferBuilder, item: &ScannedItem) -> Result<()> {
-    let item = if let Some(ref fi) = item.file_info {
+    let (item_type, item) = if let Some(ref fi) = item.file_info {
         let md5 = fbb.create_vector_direct(&hex::decode(&fi.md5)?);
         let size = fi.size;
     
-        FileItem::create(
+        (DriveItemData::FileItem, FileItem::create(
             fbb,
             &FileItemArgs {
                 md5: Some(md5),
                 size_: size,
                 modified_time: item.modified_time.timestamp() as u64,
             },
-        ).as_union_value()
+        ).as_union_value())
     } else {
+        if item.name == "cotts" {
+            println!("COTTS! {}", item.modified_time);
+        }
         let items = fbb.create_vector::<WIPOffset<DirItem>>(&[]);
-        Dir::create(
+        (DriveItemData::Dir, Dir::create(
             fbb,
             &DirArgs {
                 items: Some(items),
                 modified_time: item.modified_time.timestamp() as u64,
             }
-        ).as_union_value()
+        ).as_union_value())
     };
 
     let drive_item = DriveItem::create(
         fbb,
         &DriveItemArgs {
             data: Some(item),
-            data_type: DriveItemData::FileItem,
+            data_type: item_type,
         },
     );
 
@@ -674,7 +668,7 @@ fn build_dir_drive_item(
 }
 
 fn lookup_key(parent: u64, name: &str) -> Vec<u8> {
-    println!("lookup_key {}:{}", parent, name);
+    //println!("lookup_key {}:{}", parent, name);
     let mut out = Vec::with_capacity(name.len() + 6);
     out.write_u48::<LittleEndian>(parent).expect("Could not write 6 bytes to vec");
     out.extend_from_slice(name.as_bytes());

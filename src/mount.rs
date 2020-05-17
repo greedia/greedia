@@ -90,7 +90,6 @@ impl GreediaFS {
     }
 
     fn readdir_root(&self, offset: u64) -> Vec<DirEntry> {
-        println!("readdir root");
         self.drives
             .iter()
             .skip(offset as usize)

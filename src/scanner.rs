@@ -12,10 +12,8 @@ pub async fn scan_thread_eh(drive_cache: DriveCache) {
 /// Thread that handles scanning and updating of one defined drive
 pub async fn scan_thread(drive_cache: DriveCache) -> Result<()> {
     println!("Scan thread for {}", drive_cache.name);
+    
     let (mut last_page_token, mut last_modified_date) = drive_cache.get_scan_state()?;
-
-    dbg!(&last_page_token, &last_modified_date);
-
     perform_scan(&drive_cache, &mut last_page_token, &mut last_modified_date).await.unwrap();
 
     Ok(())
@@ -123,7 +121,8 @@ async fn handle_one_page(drive_cache: &DriveCache, page: &Page) {
     }
 
     for p in parents {
-        if let Err(e) = drive_cache.update_parent(&p).await {
+        let (access_key, modified_time) = (p.id, p.modified_time.timestamp() as u64);
+        if let Err(e) = drive_cache.update_parent(&access_key, modified_time).await {
             dbg!(&e);
         }
     }

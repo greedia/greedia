@@ -83,10 +83,11 @@ impl GreediaFS {
     }
 
     fn getattr_item(&self, drive: u16, inode: u64) -> Option<FileAttr> {
-        println!("getattr_item");
         let drive_cache = self.drives.get(drive as usize)?;
-        
-        drive_cache.read_item(inode, readitem_to_fileattr).unwrap()
+        let global_inode = self.rev_inode(Inode::Drive(drive, inode));
+        let mut file_attr = drive_cache.read_item(inode, readitem_to_fileattr).unwrap()?;
+        file_attr.set_ino(global_inode);
+        Some(file_attr)
     }
 
     fn readdir_root(&self, offset: u64) -> Vec<DirEntry> {
@@ -156,12 +157,15 @@ impl GreediaFS {
 
     fn lookup_drive(&self, drive: u16, parent_inode: u64, name: &OsStr) -> Option<ReplyEntry> {
         let name = name.to_str()?;
-        //println!("lookup_drive {}, {}, {}", drive, inode, name);
         let drive_cache = self.drives.get(drive as usize)?;
 
-        if let Some((inode, file_attr)) = drive_cache.lookup_item(parent_inode, name, readitem_to_fileattr).unwrap() {
+        if let Some((inode, mut file_attr)) = drive_cache.lookup_item(parent_inode, name, readitem_to_fileattr).unwrap() {
+            let global_inode = self.rev_inode(Inode::Drive(drive, inode));
+            file_attr.set_ino(global_inode);
+            //println!("lookup_drive ({}) {}:{} -> {}", drive, parent_inode, name, inode);
+
             let mut reply_entry = ReplyEntry::default();
-            reply_entry.ino(self.rev_inode(Inode::Drive(drive, inode)));
+            reply_entry.ino(global_inode);
             reply_entry.attr(file_attr);
             reply_entry.ttl_attr(TTL);
             reply_entry.ttl_entry(TTL);
@@ -258,7 +262,7 @@ impl Filesystem for GreediaFS {
     where
         T: Reader + Writer + Unpin + Send,
     {
-        //dbg!(&op);
+        //dbg!(&op); 
         match op {
             Operation::Lookup(op) => self.do_lookup(cx, op).await,
             Operation::Getattr(op) => self.do_getattr(cx, op).await,

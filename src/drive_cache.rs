@@ -229,7 +229,7 @@ impl DriveCache {
             .await
     }
 
-    pub async fn add_items(&self, parent: &str, items: Vec<ScannedItem>) -> Result<()> {
+    pub fn add_items(&self, parent: &str, items: &Vec<ScannedItem>) -> Result<()> {
         // If not set, 1 is set as the next available inode. Inode 0 is reserved for the root of the drive.
         let mut next_inode = self
             .get_db_key(&self.cf_keys.scan_key, NEXT_INODE)?
@@ -361,7 +361,7 @@ impl DriveCache {
         Ok(())
     }
 
-    pub async fn update_parent(&self, access_key: &str, modified_time: u64) -> Result<()> {
+    pub fn update_parent(&self, access_key: &str, modified_time: u64) -> Result<()> {
         let existing_inode = self
             .get_db_key(&self.cf_keys.access_key, access_key.as_bytes())?
             .map(|x| x.to_vec());

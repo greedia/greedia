@@ -80,50 +80,31 @@ fn to_scanned_item(file: &PageItem) -> ScannedItem {
     }
 }
 
-fn page_to_parents(page: &Page) -> Vec<ScannedItem> {
-    if let Some(ref files) = page.files {
-        files
-            .into_iter()
-            .filter(|x| accepted_document_type(x))
-            .map(to_scanned_item)
-            .filter(|x| x.file_info.is_none())
-            .collect()
-    } else {
-        vec![]
-    }
-}
+async fn handle_one_page(drive_cache: &DriveCache, page: &Page) {
+    // let page_len = page.files.as_ref().map(|x| x.len()).unwrap_or(0);
+    // println!("handle {}", page_len);
 
-fn page_to_files_and_parents(
-    page: &Page,
-) -> Vec<(String, Vec<ScannedItem>)> {
-    if let Some(ref files) = page.files {
+    if let Some(files) = page.files.as_ref() {
+
         files
             .into_iter()
             .filter(|x| accepted_document_type(x))
-            .map(to_scanned_item)
+            .map(|x| to_scanned_item(&x))
             .group_by(|f| f.parent.clone())
             .into_iter()
             .map(|(s, d)| (s.to_string(), d.collect()))
-            .collect()
-    } else {
-        vec![]
-    }
-}
+            .for_each(|(p, i)| tokio::task::block_in_place(|| drive_cache.add_items(&p, &i)).unwrap());
 
-async fn handle_one_page(drive_cache: &DriveCache, page: &Page) {
-    let files = page_to_files_and_parents(page);
-    let parents = page_to_parents(page);
-
-    for (p, i) in files {
-        if let Err(e) = drive_cache.add_items(&p, i).await {
-            dbg!(&e);
-        }
+        files
+            .into_iter()
+            .filter(|x| accepted_document_type(x))
+            .map(|x| to_scanned_item(x))
+            .filter(|x| x.file_info.is_none())
+            .for_each(|p| {
+                let (access_key, modified_time) = (p.id, p.modified_time.timestamp() as u64);
+                tokio::task::block_in_place(|| drive_cache.update_parent(&access_key, modified_time)).unwrap()
+            });
     }
 
-    for p in parents {
-        let (access_key, modified_time) = (p.id, p.modified_time.timestamp() as u64);
-        if let Err(e) = drive_cache.update_parent(&access_key, modified_time).await {
-            dbg!(&e);
-        }
-    }
+    // println!("handle {} done", page_len);
 }

@@ -229,15 +229,19 @@ impl DriveCache {
             .await
     }
 
+    /// Add or merge a set of files into a specified parent.
     pub fn add_items(&self, parent: &str, items: &Vec<ScannedItem>) -> Result<()> {
         // If not set, 1 is set as the next available inode. Inode 0 is reserved for the root of the drive.
         let mut next_inode = self
             .get_db_key(&self.cf_keys.scan_key, NEXT_INODE)?
             .map(|i| LittleEndian::read_u48(&i))
             .unwrap_or(1);
+
+        // Keep a shared buffer for inode bytes, to improve efficiency slightly
         let mut inode_bytes = [0u8; 6];
         LittleEndian::write_u48(&mut inode_bytes, next_inode);
 
+        // Figure out the inode for this parent.
         let parent_inode = if parent == self.id {
             // Root directory, so always set inode to 0
             0
@@ -251,10 +255,12 @@ impl DriveCache {
             parent_inode
         };
 
+        // For more efficient writes, add everything at once
         let mut wb = WriteBatch::default();
 
-        // Add individual items
+        // Keep a hashmap if ID -> inode, to map items in the parent
         let mut item_inodes: HashMap<String, u64> = HashMap::new();
+
         for item in items.iter() {
             // Don't add if the item already exists
             if let Some(inode_bytes) = self
@@ -273,7 +279,6 @@ impl DriveCache {
             }
 
             let mut fbb = FlatBufferBuilder::new();
-
             build_drive_item(&mut fbb, item)?;
 
             LittleEndian::write_u48(&mut inode_bytes, next_inode);
@@ -351,7 +356,7 @@ impl DriveCache {
             &inode_bytes,
         )?;
 
-        // Update last_inode
+        // Update next_inode value
         LittleEndian::write_u48(&mut inode_bytes, next_inode);
         self.wb_put_db_key(&mut wb, &self.cf_keys.scan_key, NEXT_INODE, &inode_bytes)?;
 
@@ -361,6 +366,7 @@ impl DriveCache {
         Ok(())
     }
 
+    /// Update the metadata on a given parent.
     pub fn update_parent(&self, access_key: &str, modified_time: u64) -> Result<()> {
         let existing_inode = self
             .get_db_key(&self.cf_keys.access_key, access_key.as_bytes())?
@@ -435,6 +441,7 @@ impl DriveCache {
     }
 
     // This is fairly specialized for the sake of FUSE. There's probably a more generic way to do this.
+    /// Read all items within a directory, with an offset to start reading at a specific position.
     pub fn read_dir<T>(
         &self,
         inode: u64,
@@ -444,6 +451,7 @@ impl DriveCache {
         let mut inode_bytes = [0u8; 6];
         LittleEndian::write_u48(&mut inode_bytes, inode);
 
+        // Get this directory's 
         let db_dir = self.get_db_key(&self.cf_keys.inode_key, &inode_bytes)?;
         let dir = db_dir
             .as_ref()
@@ -463,7 +471,6 @@ impl DriveCache {
                     .enumerate()
                     .flat_map(|(off, item)| {
                         item.name().map(|name| {
-                            //println!("name {}", name);
                             let inode = item.inode();
                             let is_dir = item.is_dir();
                             let off = offset + off as u64;
@@ -481,6 +488,7 @@ impl DriveCache {
             }))
     }
 
+    /// Read the metadata of one item.
     pub fn read_item<T>(
         &self,
         inode: u64,
@@ -500,6 +508,7 @@ impl DriveCache {
             .map(to_t))
     }
 
+    /// Lookup the inode and metadata of one item, given a parent inode and file name.
     pub fn lookup_item<T>(&self, parent: u64, name: &str, to_t: impl FnOnce(ReadItem) -> T) -> Result<Option<(u64, T)>> {
         let lookup_bytes = lookup_key(parent, name);
         let db_item = self.get_db_key(&self.cf_keys.lookup_key, &lookup_bytes)?;
@@ -521,6 +530,7 @@ impl DriveCache {
     }
 }
 
+/// Convert an internal flatbuffers `DriveItem` into generic `ReadItem`, if possible.
 fn driveitem_to_readitem(drive_item: DriveItem) -> Option<ReadItem> {
     let out = match drive_item.data_type() {
         DriveItemData::FileItem => drive_item.data_as_file_item().and_then(|i| {
@@ -538,13 +548,19 @@ fn driveitem_to_readitem(drive_item: DriveItem) -> Option<ReadItem> {
     out
 }
 
+/// Structure used for reading a single item in a directory.
 pub struct ReadDirItem<'a> {
+    /// Item name
     pub name: &'a str,
+    /// Item's inode
     pub inode: u64,
+    /// Whether an item is a directory or file
     pub is_dir: bool,
+    /// Item's offset within the directory
     pub off: u64,
 }
 
+/// Structure used for reading a single item's metadata.
 #[derive(Debug)]
 pub enum ReadItem<'a> {
     File {
@@ -558,8 +574,8 @@ pub enum ReadItem<'a> {
 }
 
 // TODO: refactor this to take a FlatBufferBuilder
+/// Merge an existing DriveItem parent into a list of new items.
 fn merge_parent(existing_parent: DriveItem, items: &mut Vec<(String, String, u64, bool)>) -> u64 {
-    //println!("mp_start {}", items.len());
     let new_item_set = items.clone();
     let new_item_set: HashSet<&str> = new_item_set.iter().map(|(_, id, _, _)| &id[..]).collect();
     if let Some(existing_parent) = existing_parent.data_as_dir() {
@@ -576,13 +592,13 @@ fn merge_parent(existing_parent: DriveItem, items: &mut Vec<(String, String, u64
             }
         }
 
-        //println!("mp_end {}", items.len());
         existing_parent.modified_time()
     } else {
         0
     }
 }
 
+/// Build a DriveItem for flatbuffers from a ScannedItem.
 fn build_drive_item(fbb: &mut FlatBufferBuilder, item: &ScannedItem) -> Result<()> {
     let (item_type, item) = if let Some(ref fi) = item.file_info {
         let md5 = fbb.create_vector_direct(&hex::decode(&fi.md5)?);
@@ -597,9 +613,6 @@ fn build_drive_item(fbb: &mut FlatBufferBuilder, item: &ScannedItem) -> Result<(
             },
         ).as_union_value())
     } else {
-        if item.name == "cotts" {
-            println!("COTTS! {}", item.modified_time);
-        }
         let items = fbb.create_vector::<WIPOffset<DirItem>>(&[]);
         (DriveItemData::Dir, Dir::create(
             fbb,
@@ -623,6 +636,7 @@ fn build_drive_item(fbb: &mut FlatBufferBuilder, item: &ScannedItem) -> Result<(
     Ok(())
 }
 
+/// Build a Dir-type DriveItem for flatbuffers.
 fn build_dir_drive_item(
     fbb: &mut FlatBufferBuilder,
     modified_time: u64,
@@ -667,8 +681,8 @@ fn build_dir_drive_item(
     Ok(())
 }
 
+/// Generate an internal lookup key, given a parent inode and name.
 fn lookup_key(parent: u64, name: &str) -> Vec<u8> {
-    //println!("lookup_key {}:{}", parent, name);
     let mut out = Vec::with_capacity(name.len() + 6);
     out.write_u48::<LittleEndian>(parent).expect("Could not write 6 bytes to vec");
     out.extend_from_slice(name.as_bytes());

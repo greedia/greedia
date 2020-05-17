@@ -1,8 +1,10 @@
-namespace Db;
+union DriveItemData { FileItem, Dir }
 
-union DriveItem { File, Dir }
+table DriveItem {
+    data:DriveItemData;
+}
 
-table File {
+table FileItem {
     md5:[ubyte];
     size:uint64;
     modified_time:uint64;
@@ -10,13 +12,29 @@ table File {
 
 table Dir {
     items:[DirItem];
+    modified_time:uint64;
 }
 
-table DirItem {
+struct DirItem {
     name:string;
     id:string;
+    inode:uint64;
+    is_dir:bool;
 }
 
-table ReverseItem {
-    parent_ids:[string];
+// For mapping from an inode to data
+table InodeNode {
+    item:DriveItem;
+}
+
+// For mapping from an ID to an InodeNode
+table ReverseAccessNode {
+    inode:uint64;
+    parent_inodes:[uint64];
+}
+
+// For keeping track of a scan
+table ScanState {
+    last_page_token:string;
+    last_modified_date:uint64;
 }

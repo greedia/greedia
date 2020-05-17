@@ -506,6 +506,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "divrem"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc9f8914dcb99891bdfee82536bbff8d9aa612b0dbe83872afbc66902bdec0b9"
+
+[[package]]
 name = "dtoa"
 version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -811,9 +817,12 @@ name = "greedia3"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "byteorder",
  "chrono",
+ "divrem",
  "flatbuffers",
  "futures 0.3.4",
+ "hex",
  "itertools",
  "leaky-bucket",
  "libc",
@@ -887,6 +896,12 @@ checksum = "61565ff7aaace3525556587bd2dc31d4a07071957be715e63ce7b1eccf51a8f4"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "hex"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "644f9158b2f133fd50f5fb3242878846d9eb792e445c893805ff0e3824006e35"
 
 [[package]]
 name = "hmac"
@@ -1854,8 +1869,9 @@ dependencies = [
 
 [[package]]
 name = "rclone-crypt"
-version = "0.1.1"
-source = "git+git://github.com/k3d3/rclone-crypt-rs#2ddb533d20c9e0edcfbc67a2c00e0a2a31fbb286"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b4d9cb3e0a63819b6347a21ab3aa120869b279e14c19934c687329db3458c53"
 dependencies = [
  "aes-ctr",
  "aes-soft",

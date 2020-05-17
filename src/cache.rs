@@ -1,7 +1,7 @@
 use crate::{
     config::{ConfigDrive, DownloadAmount, SoftCache},
     downloader::Downloader,
-    soft_cache_lru::SoftCacheLru, drive_cache::DriveCache,
+    soft_cache_lru::SoftCacheLru, drive_cache::DriveCache, types::CfKeys,
 };
 use anyhow::Result;
 use rocksdb::{Options, DB};
@@ -15,7 +15,7 @@ use tokio::sync::Mutex;
 pub struct Cache {}
 
 impl Cache {
-    pub fn new(
+    pub async fn new(
         cache_path: &str,
         soft_cache: &SoftCache,
         head_dl: DownloadAmount,
@@ -30,20 +30,15 @@ impl Cache {
         let column_families: Vec<String> = drive_ids
             .into_iter()
             .flat_map(|drive_id| {
-                vec![
-                    // For accessing a file
-                    format!("access:{}", drive_id),
-                    // For find references to update upon file deletion
-                    format!("raccess:{}", drive_id),
-                    // For keeping track of scans
-                    format!("scan:{}", drive_id),
-                ]
+                CfKeys::as_vec(&drive_id)
             })
             .collect();
 
         // Open the database with the column families
         let cache_path = PathBuf::from(cache_path);
-        let options = Options::default();
+        let mut options = Options::default();
+        options.create_if_missing(true);
+        options.create_missing_column_families(true);
         let db = Arc::new(DB::open_cf(
             &options,
             cache_path.join("db_v1"),
@@ -67,7 +62,7 @@ impl Cache {
                     drive.client_id.clone(),
                     drive.client_secret.clone(),
                     drive.refresh_token.clone(),
-                )?);
+                ).await?);
                 downloaders.insert(drive.client_id.clone(), new_downloader.clone());
                 new_downloader
             };

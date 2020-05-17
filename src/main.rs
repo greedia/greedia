@@ -11,6 +11,7 @@ mod config;
 mod crypt_context;
 mod downloader;
 mod downloader_inner;
+mod drive_access;
 mod drive_cache;
 mod mount;
 mod scanner;
@@ -57,7 +58,7 @@ async fn main() -> Result<()> {
     }
 
     let mut join_handles = Vec::with_capacity(1 + cfg.drive.len());
-    let drive_caches = Cache::new(
+    let (drive_caches, drive_accessors) = Cache::new(
         &cfg.cache_path,
         &cfg.soft_cache,
         head_dl,
@@ -66,7 +67,7 @@ async fn main() -> Result<()> {
     ).await?;
 
     join_handles.push(tokio::spawn(mount::mount_thread_eh(
-        drive_caches.clone(),
+        drive_accessors,
         mount_point,
     )));
 

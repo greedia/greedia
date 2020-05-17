@@ -1,6 +1,4 @@
 use crate::{
-    config::ConfigDrive,
-    crypt_context::CryptContext,
     db_generated::{
         Dir, DirArgs, DirItem, DirItemArgs, DriveItem, DriveItemArgs, DriveItemData, FileItem,
         FileItemArgs,
@@ -12,7 +10,7 @@ use crate::{
 use anyhow::{bail, format_err, Result};
 use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
 use chrono::{DateTime, Duration, TimeZone, Utc};
-use flatbuffers::{WIPOffset, FlatBufferBuilder};
+use flatbuffers::{FlatBufferBuilder, WIPOffset};
 use rocksdb::{DBPinnableSlice, WriteBatch, DB};
 use std::{
     collections::{HashMap, HashSet},
@@ -27,41 +25,33 @@ static NEXT_INODE: &'static [u8] = b"next_inode";
 
 #[derive(Clone)]
 pub struct DriveCache {
-    pub name: String,
+    pub info_name: String, // Not any official drive name, just the first one that shows up
     pub id: String,
     downloader: Arc<Downloader>,
     db: Arc<DB>,
     sclru: Arc<Mutex<SoftCacheLru>>,
-    crypt_context: Option<CryptContext>,
     cf_keys: CfKeys,
 }
 
 impl DriveCache {
     pub fn new(
-        name: String,
+        drive_info_name: &str,
+        drive_id: &str,
         downloader: Arc<Downloader>,
         db: Arc<DB>,
         sclru: Arc<Mutex<SoftCacheLru>>,
-        drive: &ConfigDrive,
     ) -> Result<DriveCache> {
-        let id = drive.drive_id.clone();
+        let info_name = drive_info_name.to_string();
+        let id = drive_id.to_string();
 
-        let crypt_context =
-            if let (Some(password1), Some(password2)) = (&drive.password, &drive.password2) {
-                Some(CryptContext::new(&password1, &password2)?)
-            } else {
-                None
-            };
-
-        let cf_keys = CfKeys::new(&drive.drive_id);
+        let cf_keys = CfKeys::new(&id);
 
         Ok(DriveCache {
-            name,
+            info_name,
             id,
             downloader,
             db,
             sclru,
-            crypt_context,
             cf_keys,
         })
     }
@@ -263,8 +253,8 @@ impl DriveCache {
 
         for item in items.iter() {
             // Don't add if the item already exists
-            if let Some(inode_bytes) = self
-                .get_db_key(&self.cf_keys.access_key, item.id.as_bytes())?
+            if let Some(inode_bytes) =
+                self.get_db_key(&self.cf_keys.access_key, item.id.as_bytes())?
             {
                 // Make sure the lookup key still exists though
                 let inode = LittleEndian::read_u48(&inode_bytes);
@@ -428,8 +418,11 @@ impl DriveCache {
                 );
 
                 fbb.finish(dir_drive_item, None);
-                self.put_db_key(&self.cf_keys.inode_key, &existing_inode_clone.unwrap(), &fbb.finished_data())?;
-
+                self.put_db_key(
+                    &self.cf_keys.inode_key,
+                    &existing_inode_clone.unwrap(),
+                    &fbb.finished_data(),
+                )?;
             } else {
                 bail!("Could not get items from dir.");
             }
@@ -451,7 +444,7 @@ impl DriveCache {
         let mut inode_bytes = [0u8; 6];
         LittleEndian::write_u48(&mut inode_bytes, inode);
 
-        // Get this directory's 
+        // Get this directory's
         let db_dir = self.get_db_key(&self.cf_keys.inode_key, &inode_bytes)?;
         let dir = db_dir
             .as_ref()
@@ -489,11 +482,7 @@ impl DriveCache {
     }
 
     /// Read the metadata of one item.
-    pub fn read_item<T>(
-        &self,
-        inode: u64,
-        to_t: impl FnOnce(ReadItem) -> T,
-    ) -> Result<Option<T>> {
+    pub fn read_item<T>(&self, inode: u64, to_t: impl FnOnce(ReadItem) -> T) -> Result<Option<T>> {
         let mut inode_bytes = [0u8; 6];
         LittleEndian::write_u48(&mut inode_bytes, inode);
 
@@ -503,21 +492,32 @@ impl DriveCache {
             .as_ref()
             .map(|d| flatbuffers::get_root::<DriveItem>(d));
 
-        Ok(item
-            .and_then(driveitem_to_readitem)
-            .map(to_t))
+        Ok(item.and_then(driveitem_to_readitem).map(to_t))
+    }
+
+    /// Try to find the inode from a name, given a parent.
+    pub fn lookup_inode(&self, parent: u64, name: &str) -> Result<Option<u64>> {
+        let lookup_bytes = lookup_key(parent, name);
+        let db_item = self.get_db_key(&self.cf_keys.lookup_key, &lookup_bytes)?;
+
+        Ok(db_item.map(|di| LittleEndian::read_u48(&di)))
     }
 
     /// Lookup the inode and metadata of one item, given a parent inode and file name.
-    pub fn lookup_item<T>(&self, parent: u64, name: &str, to_t: impl FnOnce(ReadItem) -> T) -> Result<Option<(u64, T)>> {
+    pub fn lookup_item<T>(
+        &self,
+        parent: u64,
+        name: &str,
+        to_t: impl FnOnce(ReadItem) -> T,
+    ) -> Result<Option<(u64, T)>> {
         let lookup_bytes = lookup_key(parent, name);
         let db_item = self.get_db_key(&self.cf_keys.lookup_key, &lookup_bytes)?;
 
         let inode = db_item.as_ref().map(|di| LittleEndian::read_u48(&di));
 
-        let inode_item = db_item.and_then(|di| {
-            self.get_db_key(&self.cf_keys.inode_key, &di).transpose()
-        }).transpose()?;
+        let inode_item = db_item
+            .and_then(|di| self.get_db_key(&self.cf_keys.inode_key, &di).transpose())
+            .transpose()?;
 
         let item = inode_item
             .as_ref()
@@ -603,24 +603,32 @@ fn build_drive_item(fbb: &mut FlatBufferBuilder, item: &ScannedItem) -> Result<(
     let (item_type, item) = if let Some(ref fi) = item.file_info {
         let md5 = fbb.create_vector_direct(&hex::decode(&fi.md5)?);
         let size = fi.size;
-    
-        (DriveItemData::FileItem, FileItem::create(
-            fbb,
-            &FileItemArgs {
-                md5: Some(md5),
-                size_: size,
-                modified_time: item.modified_time.timestamp() as u64,
-            },
-        ).as_union_value())
+
+        (
+            DriveItemData::FileItem,
+            FileItem::create(
+                fbb,
+                &FileItemArgs {
+                    md5: Some(md5),
+                    size_: size,
+                    modified_time: item.modified_time.timestamp() as u64,
+                },
+            )
+            .as_union_value(),
+        )
     } else {
         let items = fbb.create_vector::<WIPOffset<DirItem>>(&[]);
-        (DriveItemData::Dir, Dir::create(
-            fbb,
-            &DirArgs {
-                items: Some(items),
-                modified_time: item.modified_time.timestamp() as u64,
-            }
-        ).as_union_value())
+        (
+            DriveItemData::Dir,
+            Dir::create(
+                fbb,
+                &DirArgs {
+                    items: Some(items),
+                    modified_time: item.modified_time.timestamp() as u64,
+                },
+            )
+            .as_union_value(),
+        )
     };
 
     let drive_item = DriveItem::create(
@@ -684,7 +692,8 @@ fn build_dir_drive_item(
 /// Generate an internal lookup key, given a parent inode and name.
 fn lookup_key(parent: u64, name: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(name.len() + 6);
-    out.write_u48::<LittleEndian>(parent).expect("Could not write 6 bytes to vec");
+    out.write_u48::<LittleEndian>(parent)
+        .expect("Could not write 6 bytes to vec");
     out.extend_from_slice(name.as_bytes());
     out
 }

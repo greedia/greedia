@@ -1,4 +1,4 @@
-use crate::drive_cache::{ReadItem, DriveCache};
+use crate::{drive_access::{DriveAccess, ReadItem, ReadDirItem}};
 use anyhow::Result;
 use polyfuse::{
     io::{Reader, Writer},
@@ -15,7 +15,7 @@ use std::{
 
 const TTL: Duration = Duration::from_secs(60 * 60 * 24 * 365);
 const ITEM_BITS: usize = 48;
-const DRIVE_OFFSET: u64 = (1 << ITEM_BITS);
+const DRIVE_OFFSET: u64 = 1 << ITEM_BITS;
 const ITEM_MASK: u64 = DRIVE_OFFSET - 1;
 
 enum Inode {
@@ -25,12 +25,12 @@ enum Inode {
 }
 
 struct GreediaFS {
-    drives: Vec<DriveCache>,
+    drives: Vec<DriveAccess>,
     start_time: SystemTime,
 }
 
 impl GreediaFS {
-    pub fn new(drives: Vec<DriveCache>) -> GreediaFS {
+    pub fn new(drives: Vec<DriveAccess>) -> GreediaFS {
         let start_time = SystemTime::now();
         GreediaFS { drives, start_time }
     }
@@ -83,9 +83,9 @@ impl GreediaFS {
     }
 
     fn getattr_item(&self, drive: u16, inode: u64) -> Option<FileAttr> {
-        let drive_cache = self.drives.get(drive as usize)?;
+        let drive_access = self.drives.get(drive as usize)?;
         let global_inode = self.rev_inode(Inode::Drive(drive, inode));
-        let mut file_attr = drive_cache.read_item(inode, readitem_to_fileattr).unwrap()?;
+        let mut file_attr = drive_access.read_item(inode, readitem_to_fileattr).unwrap()?;
         file_attr.set_ino(global_inode);
         Some(file_attr)
     }
@@ -157,9 +157,9 @@ impl GreediaFS {
 
     fn lookup_drive(&self, drive: u16, parent_inode: u64, name: &OsStr) -> Option<ReplyEntry> {
         let name = name.to_str()?;
-        let drive_cache = self.drives.get(drive as usize)?;
+        let drive_access = self.drives.get(drive as usize)?;
 
-        if let Some((inode, mut file_attr)) = drive_cache.lookup_item(parent_inode, name, readitem_to_fileattr).unwrap() {
+        if let Some((inode, mut file_attr)) = drive_access.lookup_item(parent_inode, name, readitem_to_fileattr).unwrap() {
             let global_inode = self.rev_inode(Inode::Drive(drive, inode));
             file_attr.set_ino(global_inode);
             //println!("lookup_drive ({}) {}:{} -> {}", drive, parent_inode, name, inode);
@@ -290,15 +290,15 @@ fn readitem_to_fileattr(read_item: ReadItem) -> FileAttr {
 }
 
 /// Mount thread, with error handling
-pub async fn mount_thread_eh(drive_caches: Vec<DriveCache>, mount_point: PathBuf) {
-    mount_thread(drive_caches, mount_point).await.unwrap();
+pub async fn mount_thread_eh(drive_accessors: Vec<DriveAccess>, mount_point: PathBuf) {
+    mount_thread(drive_accessors, mount_point).await.unwrap();
 }
 
 /// Thread that handles all FUSE requests
-pub async fn mount_thread(drive_caches: Vec<DriveCache>, mount_point: PathBuf) -> Result<()> {
+pub async fn mount_thread(drive_accessors: Vec<DriveAccess>, mount_point: PathBuf) -> Result<()> {
     let fuse_args: Vec<&OsStr> = vec![
         &OsStr::new("-o"),
         &OsStr::new("auto_unmount,ro,allow_other"),
     ];
-    Ok(polyfuse_tokio::mount(GreediaFS::new(drive_caches), mount_point, &fuse_args).await?)
+    Ok(polyfuse_tokio::mount(GreediaFS::new(drive_accessors), mount_point, &fuse_args).await?)
 }

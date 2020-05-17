@@ -2,7 +2,7 @@ use anyhow::Result;
 use rclone_crypt::{cipher::Cipher, obscure};
 #[derive(Clone)]
 pub struct CryptContext {
-    cipher: Cipher,
+    pub cipher: Cipher,
 }
 
 impl CryptContext {

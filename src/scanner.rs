@@ -2,16 +2,17 @@ use crate::{types::{PageItem, Page, ScannedItem, FileInfo}, drive_cache::DriveCa
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
+use std::sync::Arc;
 
 
 /// Scan thread, with error handling
-pub async fn scan_thread_eh(drive_cache: DriveCache) {
+pub async fn scan_thread_eh(drive_cache: Arc<DriveCache>) {
     scan_thread(drive_cache).await.unwrap()
 }
 
 /// Thread that handles scanning and updating of one defined drive
-pub async fn scan_thread(drive_cache: DriveCache) -> Result<()> {
-    println!("Scan thread for {}", drive_cache.name);
+pub async fn scan_thread(drive_cache: Arc<DriveCache>) -> Result<()> {
+    println!("Scan thread for {}", drive_cache.info_name);
     
     let (mut last_page_token, mut last_modified_date) = drive_cache.get_scan_state()?;
     perform_scan(&drive_cache, &mut last_page_token, &mut last_modified_date).await.unwrap();
@@ -27,7 +28,7 @@ pub async fn perform_scan(
     drive_cache.start_scan()?;
     println!(
         "Scanning drive {} ({})...",
-        &drive_cache.name, &drive_cache.id
+        &drive_cache.info_name, &drive_cache.id
     );
     loop {
         let page =
@@ -45,10 +46,10 @@ pub async fn perform_scan(
     }
 
     drive_cache.finish_scan()?;
-    println!("Finished scanning drive {} ({})", &drive_cache.name, &drive_cache.id);
+    println!("Finished scanning drive {} ({})", &drive_cache.info_name, &drive_cache.id);
 
     let (count, size) = drive_cache.count_access_keys().await?;
-    println!("Caching {} items of size {} for drive {} ({})...", count, size, &drive_cache.name, &drive_cache.id);
+    println!("Caching {} items of size {} for drive {} ({})...", count, size, &drive_cache.info_name, &drive_cache.id);
 
     Ok(())
 }

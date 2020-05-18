@@ -75,18 +75,24 @@ impl Cache {
             .iter()
             .map(|(_, drive)| drive.drive_id.clone())
             .collect();
-        let column_families: Vec<String> = drive_ids
+        let mut column_families: Vec<String> = drive_ids
             .into_iter()
             .flat_map(|drive_id| CfKeys::as_vec(&drive_id))
             .collect();
 
         // Open the database with the column families
+        let db_path = db_path.join("db_v1");
+
         let mut options = Options::default();
         options.create_if_missing(true);
         options.create_missing_column_families(true);
+
+        let mut existing_column_families = DB::list_cf(&options, &db_path)?;
+        column_families.append(&mut existing_column_families);
+
         let db = Arc::new(DB::open_cf(
             &options,
-            db_path.join("db_v1"),
+            &db_path,
             column_families,
         )?);
 

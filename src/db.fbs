@@ -1,6 +1,7 @@
 union DriveItemData { FileItem, Dir }
 
 table DriveItem {
+    id:string;
     data:DriveItemData;
 }
 
@@ -15,7 +16,7 @@ table Dir {
     modified_time:uint64;
 }
 
-struct DirItem {
+table DirItem {
     name:string;
     id:string;
     inode:uint64;

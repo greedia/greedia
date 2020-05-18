@@ -125,7 +125,7 @@ impl Downloader {
         return_when: ReturnWhen,
         range: ToDownload,
     ) -> Result<()> {
-        let (result, mut res_receiver) = mpsc::channel(0);
+        let (result, mut res_receiver) = mpsc::channel(1);
 
         let msg = ChanMessage::CacheFile {
             file_id,

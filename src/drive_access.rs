@@ -1,8 +1,20 @@
-use crate::{config::ConfigDrive, crypt_context::CryptContext, drive_cache::DriveCache};
+use crate::{
+    cache_reader::CacheRead, config::ConfigDrive, crypt_context::CryptContext,
+    drive_cache::DriveCache,
+};
 use anyhow::Result;
-use std::{path::{PathBuf, Path, Component}, sync::{atomic::{Ordering, AtomicU64}, Arc}};
+use std::{
+    path::{Component, Path, PathBuf},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+};
 
-pub use crate::drive_cache::{ReadItem, ReadDirItem};
+pub use crate::{
+    drive_cache::{ReadDirItem, ReadItem},
+    encrypted_cache_reader::EncryptedCacheReader,
+};
 
 pub struct DriveAccess {
     pub name: String,
@@ -61,7 +73,7 @@ impl DriveAccess {
                 _ => continue,
             };
             last_inode = self.cache.lookup_inode(inode, cstr).ok().flatten()?;
-        };
+        }
         Some(last_inode)
     }
 
@@ -97,7 +109,11 @@ impl DriveAccess {
 
         if let Some(parent) = parent {
             if let Some(ref cc) = self.crypt {
-                let name = cc.cipher.encrypt_segment(name).ok().unwrap_or_else(|| name.to_string());
+                let name = cc
+                    .cipher
+                    .encrypt_segment(name)
+                    .ok()
+                    .unwrap_or_else(|| name.to_string());
                 self.cache.lookup_item(parent, &name, to_t)
             } else {
                 self.cache.lookup_item(parent, name, to_t)
@@ -107,8 +123,8 @@ impl DriveAccess {
         }
     }
 
-    #[inline]
     /// Read a directory, decrypting the item names if needed.
+    #[inline]
     pub fn read_dir<T>(
         &self,
         inode: u64,
@@ -143,5 +159,14 @@ impl DriveAccess {
         } else {
             Ok(None)
         }
+    }
+
+    pub async fn open_file(&self, inode: u64) -> Option<Box<dyn CacheRead + 'static + Send>> {
+        let cache_reader = self.cache.open_file(inode).unwrap()?;
+        Some(if let Some(ref cc) = self.crypt {
+            Box::new(EncryptedCacheReader::new(&cc.cipher, cache_reader).await.unwrap())
+        } else {
+            Box::new(cache_reader)
+        })
     }
 }

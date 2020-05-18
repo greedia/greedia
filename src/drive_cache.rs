@@ -4,8 +4,7 @@ use crate::{
         FileItemArgs,
     },
     downloader::Downloader,
-    soft_cache_lru::SoftCacheLru,
-    types::{CfKeys, Page, ScannedItem},
+    types::{CfKeys, Page, ScannedItem}, cache_reader::CacheReader, cache::{ReaderFileData, Cache},
 };
 use anyhow::{bail, format_err, Result};
 use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
@@ -16,7 +15,6 @@ use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
 };
-use tokio::sync::Mutex;
 
 static LAST_PAGE_TOKEN: &'static [u8] = b"last_page_token";
 static LAST_SCAN_START: &'static [u8] = b"last_scan_start";
@@ -24,13 +22,20 @@ static LAST_MODIFIED_DATE: &'static [u8] = b"last_modified_date";
 static NEXT_INODE: &'static [u8] = b"next_inode";
 
 #[derive(Clone)]
+/// Cache for a specific drive. Works at the drive ID level.
+/// Multiple drives with the same ID will share this cache.
 pub struct DriveCache {
-    pub info_name: String, // Not any official drive name, just the first one that shows up
     pub id: String,
+    /// Downloader for this `DriveCache`.
     downloader: Arc<Downloader>,
+    /// Global cache struct that handles soft_cache and hard_cache.
+    cache: Arc<Cache>,
+    /// RocksDB database.
     db: Arc<DB>,
-    sclru: Arc<Mutex<SoftCacheLru>>,
+    /// ColumnFamily keys, for database access.
     cf_keys: CfKeys,
+    /// Informational name that can be used in stats and debug messages.
+    pub info_name: String,
 }
 
 impl DriveCache {
@@ -38,8 +43,8 @@ impl DriveCache {
         drive_info_name: &str,
         drive_id: &str,
         downloader: Arc<Downloader>,
+        cache: Arc<Cache>,
         db: Arc<DB>,
-        sclru: Arc<Mutex<SoftCacheLru>>,
     ) -> Result<DriveCache> {
         let info_name = drive_info_name.to_string();
         let id = drive_id.to_string();
@@ -50,8 +55,8 @@ impl DriveCache {
             info_name,
             id,
             downloader,
+            cache,
             db,
-            sclru,
             cf_keys,
         })
     }
@@ -330,7 +335,7 @@ impl DriveCache {
 
         // Create new parent and add all files to it
         let mut fbb = FlatBufferBuilder::new();
-        build_dir_drive_item(&mut fbb, parent_modified_time, new_items)?;
+        build_dir_drive_item(&mut fbb, parent, parent_modified_time, new_items)?;
 
         LittleEndian::write_u48(&mut inode_bytes, parent_inode);
         self.wb_put_db_key(
@@ -409,9 +414,11 @@ impl DriveCache {
                     },
                 );
 
+                let id = Some(fbb.create_string(access_key));
                 let dir_drive_item = DriveItem::create(
                     &mut fbb,
                     &DriveItemArgs {
+                        id,
                         data: Some(dir.as_union_value()),
                         data_type: DriveItemData::Dir,
                     },
@@ -528,6 +535,37 @@ impl DriveCache {
             .map(to_t)
             .map(|t| (inode.unwrap(), t)))
     }
+
+    pub fn open_file(&self, inode: u64) -> Result<Option<CacheReader>> {
+        let mut inode_bytes = [0u8; 6];
+        LittleEndian::write_u48(&mut inode_bytes, inode);
+
+        let db_item = self.get_db_key(&self.cf_keys.inode_key, &inode_bytes)?;
+
+        let item = db_item
+            .as_ref()
+            .map(|d| flatbuffers::get_root::<DriveItem>(d));
+
+        let item = item.and_then(|i| {
+            match (i.id(), i.data_as_file_item()) {
+                (Some(id), Some(item)) => Some((id, item)),
+                _ => None
+            }
+        } );
+
+        if let Some((file_id, file_item)) = item {
+            let md5 = hex::encode(file_item.md5().unwrap());
+            let file_data = ReaderFileData {
+                file_id: file_id.to_string(),
+                md5,
+                size: file_item.size_(),
+                info_inode: inode,
+            };
+            Ok(Some(CacheReader::new(self.downloader.clone(), self.cache.clone(), file_data)))
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 /// Convert an internal flatbuffers `DriveItem` into generic `ReadItem`, if possible.
@@ -599,8 +637,8 @@ fn merge_parent(existing_parent: DriveItem, items: &mut Vec<(String, String, u64
 }
 
 /// Build a DriveItem for flatbuffers from a ScannedItem.
-fn build_drive_item(fbb: &mut FlatBufferBuilder, item: &ScannedItem) -> Result<()> {
-    let (item_type, item) = if let Some(ref fi) = item.file_info {
+fn build_drive_item(fbb: &mut FlatBufferBuilder, scanned_item: &ScannedItem) -> Result<()> {
+    let (item_type, item) = if let Some(ref fi) = scanned_item.file_info {
         let md5 = fbb.create_vector_direct(&hex::decode(&fi.md5)?);
         let size = fi.size;
 
@@ -611,7 +649,7 @@ fn build_drive_item(fbb: &mut FlatBufferBuilder, item: &ScannedItem) -> Result<(
                 &FileItemArgs {
                     md5: Some(md5),
                     size_: size,
-                    modified_time: item.modified_time.timestamp() as u64,
+                    modified_time: scanned_item.modified_time.timestamp() as u64,
                 },
             )
             .as_union_value(),
@@ -624,16 +662,19 @@ fn build_drive_item(fbb: &mut FlatBufferBuilder, item: &ScannedItem) -> Result<(
                 fbb,
                 &DirArgs {
                     items: Some(items),
-                    modified_time: item.modified_time.timestamp() as u64,
+                    modified_time: scanned_item.modified_time.timestamp() as u64,
                 },
             )
             .as_union_value(),
         )
     };
 
+    let id = Some(fbb.create_string(&scanned_item.id));
+
     let drive_item = DriveItem::create(
         fbb,
         &DriveItemArgs {
+            id,
             data: Some(item),
             data_type: item_type,
         },
@@ -647,6 +688,7 @@ fn build_drive_item(fbb: &mut FlatBufferBuilder, item: &ScannedItem) -> Result<(
 /// Build a Dir-type DriveItem for flatbuffers.
 fn build_dir_drive_item(
     fbb: &mut FlatBufferBuilder,
+    id: &str,
     modified_time: u64,
     items: Vec<(String, String, u64, bool)>,
 ) -> Result<()> {
@@ -676,9 +718,12 @@ fn build_dir_drive_item(
         },
     );
 
+    let id = Some(fbb.create_string(id));
+
     let dir_drive_item = DriveItem::create(
         fbb,
         &DriveItemArgs {
+            id,
             data: Some(dir.as_union_value()),
             data_type: DriveItemData::Dir,
         },

@@ -1,9 +1,12 @@
-use crate::{drive_access::{DriveAccess, ReadItem, ReadDirItem}};
+use crate::{
+    drive_access::{DriveAccess, ReadItem},
+    open_file_map::OpenFileMap, cache_reader::CacheRead,
+};
 use anyhow::Result;
 use polyfuse::{
     io::{Reader, Writer},
     op,
-    reply::{ReplyAttr, ReplyEntry},
+    reply::{ReplyAttr, ReplyEntry, ReplyOpen},
     Context, DirEntry, FileAttr, Filesystem, Operation,
 };
 use std::{
@@ -27,12 +30,18 @@ enum Inode {
 struct GreediaFS {
     drives: Vec<DriveAccess>,
     start_time: SystemTime,
+    open_files: OpenFileMap<Box<dyn CacheRead + 'static + Send>>,
 }
 
 impl GreediaFS {
     pub fn new(drives: Vec<DriveAccess>) -> GreediaFS {
         let start_time = SystemTime::now();
-        GreediaFS { drives, start_time }
+        let open_files = OpenFileMap::new();
+        GreediaFS {
+            drives,
+            start_time,
+            open_files,
+        }
     }
 
     fn map_inode(&self, inode: u64) -> Inode {
@@ -85,7 +94,9 @@ impl GreediaFS {
     fn getattr_item(&self, drive: u16, inode: u64) -> Option<FileAttr> {
         let drive_access = self.drives.get(drive as usize)?;
         let global_inode = self.rev_inode(Inode::Drive(drive, inode));
-        let mut file_attr = drive_access.read_item(inode, readitem_to_fileattr).unwrap()?;
+        let mut file_attr = drive_access
+            .read_item(inode, readitem_to_fileattr)
+            .unwrap()?;
         file_attr.set_ino(global_inode);
         Some(file_attr)
     }
@@ -112,9 +123,9 @@ impl GreediaFS {
         offset: u64,
         size: u32,
     ) -> Option<Vec<DirEntry>> {
-        let drive_cache = self.drives.get(drive as usize)?;
+        let drive_access = self.drives.get(drive as usize)?;
         let mut cur_size = 0;
-        let out = drive_cache
+        let out = drive_access
             .read_dir(inode, offset, |item| {
                 let ino = self.rev_inode(Inode::Drive(drive, item.inode));
                 let off = item.off + 1;
@@ -137,18 +148,19 @@ impl GreediaFS {
 
     fn lookup_root(&self, name: &OsStr) -> Option<ReplyEntry> {
         let name = name.to_str()?;
-        let drive = self.drives
+        let drive_num = self
+            .drives
             .iter()
             .position(|drive_cache| drive_cache.name == name)?;
-        
+
         let mut file_attr = FileAttr::default();
         file_attr.set_mode(libc::S_IFDIR as u32 | 0o555);
-        file_attr.set_ino(self.rev_inode(Inode::Drive(drive as u16, 0)));
+        file_attr.set_ino(self.rev_inode(Inode::Drive(drive_num as u16, 0)));
         file_attr.set_ctime(self.start_time);
         file_attr.set_mtime(self.start_time);
 
         let mut reply_entry = ReplyEntry::default();
-        reply_entry.ino(self.rev_inode(Inode::Drive(drive as u16, 0)));
+        reply_entry.ino(self.rev_inode(Inode::Drive(drive_num as u16, 0)));
         reply_entry.attr(file_attr);
         reply_entry.ttl_attr(TTL);
         reply_entry.ttl_entry(TTL);
@@ -156,10 +168,13 @@ impl GreediaFS {
     }
 
     fn lookup_drive(&self, drive: u16, parent_inode: u64, name: &OsStr) -> Option<ReplyEntry> {
-        let name = name.to_str()?;
         let drive_access = self.drives.get(drive as usize)?;
+        let name = name.to_str()?;
 
-        if let Some((inode, mut file_attr)) = drive_access.lookup_item(parent_inode, name, readitem_to_fileattr).unwrap() {
+        if let Some((inode, mut file_attr)) = drive_access
+            .lookup_item(parent_inode, name, readitem_to_fileattr)
+            .unwrap()
+        {
             let global_inode = self.rev_inode(Inode::Drive(drive, inode));
             file_attr.set_ino(global_inode);
             //println!("lookup_drive ({}) {}:{} -> {}", drive, parent_inode, name, inode);
@@ -173,6 +188,14 @@ impl GreediaFS {
         } else {
             None
         }
+    }
+
+    async fn open_drive(&self, drive: u16, local_inode: u64) -> Option<ReplyOpen> {
+        let drive_access = self.drives.get(drive as usize)?;
+        let file = drive_access.open_file(local_inode).await?;
+        let fh = self.open_files.open(file).await;
+
+        Some(ReplyOpen::new(fh))
     }
 
     async fn do_getattr<T: ?Sized>(
@@ -250,6 +273,64 @@ impl GreediaFS {
 
         Ok(())
     }
+
+    async fn do_open<T: ?Sized>(
+        &self,
+        cx: &mut Context<'_, T>,
+        op: op::Open<'_>,
+    ) -> io::Result<()>
+    where
+        T: Writer + Unpin,
+    {
+        let inode = op.ino();
+        let open = match self.map_inode(inode) {
+            Inode::Drive(drive, local_inode) => self.open_drive(drive, local_inode).await,
+            _ => None,
+        };
+
+        match open {
+            Some(open) => cx.reply(open).await?,
+            None => cx.reply_err(libc::ENOENT).await?,
+        }
+
+        Ok(())
+    }
+
+    async fn do_read<T: ?Sized>(
+        &self,
+        cx: &mut Context<'_, T>,
+        op: op::Read<'_>,
+    ) -> io::Result<()>
+    where
+        T: Writer + Unpin,
+    {
+        let fh = op.fh();
+        let offset = op.offset();
+        let size = op.size();
+        if let Some(file) = self.open_files.get(fh).await {
+            let mut reader = file.lock().await;
+            let read_data = reader.read(offset, size).await.unwrap();
+            cx.reply(&read_data).await?;
+        } else {
+            cx.reply_err(libc::ENOENT).await?
+        }
+
+        Ok(())
+    }
+
+    async fn do_release<T: ?Sized>(
+        &self,
+        cx: &mut Context<'_, T>,
+        op: op::Release<'_>,
+    ) -> io::Result<()>
+    where
+        T: Writer + Unpin,
+    {
+        let fh = op.fh();
+        self.open_files.close(fh).await;
+
+        Ok(())
+    }
 }
 
 #[polyfuse::async_trait]
@@ -262,11 +343,14 @@ impl Filesystem for GreediaFS {
     where
         T: Reader + Writer + Unpin + Send,
     {
-        //dbg!(&op); 
+        //dbg!(&op);
         match op {
             Operation::Lookup(op) => self.do_lookup(cx, op).await,
             Operation::Getattr(op) => self.do_getattr(cx, op).await,
             Operation::Readdir(op) => self.do_readdir(cx, op).await,
+            Operation::Open(op) => self.do_open(cx, op).await,
+            Operation::Read(op) => self.do_read(cx, op).await,
+            Operation::Release(op) => self.do_release(cx, op).await,
             _ => Ok(()),
         }
     }
@@ -275,12 +359,16 @@ impl Filesystem for GreediaFS {
 fn readitem_to_fileattr(read_item: ReadItem) -> FileAttr {
     let mut file_attr = FileAttr::default();
     match read_item {
-        ReadItem::File { md5: _, size, modified_time} => {
+        ReadItem::File {
+            md5: _,
+            size,
+            modified_time,
+        } => {
             file_attr.set_mode(libc::S_IFREG as u32 | 0o444);
             file_attr.set_size(size);
             file_attr.set_mtime(UNIX_EPOCH + Duration::from_secs(modified_time));
-        },
-        ReadItem::Dir{ modified_time } => {
+        }
+        ReadItem::Dir { modified_time } => {
             file_attr.set_mode(libc::S_IFDIR as u32 | 0o555);
             file_attr.set_mtime(UNIX_EPOCH + Duration::from_secs(modified_time));
         }

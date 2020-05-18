@@ -12,24 +12,20 @@ anyhow = "1.0.27"
 tokio = { version = "0.2.13", features = [ "rt-core", "rt-threaded", "macros", "blocking", "fs" ] }
 futures = "0.3.4"
 serde = { version = "1.0.104", features = [ "derive" ] }
-serde_json = "1.0.48"
 structopt = "0.3.11"
 toml = "0.5.6"
 chrono = { version = "0.4.10", features = [ "serde" ] }
 rocksdb = "0.13.0"
-#crossbeam = "0.7.3"
 oauth2 = { version = "3.0.0-alpha.9", features = [ "futures-03", "reqwest-010" ] }
 reqwest = { version = "0.10.4", features = [ "json", "trust-dns" ] }
 itertools = "0.8.2"
-time = "0.1"
 libc = "0.2.66"
-num-integer = "0.1.42"
-rclone-crypt = "0.1.2"
+rclone-crypt = "0.1.3"
 walkdir = "2.3.1"
-#parking_lot = "0.10.2"
 polyfuse = "0.3.3"
 polyfuse-tokio = "0.2.0"
 flatbuffers = "0.6.1"
-divrem = "0.1.0"
 byteorder = "1.3.4"
 hex = "0.4.2"
+rustc-hash = "1.1.0"
+async-trait = "0.1.31"

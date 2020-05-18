@@ -13,7 +13,9 @@ mod downloader;
 mod downloader_inner;
 mod drive_access;
 mod drive_cache;
+mod encrypted_cache_reader;
 mod mount;
+mod open_file_map;
 mod scanner;
 mod soft_cache_lru;
 mod types;
@@ -64,16 +66,17 @@ async fn main() -> Result<()> {
         head_dl,
         tail_dl,
         cfg.drive,
-    ).await?;
+    )
+    .await?;
+
+    for drive in drive_caches {
+        join_handles.push(tokio::spawn(scanner::scan_thread_eh(drive)));
+    }
 
     join_handles.push(tokio::spawn(mount::mount_thread_eh(
         drive_accessors,
         mount_point,
     )));
-
-    for drive in drive_caches {
-        join_handles.push(tokio::spawn(scanner::scan_thread_eh(drive)));
-    }
 
     join_all(join_handles).await;
 

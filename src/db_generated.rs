@@ -99,16 +99,22 @@ impl<'a> DriveItem<'a> {
     #[allow(unused_mut)]
     pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr>(
         _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,
-        args: &'args DriveItemArgs) -> flatbuffers::WIPOffset<DriveItem<'bldr>> {
+        args: &'args DriveItemArgs<'args>) -> flatbuffers::WIPOffset<DriveItem<'bldr>> {
       let mut builder = DriveItemBuilder::new(_fbb);
       if let Some(x) = args.data { builder.add_data(x); }
+      if let Some(x) = args.id { builder.add_id(x); }
       builder.add_data_type(args.data_type);
       builder.finish()
     }
 
-    pub const VT_DATA_TYPE: flatbuffers::VOffsetT = 4;
-    pub const VT_DATA: flatbuffers::VOffsetT = 6;
+    pub const VT_ID: flatbuffers::VOffsetT = 4;
+    pub const VT_DATA_TYPE: flatbuffers::VOffsetT = 6;
+    pub const VT_DATA: flatbuffers::VOffsetT = 8;
 
+  #[inline]
+  pub fn id(&self) -> Option<&'a str> {
+    self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(DriveItem::VT_ID, None)
+  }
   #[inline]
   pub fn data_type(&self) -> DriveItemData {
     self._tab.get::<DriveItemData>(DriveItem::VT_DATA_TYPE, Some(DriveItemData::NONE)).unwrap()
@@ -139,14 +145,16 @@ impl<'a> DriveItem<'a> {
 
 }
 
-pub struct DriveItemArgs {
+pub struct DriveItemArgs<'a> {
+    pub id: Option<flatbuffers::WIPOffset<&'a  str>>,
     pub data_type: DriveItemData,
     pub data: Option<flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>>,
 }
-impl<'a> Default for DriveItemArgs {
+impl<'a> Default for DriveItemArgs<'a> {
     #[inline]
     fn default() -> Self {
         DriveItemArgs {
+            id: None,
             data_type: DriveItemData::NONE,
             data: None,
         }
@@ -157,6 +165,10 @@ pub struct DriveItemBuilder<'a: 'b, 'b> {
   start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
 }
 impl<'a: 'b, 'b> DriveItemBuilder<'a, 'b> {
+  #[inline]
+  pub fn add_id(&mut self, id: flatbuffers::WIPOffset<&'b  str>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(DriveItem::VT_ID, id);
+  }
   #[inline]
   pub fn add_data_type(&mut self, data_type: DriveItemData) {
     self.fbb_.push_slot::<DriveItemData>(DriveItem::VT_DATA_TYPE, data_type, DriveItemData::NONE);

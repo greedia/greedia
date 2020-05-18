@@ -17,7 +17,6 @@ use std::{
 };
 
 const TTL_LONG: Duration = Duration::from_secs(60 * 60 * 24 * 365);
-const TTL_SCANNING: Duration = Duration::from_secs(5);
 const ITEM_BITS: usize = 48;
 const DRIVE_OFFSET: u64 = 1 << ITEM_BITS;
 const ITEM_MASK: u64 = DRIVE_OFFSET - 1;
@@ -124,7 +123,6 @@ impl GreediaFS {
         offset: u64,
         size: u32,
     ) -> Option<Vec<DirEntry>> {
-        println!("readdir");
         let drive_access = self.drives.get(drive as usize)?;
         let mut cur_size = 0;
         let out = drive_access
@@ -207,10 +205,8 @@ impl GreediaFS {
     }
 
     async fn opendir_drive(&self, drive: u16, local_inode: u64) -> Option<ReplyOpen> {
-        println!("opendir");
         let drive_access = self.drives.get(drive as usize)?;
         let (is_dir, scanning) = drive_access.check_dir(local_inode);
-        //dbg!(scanning);
         let is_dir = is_dir?;
         if !is_dir {
             // TODO: handle results in mount to be able to pass "not a directory"
@@ -262,8 +258,6 @@ impl GreediaFS {
                 self.readdir_drive(drive, local_inode, offset, size).await
             }
         };
-    
-        //dbg!(&dir);
 
         match dir {
             Some(dir) => cx.reply(dir).await?,
@@ -288,8 +282,6 @@ impl GreediaFS {
             Inode::Drive(drive, local_inode) => self.lookup_drive(drive, local_inode, name),
             _ => None,
         };
-
-        //dbg!(&lookup);
 
         match lookup {
             Some(lookup) => cx.reply(lookup).await?,
@@ -336,7 +328,6 @@ impl GreediaFS {
             _ => None,
         };
 
-        //dbg!(&opendir);
 
         match opendir {
             Some(opendir) => cx.reply(opendir).await?,
@@ -393,7 +384,6 @@ impl Filesystem for GreediaFS {
     where
         T: Reader + Writer + Unpin + Send,
     {
-        //dbg!(&op);
 
         match op { 
             Operation::Lookup(op) => self.do_lookup(cx, op).await,

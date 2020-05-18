@@ -42,6 +42,10 @@ impl DriveAccess {
         })
     }
 
+    pub fn get_scanning(&self) -> bool {
+        self.cache.get_scanning()
+    }
+
     /// Return the root inode for this drive.
     pub fn root_inode(&self) -> Option<u64> {
         if let Some(ref root_path) = self.root_path {
@@ -168,5 +172,9 @@ impl DriveAccess {
         } else {
             Box::new(cache_reader)
         })
+    }
+
+    pub fn check_dir(&self, inode: u64) -> (Option<bool>, bool) {
+        self.cache.check_dir(inode).unwrap()
     }
 }

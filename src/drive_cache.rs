@@ -13,7 +13,7 @@ use flatbuffers::{FlatBufferBuilder, WIPOffset};
 use rocksdb::{DBPinnableSlice, WriteBatch, DB};
 use std::{
     collections::{HashMap, HashSet},
-    sync::Arc,
+    sync::{atomic::{Ordering, AtomicBool}, Arc},
 };
 
 static LAST_PAGE_TOKEN: &'static [u8] = b"last_page_token";
@@ -21,7 +21,6 @@ static LAST_SCAN_START: &'static [u8] = b"last_scan_start";
 static LAST_MODIFIED_DATE: &'static [u8] = b"last_modified_date";
 static NEXT_INODE: &'static [u8] = b"next_inode";
 
-#[derive(Clone)]
 /// Cache for a specific drive. Works at the drive ID level.
 /// Multiple drives with the same ID will share this cache.
 pub struct DriveCache {
@@ -34,6 +33,8 @@ pub struct DriveCache {
     db: Arc<DB>,
     /// ColumnFamily keys, for database access.
     cf_keys: CfKeys,
+    /// Flag if the cache is currently being scanned.
+    scanning: AtomicBool,
     /// Informational name that can be used in stats and debug messages.
     pub info_name: String,
 }
@@ -48,17 +49,26 @@ impl DriveCache {
     ) -> Result<DriveCache> {
         let info_name = drive_info_name.to_string();
         let id = drive_id.to_string();
-
         let cf_keys = CfKeys::new(&id);
+        let scanning = AtomicBool::new(false);
 
         Ok(DriveCache {
-            info_name,
             id,
             downloader,
             cache,
             db,
             cf_keys,
+            scanning,
+            info_name,
         })
+    }
+
+    fn set_scanning(&self, scanning: bool) {
+        self.scanning.store(scanning, Ordering::Release)
+    }
+
+    pub fn get_scanning(&self) -> bool {
+        self.scanning.load(Ordering::Acquire)
     }
 
     pub fn get_db_key(&self, cf_key: &str, key: &[u8]) -> Result<Option<DBPinnableSlice>> {
@@ -184,6 +194,8 @@ impl DriveCache {
     }
 
     pub fn start_scan(&self) -> Result<()> {
+        self.set_scanning(true);
+        
         let recent_now = (Utc::now() - Duration::hours(1)).timestamp();
         let mut recent_now_bytes = [0u8; 8];
         LittleEndian::write_i64(&mut recent_now_bytes, recent_now);
@@ -192,6 +204,8 @@ impl DriveCache {
     }
 
     pub fn finish_scan(&self) -> Result<()> {
+        self.set_scanning(false);
+
         self.del_db_key(&self.cf_keys.scan_key, LAST_PAGE_TOKEN)?;
 
         if let Some(last_scan_start) = self.get_db_key(&self.cf_keys.scan_key, LAST_SCAN_START)? {
@@ -534,6 +548,20 @@ impl DriveCache {
             .and_then(driveitem_to_readitem)
             .map(to_t)
             .map(|t| (inode.unwrap(), t)))
+    }
+
+    pub fn check_dir(&self, inode: u64) -> Result<(Option<bool>, bool)> {
+        let mut inode_bytes = [0u8; 6];
+        LittleEndian::write_u48(&mut inode_bytes, inode);
+
+        let db_item = self.get_db_key(&self.cf_keys.inode_key, &inode_bytes)?;
+
+        let item = db_item
+            .as_ref()
+            .map(|d| flatbuffers::get_root::<DriveItem>(d));
+
+        let item = item.map(|i| i.data_type() == DriveItemData::FileItem);
+        Ok((item, self.get_scanning()))
     }
 
     pub fn open_file(&self, inode: u64) -> Result<Option<CacheReader>> {

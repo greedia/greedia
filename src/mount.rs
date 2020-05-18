@@ -94,13 +94,12 @@ impl GreediaFS {
 
     fn getattr_item(&self, drive: u16, inode: u64) -> Option<(FileAttr, Duration)> {
         let drive_access = self.drives.get(drive as usize)?;
-        let ttl = if drive_access.get_scanning() { TTL_SCANNING } else { TTL_LONG };
         let global_inode = self.rev_inode(Inode::Drive(drive, inode));
         let mut file_attr = drive_access
             .read_item(inode, readitem_to_fileattr)
             .unwrap()?;
         file_attr.set_ino(global_inode);
-        Some((file_attr, ttl))
+        Some((file_attr, TTL_LONG))
     }
 
     fn readdir_root(&self, offset: u64) -> Vec<DirEntry> {
@@ -173,7 +172,6 @@ impl GreediaFS {
     fn lookup_drive(&self, drive: u16, parent_inode: u64, name: &OsStr) -> Option<ReplyEntry> {
         let drive_access = self.drives.get(drive as usize)?;
         let name = name.to_str()?;
-        let ttl = if drive_access.get_scanning() { TTL_SCANNING } else { TTL_LONG };
 
         if let Some((inode, mut file_attr)) = drive_access
             .lookup_item(parent_inode, name, readitem_to_fileattr)
@@ -186,8 +184,8 @@ impl GreediaFS {
             let mut reply_entry = ReplyEntry::default();
             reply_entry.ino(global_inode);
             reply_entry.attr(file_attr);
-            reply_entry.ttl_attr(ttl);
-            reply_entry.ttl_entry(ttl);
+            reply_entry.ttl_attr(TTL_LONG);
+            reply_entry.ttl_entry(TTL_LONG);
             Some(reply_entry)
         } else {
             None

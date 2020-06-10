@@ -1,18 +1,21 @@
-use tokio::sync::mpsc;
-use tokio::fs::create_dir_all;
-use tokio::fs::File;
-use chrono::{Utc, DateTime};
-use crate::{downloader::{ReturnWhen, ToDownload, CacheFileResult, ChanMessage}, types::Page};
-use std::{time::Duration, path::Path};
+use crate::{
+    downloader::{CacheFileResult, ChanMessage, ReturnWhen, ToDownload},
+    types::Page,
+};
+use chrono::{DateTime, Utc};
+use futures::select_biased;
+use futures::FutureExt;
+use futures::StreamExt;
 use leaky_bucket::LeakyBucket;
 use oauth2::basic::BasicClient;
 use oauth2::reqwest::async_http_client;
 use oauth2::AsyncRefreshTokenRequest;
 use oauth2::{AccessToken, AuthUrl, ClientId, ClientSecret, RefreshToken, TokenResponse, TokenUrl};
-use futures::select_biased;
+use std::{path::Path, time::Duration};
+use tokio::fs::create_dir_all;
+use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
-use futures::StreamExt;
-use futures::FutureExt;
+use tokio::sync::mpsc;
 
 async fn get_new_token(
     client_id: &str,
@@ -262,7 +265,9 @@ async fn handle_message(
             .await;
             match result {
                 CacheFileResult::InvalidAccessToken => {
-                    access_token_sender.send(ChanMessage::InvalidAccessToken(access_token.clone())).unwrap();
+                    access_token_sender
+                        .send(ChanMessage::InvalidAccessToken(access_token.clone()))
+                        .unwrap();
                     retry = true;
                 }
                 CacheFileResult::RateLimit | CacheFileResult::DownloadError => {
@@ -273,7 +278,7 @@ async fn handle_message(
                 }
                 _ => (),
             }
-        },
+        }
         x => {
             println!("unexpected ChanMessage {:?}", x);
         }
@@ -282,8 +287,6 @@ async fn handle_message(
         //println!("Retrying");
         retry_sender.send(message).unwrap();
     }
-
-
 }
 
 pub async fn downloader_thread(
@@ -321,7 +324,10 @@ pub async fn downloader_thread(
     };
 
     loop {
-        let _ = leaky_bucket.acquire_one().await.expect("Could not acquire rate-limiting token");
+        let _ = leaky_bucket
+            .acquire_one()
+            .await
+            .expect("Could not acquire rate-limiting token");
 
         // If a high-priority message comes in, always pick it first
         let (is_hp, message) = select_biased! {

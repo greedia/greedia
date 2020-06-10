@@ -1,6 +1,6 @@
 use crate::{
     cache::{Cache, CacheFiles, ReaderFileData},
-    downloader::{ReturnWhen, ToDownload, Downloader},
+    downloader::{Downloader, ReturnWhen, ToDownload},
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -41,7 +41,11 @@ pub struct CacheReader {
 }
 
 impl CacheReader {
-    pub fn new(downloader: Arc<Downloader>, cache: Arc<Cache>, file_data: ReaderFileData) -> CacheReader {
+    pub fn new(
+        downloader: Arc<Downloader>,
+        cache: Arc<Cache>,
+        file_data: ReaderFileData,
+    ) -> CacheReader {
         CacheReader {
             downloader,
             cache,
@@ -110,7 +114,7 @@ impl CacheReader {
 
     pub async fn get_next_file(&mut self, offset: u64) -> Result<CurrentFile> {
         let (hard_cache_files, soft_cache_files) =
-            self.cache.get_cache_files(&self.file_data.md5).await;
+            self.cache.get_all_cache_files(&self.file_data.md5).await;
 
         if let Some(current_file) = self
             .open_cache_file_at_offset(&hard_cache_files, offset)
@@ -129,7 +133,8 @@ impl CacheReader {
                 &soft_cache_files,
                 offset,
                 self.chunk_size,
-            ).await
+            )
+            .await
         }
     }
 
@@ -145,6 +150,7 @@ impl CacheReader {
         let CacheFiles {
             cache_type,
             cache_files,
+            ..
         } = cache_files;
         if let Some((file, offset, left)) = get_file_and_left(&cache_files, offset) {
             let path = self
@@ -208,12 +214,14 @@ impl CacheReader {
         self.cache
             .add_soft_cache_file(&self.file_data.md5, offset, dl_size);
 
-        self.downloader.cache_data(
-            self.file_data.file_id.clone(),
-            path.clone(),
-            ReturnWhen::Finished,
-            ToDownload::Range(offset, offset + dl_size),
-        ).await?;
+        self.downloader
+            .cache_data(
+                self.file_data.file_id.clone(),
+                path.clone(),
+                ReturnWhen::Finished,
+                ToDownload::Range(offset, offset + dl_size),
+            )
+            .await?;
 
         let file = File::open(&path).await?;
         let left = path.metadata().unwrap().len();

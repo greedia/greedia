@@ -1,6 +1,7 @@
 use crate::{
+    cache_reader::CacheRead,
     drive_access::{DriveAccess, ReadItem},
-    open_file_map::OpenFileMap, cache_reader::CacheRead,
+    open_file_map::OpenFileMap,
 };
 use anyhow::Result;
 use polyfuse::{
@@ -209,7 +210,7 @@ impl GreediaFS {
         let (is_dir, scanning) = drive_access.check_dir(local_inode);
         let is_dir = is_dir?;
         if !is_dir {
-            // TODO: handle results in mount to be able to pass "not a directory"
+            // TODO: handle results in mount to be able to pass "not a directory" error
         }
         let mut reply_open = ReplyOpen::new(0);
         reply_open.keep_cache(!scanning);
@@ -291,11 +292,7 @@ impl GreediaFS {
         Ok(())
     }
 
-    async fn do_open<T: ?Sized>(
-        &self,
-        cx: &mut Context<'_, T>,
-        op: op::Open<'_>,
-    ) -> io::Result<()>
+    async fn do_open<T: ?Sized>(&self, cx: &mut Context<'_, T>, op: op::Open<'_>) -> io::Result<()>
     where
         T: Writer + Unpin,
     {
@@ -328,7 +325,6 @@ impl GreediaFS {
             _ => None,
         };
 
-
         match opendir {
             Some(opendir) => cx.reply(opendir).await?,
             None => cx.reply_err(libc::ENOENT).await?,
@@ -337,11 +333,7 @@ impl GreediaFS {
         Ok(())
     }
 
-    async fn do_read<T: ?Sized>(
-        &self,
-        cx: &mut Context<'_, T>,
-        op: op::Read<'_>,
-    ) -> io::Result<()>
+    async fn do_read<T: ?Sized>(&self, cx: &mut Context<'_, T>, op: op::Read<'_>) -> io::Result<()>
     where
         T: Writer + Unpin,
     {
@@ -384,8 +376,7 @@ impl Filesystem for GreediaFS {
     where
         T: Reader + Writer + Unpin + Send,
     {
-
-        match op { 
+        match op {
             Operation::Lookup(op) => self.do_lookup(cx, op).await,
             Operation::Getattr(op) => self.do_getattr(cx, op).await,
             Operation::Readdir(op) => self.do_readdir(cx, op).await,
@@ -400,21 +391,14 @@ impl Filesystem for GreediaFS {
 
 fn readitem_to_fileattr(read_item: ReadItem) -> FileAttr {
     let mut file_attr = FileAttr::default();
-    match read_item {
-        ReadItem::File {
-            md5: _,
-            size,
-            modified_time,
-        } => {
-            file_attr.set_mode(libc::S_IFREG as u32 | 0o444);
-            file_attr.set_size(size);
-            file_attr.set_mtime(UNIX_EPOCH + Duration::from_secs(modified_time));
-        }
-        ReadItem::Dir { modified_time } => {
-            file_attr.set_mode(libc::S_IFDIR as u32 | 0o555);
-            file_attr.set_mtime(UNIX_EPOCH + Duration::from_secs(modified_time));
-        }
-    };
+    file_attr.set_mtime(UNIX_EPOCH + Duration::from_secs(read_item.modified_time));
+
+    if let Some(file_data) = read_item.file_data {
+        file_attr.set_mode(libc::S_IFREG as u32 | 0o444);
+        file_attr.set_size(file_data.size);
+    } else {
+        file_attr.set_mode(libc::S_IFDIR as u32 | 0o555);
+    }
 
     file_attr
 }

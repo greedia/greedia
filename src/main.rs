@@ -14,6 +14,7 @@ mod downloader_inner;
 mod drive_access;
 mod drive_cache;
 mod encrypted_cache_reader;
+mod hard_cache;
 mod mount;
 mod open_file_map;
 mod scanner;
@@ -43,12 +44,10 @@ async fn main() -> Result<()> {
     let config_data = fs::read(opt.config_path)?;
     let cfg: Config = toml::from_slice(&config_data)?;
 
-    let head_dl = cfg.dl["head"].clone();
-    let tail_dl = cfg.dl["tail"].clone();
     let mount_point = opt.mount_point;
 
     // Validate password and password2 for each drive
-    for (name, drive) in &cfg.drive {
+    for (name, drive) in &cfg.gdrive {
         if (drive.password.is_some() && drive.password2.is_none())
             || (drive.password.is_none() && drive.password2.is_some())
         {
@@ -59,13 +58,9 @@ async fn main() -> Result<()> {
         }
     }
 
-    let mut join_handles = Vec::with_capacity(1 + cfg.drive.len());
+    let mut join_handles = Vec::with_capacity(1 + cfg.gdrive.len());
     let (drive_caches, drive_accessors) = Cache::new(
-        &cfg.cache_path,
-        &cfg.soft_cache,
-        head_dl,
-        tail_dl,
-        cfg.drive,
+        &cfg
     )
     .await?;
 

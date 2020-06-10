@@ -1,13 +1,31 @@
-use std::collections::HashMap;
+use std::{
+    cmp::{max, min},
+    collections::HashMap,
+};
 
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
+    pub caching: CachingConfig,
+    pub smart_cachers: HashMap<String, SmartCacherConfig>,
+    pub generic_cacher: GenericCache,
+    pub gdrive: HashMap<String, ConfigGoogleDrive>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CachingConfig {
     pub cache_path: String,
-    pub soft_cache: SoftCache,
-    pub dl: HashMap<String, DownloadAmount>,
-    pub drive: HashMap<String, ConfigDrive>,
+    pub soft_cache_limit: u64,
+    pub min_size: u64,
+    pub use_smart_caching: bool,
+    pub use_generic_caching: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GenericCache {
+    pub start: DownloadAmount,
+    pub end: DownloadAmount,
 }
 
 #[derive(Debug, Deserialize)]
@@ -17,25 +35,31 @@ pub struct SoftCache {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct DownloadAmount {
-    pub max_percent: Option<f32>,
-    pub max_bytes: Option<u64>,
+    pub percent: Option<f32>,
+    pub bytes: Option<u64>,
+}
+
+/// SmartCacher configuration.
+#[derive(Debug, Deserialize)]
+pub struct SmartCacherConfig {
+    /// Whether or not this SmartCacher is enabled.
+    /// If the SmartCacher is reading this, it's true.
+    pub enabled: bool,
+    /// Approximate number of starting seconds to hard cache.
+    pub seconds: u64,
 }
 
 impl DownloadAmount {
     pub fn with_size(&self, size: u64) -> u64 {
         let mut out = size;
 
-        if let Some(max_percent) = self.max_percent {
-            let percent_bytes = ((max_percent / 100.0) * (size as f32)).round() as u64;
-            if out > percent_bytes {
-                out = percent_bytes;
-            }
+        if let Some(percent) = self.percent {
+            let percent_bytes = ((percent / 100.0) * (size as f32)).round() as u64;
+            out = min(out, percent_bytes);
         }
 
-        if let Some(max_bytes) = self.max_bytes {
-            if out > max_bytes {
-                out = max_bytes;
-            }
+        if let Some(bytes) = self.bytes {
+            out = min(out, bytes);
         }
 
         out
@@ -43,7 +67,7 @@ impl DownloadAmount {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct ConfigDrive {
+pub struct ConfigGoogleDrive {
     pub client_id: String,
     pub client_secret: String,
     pub refresh_token: String,

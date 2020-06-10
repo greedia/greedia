@@ -183,15 +183,13 @@ impl SoftCacheLru {
 
     /// Actually delete soft cache file from filesystem.
     fn delete_from_filesystem(&self, item: SoftCacheItem) {
-        let mut chars = item.md5.chars();
-        let char_1 = chars.next().unwrap().to_string();
-        let char_2 = chars.next().unwrap().to_string();
-        let char_3 = chars.next().unwrap().to_string();
+        let dir_1 = item.md5.get(0..2).unwrap();
+        let dir_2 = item.md5.get(2..4).unwrap();
+
         let path_to_del = self
             .soft_cache_path
-            .join(&char_1)
-            .join(&char_2)
-            .join(&char_3)
+            .join(dir_1)
+            .join(dir_2)
             .join(item.md5)
             .join(format!("chunk_{}", item.offset));
 

@@ -2,18 +2,18 @@ union DriveItemData { FileItem, Dir }
 
 table DriveItem {
     id:string;
+    modified_time:uint64;
     data:DriveItemData;
 }
 
 table FileItem {
+    file_name:string;
     md5:[ubyte];
     size:uint64;
-    modified_time:uint64;
 }
 
 table Dir {
     items:[DirItem];
-    modified_time:uint64;
 }
 
 table DirItem {

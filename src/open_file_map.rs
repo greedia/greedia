@@ -1,7 +1,6 @@
-
-use std::sync::Arc;
-use tokio::sync::{RwLock, Mutex};
 use rustc_hash::FxHashMap;
+use std::sync::Arc;
+use tokio::sync::{Mutex, RwLock};
 
 struct OpenFileMapInner<T> {
     map: FxHashMap<u64, Arc<Mutex<T>>>,

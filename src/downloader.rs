@@ -1,10 +1,10 @@
-use anyhow::{format_err, Result};
-use tokio::sync::mpsc;
-use chrono::{Utc, DateTime};
 use crate::{downloader_inner::downloader_thread, types::Page};
-use std::path::PathBuf;
-use oauth2::AccessToken;
+use anyhow::{format_err, Result};
+use chrono::{DateTime, Utc};
 use futures::StreamExt;
+use oauth2::AccessToken;
+use std::path::PathBuf;
+use tokio::sync::mpsc;
 
 #[derive(Debug)]
 pub enum ToDownload {
@@ -48,7 +48,7 @@ pub enum ChanMessage {
     ContinueChanges {
         page_token: String,
         result: mpsc::Sender<()>,
-    }
+    },
 }
 
 pub enum ScanPageResult {
@@ -115,7 +115,10 @@ impl Downloader {
 
         self.send_chan.clone().send(msg).await?;
 
-        Ok(res_receiver.next().await.ok_or_else(|| format_err!("scan_one_page recv channel closed without data"))?)
+        Ok(res_receiver
+            .next()
+            .await
+            .ok_or_else(|| format_err!("scan_one_page recv channel closed without data"))?)
     }
 
     pub async fn cache_data(
@@ -137,7 +140,9 @@ impl Downloader {
 
         self.send_chan.clone().send(msg).await?;
 
-        Ok(res_receiver.next().await.ok_or_else(|| format_err!("cache_data recv channel closed without data"))?)
+        Ok(res_receiver
+            .next()
+            .await
+            .ok_or_else(|| format_err!("cache_data recv channel closed without data"))?)
     }
 }
-

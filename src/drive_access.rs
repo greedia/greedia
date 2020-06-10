@@ -1,5 +1,5 @@
 use crate::{
-    cache_reader::CacheRead, config::ConfigDrive, crypt_context::CryptContext,
+    cache_reader::CacheRead, config::ConfigGoogleDrive, crypt_context::CryptContext,
     drive_cache::DriveCache,
 };
 use anyhow::Result;
@@ -25,7 +25,7 @@ pub struct DriveAccess {
 }
 
 impl DriveAccess {
-    pub fn new(name: String, drive: ConfigDrive, cache: Arc<DriveCache>) -> Result<DriveAccess> {
+    pub fn new(name: String, drive: ConfigGoogleDrive, cache: Arc<DriveCache>) -> Result<DriveAccess> {
         let crypt = if let (Some(password1), Some(password2)) = (&drive.password, &drive.password2)
         {
             Some(CryptContext::new(&password1, &password2)?)
@@ -40,10 +40,6 @@ impl DriveAccess {
             crypt,
             cache,
         })
-    }
-
-    pub fn get_scanning(&self) -> bool {
-        self.cache.get_scanning()
     }
 
     /// Return the root inode for this drive.
@@ -168,7 +164,11 @@ impl DriveAccess {
     pub async fn open_file(&self, inode: u64) -> Option<Box<dyn CacheRead + 'static + Send>> {
         let cache_reader = self.cache.open_file(inode).unwrap()?;
         Some(if let Some(ref cc) = self.crypt {
-            Box::new(EncryptedCacheReader::new(&cc.cipher, cache_reader).await.unwrap())
+            Box::new(
+                EncryptedCacheReader::new(&cc.cipher, cache_reader)
+                    .await
+                    .unwrap(),
+            )
         } else {
             Box::new(cache_reader)
         })

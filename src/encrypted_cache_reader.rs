@@ -1,10 +1,10 @@
 use crate::cache_reader::{CacheRead, CacheReader};
+use anyhow::Result;
+use async_trait::async_trait;
 use rclone_crypt::{
     cipher::Cipher,
     decrypter::{self, Decrypter},
 };
-use anyhow::Result;
-use async_trait::async_trait;
 
 pub struct EncryptedCacheReader {
     decrypter: Decrypter,
@@ -60,7 +60,8 @@ impl CacheRead for EncryptedCacheReader {
 
             let encrypted_block = self
                 .reader
-                .read(block_starting_offset, decrypter::BLOCK_SIZE as u32).await?;
+                .read(block_starting_offset, decrypter::BLOCK_SIZE as u32)
+                .await?;
 
             if encrypted_block.len() == 0 {
                 return Ok(result);

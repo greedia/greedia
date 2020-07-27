@@ -21,7 +21,7 @@ structopt = "0.3.11"
 toml = "0.5.6"
 chrono = { version = "0.4.10", features = ["serde"] }
 rocksdb = "0.13.0"
-oauth2 = { version = "3.0.0-alpha.9", features = ["futures-03", "reqwest-010"] }
+oauth2 = { version = "3.0.0", features = ["futures-03", "reqwest-010"] }
 reqwest = { version = "0.10.4", features = ["json", "trust-dns"] }
 itertools = "0.8.2"
 libc = "0.2.66"
@@ -36,3 +36,4 @@ rustc-hash = "1.1.0"
 async-trait = "0.1.31"
 access-queue = "1.1.0"
 serde_json = "1.0.53"
+byte-ranger = { path = "byte-ranger" }

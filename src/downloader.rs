@@ -1,4 +1,4 @@
-use crate::{downloader_inner::downloader_thread, types::Page};
+use crate::{downloader_inner::{CacheHandle, downloader_thread}, types::Page};
 use anyhow::{format_err, Result};
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
@@ -36,19 +36,25 @@ pub enum ChanMessage {
         return_when: ReturnWhen,
         result: mpsc::Sender<()>,
     },
+    ContinuableCacheFile {
+        file_id: String,
+        path: PathBuf,
+        start_offset: u64,
+        result: mpsc::Sender<CacheHandle>,
+    },
     // TODO: changes getstartpagetoken
     // returns start token
     // This should be called before scanning begins
-    StartChanges {
-        result: mpsc::Sender<String>,
-    },
+    // StartChanges {
+    //     result: mpsc::Sender<String>,
+    // },
     // TODO: changes list
     // TODO: handle multiple pages
     // This should be called after scanning is done, and again every 5 seconds
-    ContinueChanges {
-        page_token: String,
-        result: mpsc::Sender<()>,
-    },
+    // ContinueChanges {
+    //     page_token: String,
+    //     result: mpsc::Sender<()>,
+    // },
 }
 
 pub enum ScanPageResult {
@@ -145,4 +151,41 @@ impl Downloader {
             .await
             .ok_or_else(|| format_err!("cache_data recv channel closed without data"))?)
     }
+
+    /// Download from one point in a file, continuously.
+    /// Returns a handle that can directly read or background-cache data.
+    /// Note: pos is assumed to be the beginning of the file at `path`.
+    pub async fn continuable_cache_data(
+        &self,
+        file_id: String,
+        path: PathBuf,
+        start_offset: u64,
+    ) -> Result<CacheHandle> {
+        let (result, mut res_receiver) = mpsc::channel(1);
+
+        let msg = ChanMessage::ContinuableCacheFile {
+            file_id,
+            path,
+            start_offset,
+            result,
+        };
+
+        self.send_chan.clone().send(msg).await?;
+
+        Ok(res_receiver
+            .next()
+            .await
+            .ok_or_else(|| format_err!("cache_data recv channel closed without data"))?)
+    }
 }
+
+
+// TODO: is an enum the best option for this?
+// #[derive(Debug)]
+// pub enum CacheHandle {
+//     NoDownloader,
+//     HasDownloader {
+//         response: reqwest::Response,
+//         position: u64,
+//     },
+// }

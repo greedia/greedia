@@ -13,7 +13,7 @@ use oauth2::AsyncRefreshTokenRequest;
 use oauth2::{AccessToken, AuthUrl, ClientId, ClientSecret, RefreshToken, TokenResponse, TokenUrl};
 use std::{path::Path, time::Duration};
 use tokio::fs::create_dir_all;
-use tokio::fs::File;
+use tokio::fs::{OpenOptions, File};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
@@ -137,7 +137,6 @@ async fn handle_cache_file(
 
     let url = format!("https://www.googleapis.com/drive/v3/files/{}", file_id);
 
-    // TODO: investigate google server off-by-one?
     let range_string = match range {
         ToDownload::Start(x) => format!("bytes=0-{}", x - 1),
         ToDownload::Range(x, y) => format!("bytes={}-{}", x, y - 1),
@@ -208,13 +207,134 @@ async fn handle_cache_file(
             println!("Download error! {:?}", err.status());
             println!("{}", err);
             println!("{:?}", err);
-            /*if let reqwest::Error { kind, url, source } = err {
-                println!("{}", source);
-                println!("{:?}", source);
-            }*/
             CacheFileResult::DownloadError
         }
     }
+}
+
+/// Download from one point in a file, continuously.
+/// Returns a handle that can directly read or background-cache data.
+/// Note: pos is assumed to be the beginning of the file at `path`.
+async fn handle_continuable_cache_file(
+    http_client: reqwest::Client,
+    access_token: &AccessToken,
+    file_id: &str,
+    path: &Path,
+    pos: u64,
+    result: &mut mpsc::Sender<CacheHandle>,
+) -> CacheFileResult {
+    // If cache file exists, open and read to end. Ignore caching up to this point.
+    // Once end is reached (or file does not exist), open downloader and perform reads/caches from it.
+
+    let (reader, writer) = if path.exists() {
+        let file = File::open(path).await.unwrap();
+        let data_left = path.metadata().unwrap().len();
+        let reader = CacheHandleReader::File { file, data_left };
+        let writer = OpenOptions::new().append(true).open(path).await.unwrap();
+
+        (reader, writer)
+    } else {
+        let downloader = match open_downloader(http_client, access_token, file_id, pos).await {
+            Ok(downloader) => downloader,
+            Err(cache_file_result) => return cache_file_result
+        };
+
+        let reader =  CacheHandleReader::Downloader(downloader);
+        let writer = File::create(path).await.unwrap();
+        (reader, writer)
+    };
+
+    let cache_handle = CacheHandle {
+        pos,
+        reader,
+        writer
+    };
+
+    result.send(cache_handle).await.unwrap();
+
+    CacheFileResult::Ok
+}
+
+async fn open_downloader(
+    http_client: reqwest::Client,
+    access_token: &AccessToken,
+    file_id: &str,
+    start_offset: u64,
+) -> Result<reqwest::Response, CacheFileResult> {
+    let url = format!("https://www.googleapis.com/drive/v3/files/{}", file_id);
+    let range_string = format!("bytes={}-", start_offset);
+
+    let res = http_client
+        .get(&url)
+        .bearer_auth(access_token.secret())
+        .header("Range", &range_string)
+        .query(&[("alt", "media")])
+        .send()
+        .await;
+
+    match res {
+        Ok(res) => {
+            match res.status().as_u16() {
+                401 => {
+                    //println!("Invalid access token");
+                    return Err(CacheFileResult::InvalidAccessToken);
+                }
+                403 | 500 => {
+                    //println!("Rate limit");
+                    return Err(CacheFileResult::RateLimit);
+                }
+                404 => {
+                    println!("Not found");
+                    return Err(CacheFileResult::NotFound);
+                }
+                200 | 206 => {
+                    //println!("Success!");
+                }
+                416 => {
+                    println!("Range not satisfiable {}", res.status());
+                    dbg!(&range_string);
+                    dbg!(res);
+                    return Err(CacheFileResult::RangeNotSatisfiable);
+                }
+                _ => {
+                    println!("Unknown status {}", res.status());
+                    dbg!(&range_string);
+                    dbg!(res);
+                    return Err(CacheFileResult::RateLimit);
+                }
+            }
+            Ok(res)
+        }
+        Err(err) => {
+            println!("Download error! {:?}", err.status());
+            println!("{}", err);
+            println!("{:?}", err);
+            Err(CacheFileResult::DownloadError)
+        }
+    }
+}
+
+#[derive(Debug)]
+enum CacheHandleReader {
+    Downloader(reqwest::Response),
+    File { file: File, data_left: u64 },
+}
+
+#[derive(Debug)]
+pub struct CacheHandle {
+    pos: u64,
+    reader: CacheHandleReader,
+    writer: File,
+}
+
+impl CacheHandle {
+    // Read exact amount of data, unless EOF is reached.
+    pub fn read_data(&mut self, size: u64) -> Vec<u8> {
+        todo!()
+    }
+
+    // Read exact amount of data and save it, but don't return it.
+    pub fn cache_data(&mut self, size: u64) {}
 }
 
 async fn handle_message(
@@ -279,9 +399,38 @@ async fn handle_message(
                 _ => (),
             }
         }
-        x => {
-            println!("unexpected ChanMessage {:?}", x);
+        ChanMessage::ContinuableCacheFile {
+            file_id,
+            path,
+            start_offset,
+            result,
+        } => {
+            let result = handle_continuable_cache_file(
+                http_client,
+                &access_token,
+                file_id,
+                path,
+                *start_offset,
+                result,
+            )
+            .await;
+            match result {
+                CacheFileResult::InvalidAccessToken => {
+                    access_token_sender
+                        .send(ChanMessage::InvalidAccessToken(access_token.clone()))
+                        .unwrap();
+                    retry = true;
+                }
+                CacheFileResult::RateLimit | CacheFileResult::DownloadError => {
+                    retry = true;
+                }
+                CacheFileResult::NotFound => {
+                    println!("Notfound, TODO delete?");
+                }
+                _ => (),
+            }
         }
+        ChanMessage::InvalidAccessToken(_) => unreachable!(),
     }
     if retry {
         //println!("Retrying");

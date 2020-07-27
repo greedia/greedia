@@ -2,7 +2,7 @@ use crate::{
     cache::{Cache, HardCacheMetadata},
     cache_reader::CacheType,
     config::SmartCacherConfig,
-    downloader::{Downloader, ReturnWhen},
+    downloader::{Downloader, ReturnWhen, ToDownload},
 };
 use smart_cacher::{FileSpec, ScErr, ScOk, ScResult, SmartCacher};
 use std::{
@@ -70,7 +70,6 @@ impl HardCacher {
 pub struct HardCacherInner {
     cache: Arc<Cache>,
     cachers_by_name: HashMap<&'static str, &'static dyn SmartCacher>,
-    cachers_by_ext: HashMap<&'static str, &'static dyn SmartCacher>,
     max_header_bytes: u64,
 }
 
@@ -91,7 +90,6 @@ impl HardCacherInner {
         HardCacherInner {
             cache,
             cachers_by_name,
-            cachers_by_ext,
             max_header_bytes,
         }
     }
@@ -110,7 +108,6 @@ impl HardCacherInner {
             "Processing {} ({}), size {}",
             item.file_name, md5, item.size
         );
-        dbg!(self.cache.hard_cache_min_size);
         // If below min_size, call min_size cacher.
         if item.size <= self.cache.hard_cache_min_size {
             self.process_full_cache(downloader, &item).await;
@@ -295,26 +292,36 @@ impl HardCacheDownloader {
         if hard_cache.contains_range(0, self.item.size) {
             return; // We've already fully cached this file
         } else {
-            self.cache_data(0, self.item.size as usize)
+            self.cache_data(0, self.item.size as usize);
+            self.save().await;
         }
     }
 
     /// Consolidate ranges_to_cache.
-    async fn consolidate_ranges(&mut self) {
-        todo!()
+    fn consolidate_ranges(&mut self) {
+        // TODO
     }
 
     /// Save all uncached data to disk.
     async fn save(&mut self) {
+        self.consolidate_ranges();
         dbg!(&self.ranges_to_cache);
-        // Close all downloader streams, make sure everything is actually cached
-        todo!()
+        // TODO: handle downloader streams
+        for (offset, size) in &self.ranges_to_cache {
+            let range = ToDownload::Range(*offset, *offset + *size);
+            // TODO: check for gaps in hard_cache byteranger
+            // KTODO THIS NEXT
+            /*self.downloader
+                .cache_data(self.item.id, path, ReturnWhen::Finished, range)
+                .await;*/
+        }
+        todo!("A")
     }
 
     /// Close any downloaded streams, and leave existing data as-is.
     /// cache.clear_hard_cache and cache.demote_to_soft_cache can be used for further processing.
     async fn close(&mut self) {
-        // Close all downloader streams, even if files are not cached
+        // TODO: handle downloader streams
         todo!()
     }
 
@@ -357,6 +364,13 @@ impl HardCacheDownloader {
 
     /// Download all data from the beginning of the file up to `offset`, but do not return it here.
     pub fn cache_data_to(&mut self, offset: usize) {
+        let offset = offset as u64;
+        if let Some(rtc_size) = self.ranges_to_cache.get_mut(&0) {
+            let max_size = max(*rtc_size, offset);
+            *rtc_size = max_size;
+        } else {
+            self.ranges_to_cache.insert(offset, offset);
+        }
         todo!()
     }
 

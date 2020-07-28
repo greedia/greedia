@@ -29,22 +29,50 @@ use config::Config;
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "greedia", about = "Greedily cache media and serve it up fast.")]
-struct Opt {
-    #[structopt(short, long)]
-    config_path: PathBuf,
+enum Greedia {
+    /// Run a greedia config at a specified mount point.
+    Run {
+        #[structopt(short, long)]
+        config_path: PathBuf,
 
-    #[structopt(short, long)]
-    mount_point: PathBuf,
+        #[structopt(short, long)]
+        mount_point: PathBuf,
+    },
+
+    #[cfg(feature = "sctest")]
+    /// Test a smart cacher by copying the cached portions of a file.
+    Sctest {
+        /// Full file for this smart cacher to cache/copy.
+        #[structopt(short, long)]
+        input: PathBuf,
+
+        /// Output file that only contains the cached portions.
+        #[structopt(short, long)]
+        output: PathBuf,
+    },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let opt = Opt::from_args();
+    let opt = Greedia::from_args();
 
-    let config_data = fs::read(opt.config_path)?;
+    match opt {
+        Greedia::Run {
+            config_path,
+            mount_point,
+        } => run(config_path, mount_point).await?,
+        #[cfg(feature = "sctest")]
+        Greedia::Sctest { input, output} => sctest(input, output).await?,
+    }
+
+    Ok(())
+}
+
+async fn run(config_path: PathBuf, mount_point: PathBuf) -> Result<()> {
+    let config_data = fs::read(config_path)?;
     let cfg: Config = toml::from_slice(&config_data)?;
 
-    let mount_point = opt.mount_point;
+    let mount_point = mount_point;
 
     // Validate password and password2 for each drive
     for (name, drive) in &cfg.gdrive {
@@ -59,10 +87,7 @@ async fn main() -> Result<()> {
     }
 
     let mut join_handles = Vec::with_capacity(1 + cfg.gdrive.len());
-    let (drive_caches, drive_accessors) = Cache::new(
-        &cfg
-    )
-    .await?;
+    let (drive_caches, drive_accessors) = Cache::new(&cfg).await?;
 
     for drive in drive_caches {
         join_handles.push(tokio::spawn(scanner::scan_thread_eh(drive)));
@@ -75,5 +100,10 @@ async fn main() -> Result<()> {
 
     join_all(join_handles).await;
 
+    Ok(())
+}
+
+#[cfg(feature = "sctest")]
+async fn sctest(input: PathBuf, output: PathBuf) -> Result<()> {
     Ok(())
 }

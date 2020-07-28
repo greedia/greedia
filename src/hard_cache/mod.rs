@@ -2,7 +2,7 @@ use crate::{
     cache::{Cache, HardCacheMetadata},
     cache_reader::CacheType,
     config::SmartCacherConfig,
-    downloader::{Downloader, ReturnWhen, ToDownload},
+    downloader::{Downloader, ReturnWhen, ToDownload}, downloader_inner::CacheHandle,
 };
 use smart_cacher::{FileSpec, ScErr, ScOk, ScResult, SmartCacher};
 use std::{
@@ -251,7 +251,7 @@ pub struct HardCacheDownloader {
     md5: String,
 
     // TODO: create handle to downloaders
-    open_streams: BTreeMap<u64, ()>,
+    open_streams: BTreeMap<u64, CacheHandle>,
     //
     ranges_to_cache: BTreeMap<u64, u64>,
 }
@@ -306,8 +306,8 @@ impl HardCacheDownloader {
     async fn save(&mut self) {
         self.consolidate_ranges();
         dbg!(&self.ranges_to_cache);
-        // TODO: handle downloader streams
         for (offset, size) in &self.ranges_to_cache {
+
             let range = ToDownload::Range(*offset, *offset + *size);
             // TODO: check for gaps in hard_cache byteranger
             // KTODO THIS NEXT
@@ -315,7 +315,7 @@ impl HardCacheDownloader {
                 .cache_data(self.item.id, path, ReturnWhen::Finished, range)
                 .await;*/
         }
-        todo!("A")
+        todo!("Implement save function")
     }
 
     /// Close any downloaded streams, and leave existing data as-is.

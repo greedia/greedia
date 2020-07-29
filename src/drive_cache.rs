@@ -61,6 +61,7 @@ impl DriveCache {
         let cf_keys = CfKeys::new(&id);
         let scanning = AtomicBool::new(false);
 
+        // TODO
         let hard_cacher = AccessQueue::new(HardCacher::new(cache.clone(), downloader.clone()), 100);
 
         Ok(DriveCache {

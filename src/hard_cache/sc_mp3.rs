@@ -37,7 +37,7 @@ impl SmartCacher for ScMp3 {
         // First, look for a starting ID3v2 tag and skip over it if necessary.
         let header_scan_offset =
             if let Some(id3_len) = read_id3_len(header_data.get(..10).ok_or(Cancel)?) {
-                id3_len as usize
+                id3_len as u64
             } else {
                 0
             };
@@ -46,16 +46,18 @@ impl SmartCacher for ScMp3 {
 
         // Get a decently-sized buffer for scanning.
         let header_scan_buffer = if header_scan_offset == 0 {
-            header_data
+            header_data.to_vec()
         } else {
             action
-                .read_data_bridged(header_scan_offset, 65536, None)
+                .read_data_bridged(header_scan_offset, 128, None)
                 .await
         };
 
+        println!("{:?}", header_scan_buffer);
+
         // Now, look for the actual MP3 header.
         let (mp3_header_offset, mp3_header_data) =
-            find_mp3_header(header_scan_buffer).ok_or(Cancel)?;
+            find_mp3_header(&header_scan_buffer).ok_or(Cancel)?;
         let mp3_header_offset = mp3_header_offset + header_scan_offset;
 
         // Get the bitrate out of the header.
@@ -66,10 +68,10 @@ impl SmartCacher for ScMp3 {
         let data_length = mp3_header.bitrate * config.seconds;
 
         // Download up to that offset.
-        action.cache_data_to(mp3_header_offset + data_length as usize);
+        action.cache_data_to(mp3_header_offset + data_length);
 
         // Cache the ID3v1 tag location, just in case it exists.
-        action.cache_data(file_spec.size as usize - 128, 128);
+        action.cache_data(file_spec.size - 128, 128);
         Ok(Finalize)
     }
 }
@@ -95,10 +97,10 @@ fn read_id3_len(data: &[u8]) -> Option<u32> {
     }
 }
 
-fn find_mp3_header<'a>(data: &'a [u8]) -> Option<(usize, &'a [u8])> {
+fn find_mp3_header<'a>(data: &'a [u8]) -> Option<(u64, &'a [u8])> {
     let header_offset = data.iter().position(|x| *x == 0xff)?;
     if data.get(header_offset + 1)? & 0xE0 != 0xE0 {
-        Some((header_offset, data.get(header_offset..header_offset + 8)?))
+        Some((header_offset as u64, data.get(header_offset..header_offset + 8)?))
     } else {
         None
     }

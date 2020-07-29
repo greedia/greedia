@@ -26,6 +26,7 @@ mod db_generated;
 
 use cache::Cache;
 use config::Config;
+use hard_cache::HardCacher;
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "greedia", about = "Greedily cache media and serve it up fast.")]
@@ -49,6 +50,18 @@ enum Greedia {
         /// Output file that only contains the cached portions.
         #[structopt(short, long)]
         output: PathBuf,
+
+        /// Number of seconds to cache (default 10).
+        #[structopt(short, long, default_value = "10")]
+        seconds: u64,
+
+        /// Fill uncached bytes with a different byte instead (hex-encoded).
+        #[structopt(short, long)]
+        fill_byte: Option<String>,
+
+        /// Fill uncached bytes with random bytes instead. Overrides fill_byte.
+        #[structopt(short = "r", long)]
+        fill_random: bool,
     },
 }
 
@@ -62,7 +75,13 @@ async fn main() -> Result<()> {
             mount_point,
         } => run(config_path, mount_point).await?,
         #[cfg(feature = "sctest")]
-        Greedia::Sctest { input, output} => sctest(input, output).await?,
+        Greedia::Sctest {
+            input,
+            output,
+            seconds,
+            fill_byte,
+            fill_random,
+        } => sctest(input, output, seconds, fill_byte, fill_random).await?,
     }
 
     Ok(())
@@ -104,6 +123,17 @@ async fn run(config_path: PathBuf, mount_point: PathBuf) -> Result<()> {
 }
 
 #[cfg(feature = "sctest")]
-async fn sctest(input: PathBuf, output: PathBuf) -> Result<()> {
+async fn sctest(
+    input: PathBuf,
+    output: PathBuf,
+    seconds: u64,
+    fill_byte: Option<String>,
+    fill_random: bool,
+) -> Result<()> {
+    dbg!(&input, &output, &seconds, &fill_byte, &fill_random);
+
+    let hard_cacher = HardCacher::new_sctest(input, output, seconds, fill_byte, fill_random);
+    hard_cacher.process_sctest().await;
+
     Ok(())
 }

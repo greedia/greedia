@@ -37,7 +37,7 @@ impl SmartCacher for ScMp3 {
         // First, look for a starting ID3v2 tag and skip over it if necessary.
         let header_scan_offset =
             if let Some(id3_len) = read_id3_len(header_data.get(..10).ok_or(Cancel)?) {
-                id3_len as u64
+                id3_len as u64 + 10
             } else {
                 0
             };
@@ -49,11 +49,9 @@ impl SmartCacher for ScMp3 {
             header_data.to_vec()
         } else {
             action
-                .read_data_bridged(header_scan_offset, 128, None)
+                .read_data_bridged(header_scan_offset, 65536, None)
                 .await
         };
-
-        println!("{:?}", header_scan_buffer);
 
         // Now, look for the actual MP3 header.
         let (mp3_header_offset, mp3_header_data) =
@@ -99,7 +97,7 @@ fn read_id3_len(data: &[u8]) -> Option<u32> {
 
 fn find_mp3_header<'a>(data: &'a [u8]) -> Option<(u64, &'a [u8])> {
     let header_offset = data.iter().position(|x| *x == 0xff)?;
-    if data.get(header_offset + 1)? & 0xE0 != 0xE0 {
+    if data.get(header_offset + 1)? & 0xE0 == 0xE0 {
         Some((header_offset as u64, data.get(header_offset..header_offset + 8)?))
     } else {
         None
@@ -138,36 +136,37 @@ fn get_mp3_header(data: &[u8]) -> Option<Mp3Header> {
     // Byte containing bitrate and sample rate information.
     let br_byte = data.get(2)?;
 
+    // Bitrate in bytes.
     let bitrate = match (br_byte & 0b1111_0000, is_version2) {
-        (0b0001_0000, false) => 32_000,
-        (0b0010_0000, false) => 40_000,
-        (0b0011_0000, false) => 48_000,
-        (0b0100_0000, false) => 56_000,
-        (0b0101_0000, false) => 64_000,
-        (0b0110_0000, false) => 80_000,
-        (0b0111_0000, false) => 96_000,
-        (0b1000_0000, false) => 112_000,
-        (0b1001_0000, false) => 128_000,
-        (0b1010_0000, false) => 160_000,
-        (0b1011_0000, false) => 192_000,
-        (0b1100_0000, false) => 224_000,
-        (0b1101_0000, false) => 256_000,
-        (0b1110_0000, false) => 320_000,
+        (0b0001_0000, false) => 4_000,
+        (0b0010_0000, false) => 5_000,
+        (0b0011_0000, false) => 6_000,
+        (0b0100_0000, false) => 7_000,
+        (0b0101_0000, false) => 8_000,
+        (0b0110_0000, false) => 10_000,
+        (0b0111_0000, false) => 12_000,
+        (0b1000_0000, false) => 14_000,
+        (0b1001_0000, false) => 16_000,
+        (0b1010_0000, false) => 20_000,
+        (0b1011_0000, false) => 24_000,
+        (0b1100_0000, false) => 28_000,
+        (0b1101_0000, false) => 32_000,
+        (0b1110_0000, false) => 40_000,
 
-        (0b0001_0000, true) => 8_000,
-        (0b0010_0000, true) => 16_000,
-        (0b0011_0000, true) => 24_000,
-        (0b0100_0000, true) => 32_000,
-        (0b0101_0000, true) => 40_000,
-        (0b0110_0000, true) => 48_000,
-        (0b0111_0000, true) => 56_000,
-        (0b1000_0000, true) => 64_000,
-        (0b1001_0000, true) => 80_000,
-        (0b1010_0000, true) => 96_000,
-        (0b1011_0000, true) => 112_000,
-        (0b1100_0000, true) => 128_000,
-        (0b1101_0000, true) => 144_000,
-        (0b1110_0000, true) => 160_000,
+        (0b0001_0000, true) => 1_000,
+        (0b0010_0000, true) => 2_000,
+        (0b0011_0000, true) => 3_000,
+        (0b0100_0000, true) => 4_000,
+        (0b0101_0000, true) => 5_000,
+        (0b0110_0000, true) => 6_000,
+        (0b0111_0000, true) => 7_000,
+        (0b1000_0000, true) => 8_000,
+        (0b1001_0000, true) => 10_000,
+        (0b1010_0000, true) => 12_000,
+        (0b1011_0000, true) => 14_000,
+        (0b1100_0000, true) => 16_000,
+        (0b1101_0000, true) => 18_000,
+        (0b1110_0000, true) => 20_000,
 
         _ => None?,
     };

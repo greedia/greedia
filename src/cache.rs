@@ -89,7 +89,7 @@ pub struct ReaderFileData {
 }
 
 /// JSON data stored with each hard-cached file.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct HardCacheMetadata {
     /// Name of the (smart) cacher used to cache this file.
     pub cacher: String,

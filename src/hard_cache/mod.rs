@@ -70,6 +70,10 @@ impl HardCacher {
         fill_byte: Option<String>,
         fill_random: bool,
     ) -> HardCacher {
+        let meta = input.metadata().unwrap();
+        let file_name = input.file_name().unwrap().to_str().unwrap().to_string();
+        let size = meta.len();
+
         let cacher = Arc::new(HcTestCacher {
             input,
             output,
@@ -77,8 +81,9 @@ impl HardCacher {
             fill_byte,
             fill_random,
         });
+        
 
-        let inner = Arc::new(HardCacherInner::new(cacher));
+        let inner = Arc::new(HardCacherInner::new(cacher, file_name, size));
         HardCacher { inner }
     }
 
@@ -94,10 +99,12 @@ struct HardCacherInner {
     cacher: Arc<dyn HcCacher + Send + Sync>,
     cachers_by_name: HashMap<&'static str, &'static dyn SmartCacher>,
     max_header_bytes: u64,
+    file_name: String,
+    size: u64,
 }
 
 impl HardCacherInner {
-    pub fn new(cacher: Arc<dyn HcCacher + Send + Sync>) -> HardCacherInner {
+    pub fn new(cacher: Arc<dyn HcCacher + Send + Sync>, file_name: String, size: u64) -> HardCacherInner {
         let mut max_header_bytes = 0;
         let mut cachers_by_name = HashMap::new();
         let mut cachers_by_ext = HashMap::new();
@@ -116,6 +123,8 @@ impl HardCacherInner {
             cacher,
             cachers_by_name,
             max_header_bytes,
+            file_name,
+            size,
         }
     }
 
@@ -126,9 +135,9 @@ impl HardCacherInner {
         // Create fake item for process_partial_cache
         let item = HardCacheItem {
             id: String::new(),
-            file_name: String::new(),
+            file_name: self.file_name.clone(),
             md5: Vec::new(),
-            size: 0,
+            size: self.size,
         };
 
         self.process_partial_cache(&item).await;
@@ -247,11 +256,13 @@ trait HcCacherItem {
     fn cache_data(&mut self, offset: u64, size: u64);
     fn cache_data_bridged(&mut self, offset: u64, size: u64, max_bridge_len: Option<u64>);
     fn cache_data_to(&mut self, offset: u64);
+    fn cache_data_fully(&mut self);
 
     async fn set_metadata(&mut self, meta: HardCacheMetadata) -> Result<()>;
     async fn cancel_with_move(&mut self) -> Result<()>; // demote_to_soft_cache
     async fn trash(&mut self) -> Result<()>; // clear_hard_cache
     async fn save(&mut self);
+    async fn close(&mut self);
 }
 
 struct HcDownloadCacher {}
@@ -282,6 +293,7 @@ impl HcCacher for HcTestCacher {
         let output = File::create(&self.output).await.unwrap();
         Box::new(HcTestCacherItem {
             input,
+            input_size: item.size,
             output,
             bridge_points: BTreeSet::new(),
             ranges_to_cache: BTreeMap::new(),
@@ -292,11 +304,11 @@ impl HcCacher for HcTestCacher {
     fn generic_cache_sizes(&self) -> (DownloadAmount, DownloadAmount) {
         let start = DownloadAmount {
             percent: Some(0.5),
-            bytes: Some(1_000),
+            bytes: Some(1_000_000),
         };
         let end = DownloadAmount {
             percent: Some(0.5),
-            bytes: Some(1_000),
+            bytes: Some(1_000_000),
         };
 
         (start, end)
@@ -306,6 +318,7 @@ impl HcCacher for HcTestCacher {
 #[cfg(feature = "sctest")]
 struct HcTestCacherItem {
     input: File,
+    input_size: u64,
     output: File,
     bridge_points: BTreeSet<u64>,
     ranges_to_cache: BTreeMap<u64, u64>,
@@ -323,6 +336,8 @@ impl HcCacherItem for HcTestCacherItem {
         self.input.seek(SeekFrom::Start(offset)).await.unwrap();
         let mut buf = vec![0u8; size as usize];
         self.input.read_exact(&mut buf).await.unwrap();
+        self.output.seek(SeekFrom::Start(offset)).await.unwrap();
+        self.output.write_all(&buf).await.unwrap();
         buf
     }
     async fn read_data_bridged(&mut self, offset: u64, size: u64, max_bridge_len: Option<u64>) -> Vec<u8> {
@@ -349,25 +364,59 @@ impl HcCacherItem for HcTestCacherItem {
     }
     fn cache_data_bridged(&mut self, offset: u64, size: u64, max_bridge_len: Option<u64>) {
         println!("cache_data_bridged {} {} {:?}", offset, size, max_bridge_len);
-        todo!()
+        let last_bridge_point = if let Some(last_bridge_point) = self.bridge_points.range(..offset).rev().next() {
+            *last_bridge_point
+        } else {
+            0
+        };
+
+        if let Some(max_bridge_len) = max_bridge_len {
+            if offset - last_bridge_point <= max_bridge_len {
+                self.ranges_to_cache.insert(last_bridge_point, offset - last_bridge_point + size);
+            }
+        } else {
+            self.ranges_to_cache.insert(last_bridge_point, offset - last_bridge_point + size);
+        }
     }
     fn cache_data_to(&mut self, offset: u64) {
-        todo!()
+        println!("cache_data_to {}", offset);
+        self.ranges_to_cache.insert(0, offset);
     }
+
+    fn cache_data_fully(&mut self) {
+        println!("cache_data_fully");
+        self.ranges_to_cache.insert(0, self.input_size);
+    }
+
     async fn set_metadata(&mut self, meta: HardCacheMetadata) -> Result<()> {
-        todo!()
+        println!("set_metadata {:?}", meta);
+        Ok(())
     }
     async fn cancel_with_move(&mut self) -> Result<()> {
-        todo!()
+        println!("cancel_with_move");
+        Ok(())
     }
     async fn trash(&mut self) -> Result<()> {
-        todo!()
+        println!("trash");
+        Ok(())
+    }
+
+    async fn close(&mut self) {
+        println!("close");
     }
 
     async fn save(&mut self) {
-        self.output.flush();
         dbg!(&self.ranges_to_cache);
-        todo!()
+        let mut buf = vec![];
+        for (offset, size) in &self.ranges_to_cache {
+            buf.resize(*size as usize, 0);
+            println!("bufsize {}, offset {}, size {}", buf.len(), offset, size);
+            self.input.seek(SeekFrom::Start(*offset)).await.unwrap();
+            self.input.read_exact(&mut buf).await.unwrap();
+            self.output.seek(SeekFrom::Start(*offset)).await.unwrap();
+            self.output.write_all(&buf).await.unwrap();
+        }
+        self.output.flush();
     }
 
 }
@@ -381,7 +430,6 @@ impl HardCacheDownloader {
     async fn new(
         item: Box<dyn HcCacherItem + Send + Sync>,
     ) -> HardCacheDownloader {
-        // TODO: check hard/soft caches for existing data
 
         HardCacheDownloader {
             item,
@@ -434,8 +482,8 @@ impl HardCacheDownloader {
         self.item.cache_data_bridged(offset, size, max_bridge_len)
     }
 
-    async fn cache_fully(&mut self) {
-        todo!()
+    fn cache_data_fully(&mut self) {
+        self.item.cache_data_fully()
     }
 
     /// Save all uncached data to disk.
@@ -446,7 +494,7 @@ impl HardCacheDownloader {
     /// Close any downloaded streams, and leave existing data as-is.
     /// cache.clear_hard_cache and cache.demote_to_soft_cache can be used for further processing.
     async fn close(&mut self) {
-        todo!()
+        self.item.close().await
     }
 
     async fn set_metadata(&mut self, meta: HardCacheMetadata) -> Result<()> {

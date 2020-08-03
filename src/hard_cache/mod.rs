@@ -57,9 +57,7 @@ pub struct HardCacher {
 impl HardCacher {
     /// Create a new HardCacher for production use.
     pub fn new(cache: Arc<Cache>, downloader: Arc<Downloader>) -> HardCacher {
-        let cacher = Arc::new(HcDownloadCacher {
-            cache, downloader,
-        });
+        let cacher = Arc::new(HcDownloadCacher { cache, downloader });
 
         Self::new_inner(cacher)
     }
@@ -104,7 +102,11 @@ impl HardCacher {
             }
         }
 
-        HardCacher { cacher, cachers_by_name, max_header_bytes }
+        HardCacher {
+            cacher,
+            cachers_by_name,
+            max_header_bytes,
+        }
     }
 
     /// Process the provided sctest file.

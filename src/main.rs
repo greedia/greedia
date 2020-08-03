@@ -132,8 +132,12 @@ async fn sctest(
 ) -> Result<()> {
     dbg!(&input, &output, &seconds, &fill_byte, &fill_random);
 
+    let meta = input.metadata().unwrap();
+    let file_name = input.file_name().unwrap().to_str().unwrap().to_string();
+    let size = meta.len();
+
     let hard_cacher = HardCacher::new_sctest(input, output, seconds, fill_byte, fill_random);
-    hard_cacher.process_sctest().await;
+    hard_cacher.process_sctest(file_name, size).await;
 
     Ok(())
 }

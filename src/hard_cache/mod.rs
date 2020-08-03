@@ -49,13 +49,19 @@ pub struct HardCacheItem {
 }
 
 pub struct HardCacher {
-    inner: Arc<HardCacherInner>,
+    cacher: Arc<dyn HcCacher + Send + Sync>,
+    cachers_by_name: HashMap<&'static str, &'static dyn SmartCacher>,
+    max_header_bytes: u64,
 }
 
 impl HardCacher {
     /// Create a new HardCacher for production use.
     pub fn new(cache: Arc<Cache>, downloader: Arc<Downloader>) -> HardCacher {
-        todo!()
+        let cacher = Arc::new(HcDownloadCacher {
+            cache, downloader,
+        });
+
+        Self::new_inner(cacher)
     }
 
     /// Process one file to hard cache.
@@ -72,10 +78,6 @@ impl HardCacher {
         fill_byte: Option<String>,
         fill_random: bool,
     ) -> HardCacher {
-        let meta = input.metadata().unwrap();
-        let file_name = input.file_name().unwrap().to_str().unwrap().to_string();
-        let size = meta.len();
-
         let cacher = Arc::new(sctest::HcTestCacher {
             input,
             output,
@@ -84,32 +86,10 @@ impl HardCacher {
             fill_random,
         });
 
-        let inner = Arc::new(HardCacherInner::new(cacher, file_name, size));
-        HardCacher { inner }
+        Self::new_inner(cacher)
     }
 
-    /// Process the provided sctest file.
-    #[cfg(feature = "sctest")]
-    pub async fn process_sctest(&self) {
-        let inner = self.inner.clone();
-        inner.process_sctest().await;
-    }
-}
-
-struct HardCacherInner {
-    cacher: Arc<dyn HcCacher + Send + Sync>,
-    cachers_by_name: HashMap<&'static str, &'static dyn SmartCacher>,
-    max_header_bytes: u64,
-    file_name: String,
-    size: u64,
-}
-
-impl HardCacherInner {
-    pub fn new(
-        cacher: Arc<dyn HcCacher + Send + Sync>,
-        file_name: String,
-        size: u64,
-    ) -> HardCacherInner {
+    pub fn new_inner(cacher: Arc<dyn HcCacher + Send + Sync>) -> HardCacher {
         let mut max_header_bytes = 0;
         let mut cachers_by_name = HashMap::new();
         let mut cachers_by_ext = HashMap::new();
@@ -124,25 +104,20 @@ impl HardCacherInner {
             }
         }
 
-        HardCacherInner {
-            cacher,
-            cachers_by_name,
-            max_header_bytes,
-            file_name,
-            size,
-        }
+        HardCacher { cacher, cachers_by_name, max_header_bytes }
     }
 
+    /// Process the provided sctest file.
     #[cfg(feature = "sctest")]
-    pub async fn process_sctest(self: Arc<Self>) {
+    pub async fn process_sctest(&self, file_name: String, size: u64) {
         println!("SCTEST");
 
         // Create fake item for process_partial_cache
         let item = HardCacheItem {
             id: String::new(),
-            file_name: self.file_name.clone(),
+            file_name,
             md5: Vec::new(),
-            size: self.size,
+            size,
         };
 
         self.process_partial_cache(&item).await;
@@ -239,13 +214,13 @@ impl HardCacherInner {
 
 /// Trait to allow data from an arbitrary input to an arbitrary output.
 #[async_trait]
-trait HcCacher {
+pub trait HcCacher {
     async fn get_item(&self, item: &HardCacheItem) -> Box<dyn HcCacherItem + Send + Sync>;
     fn generic_cache_sizes(&self) -> (DownloadAmount, DownloadAmount);
 }
 
 #[async_trait]
-trait HcCacherItem {
+pub trait HcCacherItem {
     async fn read_data(&mut self, offset: u64, size: u64) -> Vec<u8>;
     async fn read_data_bridged(
         &mut self,
@@ -265,8 +240,20 @@ trait HcCacherItem {
     async fn close(&mut self);
 }
 
-struct HcDownloadCacher {}
-//impl HcCacher for HcDownloadCacher {} // TODO implement regular Download Cacher
+struct HcDownloadCacher {
+    cache: Arc<Cache>,
+    downloader: Arc<Downloader>,
+}
+
+#[async_trait]
+impl HcCacher for HcDownloadCacher {
+    async fn get_item(&self, item: &HardCacheItem) -> Box<dyn HcCacherItem + Send + Sync> {
+        todo!()
+    }
+    fn generic_cache_sizes(&self) -> (DownloadAmount, DownloadAmount) {
+        todo!()
+    }
+}
 
 pub struct HardCacheDownloader {
     item: Box<dyn HcCacherItem + Send + Sync>,

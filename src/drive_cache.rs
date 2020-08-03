@@ -612,7 +612,7 @@ impl DriveCache {
 
     pub async fn hard_cache_process(&self, id: &str, file_name: &str, md5: &[u8], size: u64) {
         let hard_cacher = self.hard_cacher.access().await;
-        hard_cacher.process(id, file_name, md5, size)
+        hard_cacher.process(id, file_name, md5, size).await
     }
 
     pub fn iter<'a>(&'a self) -> Result<DriveCacheIter<'a>> {

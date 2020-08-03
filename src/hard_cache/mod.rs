@@ -62,11 +62,6 @@ impl HardCacher {
         Self::new_inner(cacher)
     }
 
-    /// Process one file to hard cache.
-    pub fn process(&self, id: &str, file_name: &str, md5: &[u8], size: u64) {
-        todo!()
-    }
-
     /// Create a new HardCacher for sctest use.
     #[cfg(feature = "sctest")]
     pub fn new_sctest(
@@ -87,7 +82,7 @@ impl HardCacher {
         Self::new_inner(cacher)
     }
 
-    pub fn new_inner(cacher: Arc<dyn HcCacher + Send + Sync>) -> HardCacher {
+    fn new_inner(cacher: Arc<dyn HcCacher + Send + Sync>) -> HardCacher {
         let mut max_header_bytes = 0;
         let mut cachers_by_name = HashMap::new();
         let mut cachers_by_ext = HashMap::new();
@@ -109,6 +104,18 @@ impl HardCacher {
         }
     }
 
+    /// Process one file to hard cache.
+    pub async fn process(&self, id: &str, file_name: &str, md5: &[u8], size: u64) {
+        let item = HardCacheItem {
+            id: id.to_string(),
+            file_name: file_name.to_string(),
+            md5: md5.to_vec(),
+            size,
+        };
+
+        self.process_inner(&item).await;
+    }
+
     /// Process the provided sctest file.
     #[cfg(feature = "sctest")]
     pub async fn process_sctest(&self, file_name: String, size: u64) {
@@ -122,10 +129,10 @@ impl HardCacher {
             size,
         };
 
-        self.process_partial_cache(&item).await;
+        self.process_inner(&item).await;
     }
 
-    pub async fn process_partial_cache(&self, item: &HardCacheItem) {
+    async fn process_inner(&self, item: &HardCacheItem) {
         let cache_item = self.cacher.get_item(item).await;
         let mut hcd = HardCacheDownloader::new(cache_item).await;
 

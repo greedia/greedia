@@ -1,7 +1,4 @@
-use std::{
-    cmp::min,
-    collections::HashMap,
-};
+use std::{cmp::min, collections::HashMap};
 
 use serde::Deserialize;
 

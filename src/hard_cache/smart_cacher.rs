@@ -1,6 +1,6 @@
-use async_trait::async_trait;
 use super::HardCacheDownloader;
 use crate::config::SmartCacherConfig;
+use async_trait::async_trait;
 
 /// General information about the file that could assist in scanning.
 pub struct FileSpec {
@@ -57,7 +57,6 @@ pub enum ScErr {
     /// The cacher will then attempt to download using a different SmartCacher.
     Trash,
 }
-
 
 #[cfg(test)]
 mod test {

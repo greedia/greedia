@@ -99,8 +99,8 @@ pub struct HardCacheMetadata {
 
 pub struct Cache {
     sclru: Arc<Mutex<SoftCacheLru>>,
-    hard_cache_path: PathBuf,
-    soft_cache_path: PathBuf,
+    pub hard_cache_path: PathBuf,
+    pub soft_cache_path: PathBuf,
     pub hard_cache_min_size: u64,
     pub generic_cache_sizes: (DownloadAmount, DownloadAmount),
 }
@@ -152,7 +152,7 @@ impl Cache {
 
         let db = Arc::new(DB::open_cf(&options, &db_path, column_families)?);
 
-        // Create Downloaders that will be deduplicated by client_id (for the sake of rate limiting)
+        // Create Downloaders that will be deduplicated by client_id (for the purpose of rate limiting)
         // Create DriveCaches that will be deduplicated by drive_id (to ensure no inode conflicts)
         // Then return a list of DriveAccessors that map to the [drive] sections in the config
         let mut downloaders: HashMap<String, Arc<Downloader>> = HashMap::new();

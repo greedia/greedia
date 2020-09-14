@@ -25,7 +25,11 @@ pub struct DriveAccess {
 }
 
 impl DriveAccess {
-    pub fn new(name: String, drive: ConfigGoogleDrive, cache: Arc<DriveCache>) -> Result<DriveAccess> {
+    pub fn new(
+        name: String,
+        drive: ConfigGoogleDrive,
+        cache: Arc<DriveCache>,
+    ) -> Result<DriveAccess> {
         let crypt = if let (Some(password1), Some(password2)) = (&drive.password, &drive.password2)
         {
             Some(CryptContext::new(&password1, &password2)?)

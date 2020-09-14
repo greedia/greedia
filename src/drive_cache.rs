@@ -80,6 +80,8 @@ impl DriveCache {
         self.scanning.store(scanning, Ordering::Release)
     }
 
+    /// Return whether or not an initial scan is being performed on this drive.
+    /// This is so the FUSE filesystem won't return cached directory listings when scanning.
     pub fn get_scanning(&self) -> bool {
         self.scanning.load(Ordering::Acquire)
     }
@@ -209,6 +211,8 @@ impl DriveCache {
     pub fn start_scan(&self) -> Result<()> {
         self.set_scanning(true);
 
+        // Save last scan as one hour ago, to make sure there's no items lost to any gap between
+        // this scan and the next scan.
         let recent_now = (Utc::now() - Duration::hours(1)).timestamp();
         let mut recent_now_bytes = [0u8; 8];
         LittleEndian::write_i64(&mut recent_now_bytes, recent_now);

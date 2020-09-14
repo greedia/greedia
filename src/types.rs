@@ -75,3 +75,8 @@ pub struct FileInfo {
     pub md5: String,
     pub size: u64,
 }
+
+enum DataIdentifier {
+    DriveSpecific(Vec<u8>),
+    GlobalMd5(Vec<u8>),
+}

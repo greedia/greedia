@@ -1,4 +1,7 @@
-use crate::{downloader_inner::{CacheHandle, downloader_thread}, types::Page};
+use crate::{
+    downloader_inner::{downloader_thread, CacheHandle},
+    types::Page,
+};
 use anyhow::{format_err, Result};
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
@@ -40,7 +43,13 @@ pub enum ChanMessage {
         file_id: String,
         path: PathBuf,
         start_offset: u64,
+        send_chan: mpsc::Sender<ChanMessage>,
         result: mpsc::Sender<CacheHandle>,
+    },
+    ContinuableCacheFileDownloader {
+        file_id: String,
+        start_offset: u64,
+        result: mpsc::Sender<reqwest::Response>,
     },
     // TODO: changes getstartpagetoken
     // returns start token
@@ -144,7 +153,7 @@ impl Downloader {
             result,
         };
 
-        self.send_chan.clone().send(msg).await?;
+        self.hp_send_chan.clone().send(msg).await?;
 
         Ok(res_receiver
             .next()
@@ -167,6 +176,7 @@ impl Downloader {
             file_id,
             path,
             start_offset,
+            send_chan: self.send_chan.clone(),
             result,
         };
 
@@ -178,7 +188,6 @@ impl Downloader {
             .ok_or_else(|| format_err!("cache_data recv channel closed without data"))?)
     }
 }
-
 
 // TODO: is an enum the best option for this?
 // #[derive(Debug)]

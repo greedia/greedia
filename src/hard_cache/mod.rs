@@ -2,11 +2,12 @@ use crate::{
     cache::{Cache, HardCacheMetadata},
     cache_reader::CacheType,
     config::{DownloadAmount, SmartCacherConfig},
-    downloader::{Downloader, ReturnWhen, ToDownload},
+    downloader::Downloader,
     downloader_inner::CacheHandle,
 };
 use anyhow::Result;
 use async_trait::async_trait;
+use byte_ranger::{ByteRanger, Scan};
 use smart_cacher::{FileSpec, ScErr, ScOk, ScResult, SmartCacher};
 use std::{
     cmp::max,
@@ -14,11 +15,7 @@ use std::{
     path::PathBuf,
     sync::Arc,
 };
-
-use std::collections::BTreeSet;
-use std::io::SeekFrom;
-use tokio::fs::File;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::Mutex;
 
 #[cfg(feature = "sctest")]
 mod sctest;
@@ -38,7 +35,6 @@ Attempt to arbitrarily download some percentage of the file's start and end.
 */
 
 static SMART_CACHERS: &[&dyn SmartCacher] = &[&sc_mp3::ScMp3];
-//static SMART_CACHERS: &[&dyn SmartCacher] = &[];
 
 #[derive(Clone)]
 pub struct HardCacheItem {
@@ -113,7 +109,7 @@ impl HardCacher {
             size,
         };
 
-        self.process_inner(&item).await;
+        self.process_inner(item).await;
     }
 
     /// Process the provided sctest file.
@@ -129,14 +125,15 @@ impl HardCacher {
             size,
         };
 
-        self.process_inner(&item).await;
+        self.process_inner(item).await;
     }
 
-    async fn process_inner(&self, item: &HardCacheItem) {
+    async fn process_inner(&self, item: HardCacheItem) {
+        let file_spec = hard_cache_item_to_file_spec(&item);
+        let item_size = item.size;
+
         let cache_item = self.cacher.get_item(item).await;
         let mut hcd = HardCacheDownloader::new(cache_item).await;
-
-        let file_spec = hard_cache_item_to_file_spec(item);
 
         // TODO: not hardcode this
         let smart_cacher_config = SmartCacherConfig {
@@ -201,12 +198,12 @@ impl HardCacher {
         let (start_dl, end_dl) = &self.cacher.generic_cache_sizes();
 
         // Signal to cache the start data.
-        let start_data_size = start_dl.with_size(item.size);
+        let start_data_size = start_dl.with_size(item_size);
         hcd.cache_data(0, start_data_size);
 
         // Signal to cache the end data.
-        let end_data_size = end_dl.with_size(item.size);
-        hcd.cache_data(item.size - end_data_size, end_data_size);
+        let end_data_size = end_dl.with_size(item_size);
+        hcd.cache_data(item_size - end_data_size, end_data_size);
 
         // Download and save data to disk.
         hcd.save().await;
@@ -224,7 +221,7 @@ impl HardCacher {
 /// Trait to allow data from an arbitrary input to an arbitrary output.
 #[async_trait]
 pub trait HcCacher {
-    async fn get_item(&self, item: &HardCacheItem) -> Box<dyn HcCacherItem + Send + Sync>;
+    async fn get_item(&self, item: HardCacheItem) -> Box<dyn HcCacherItem + Send + Sync>;
     fn generic_cache_sizes(&self) -> (DownloadAmount, DownloadAmount);
 }
 
@@ -256,10 +253,167 @@ struct HcDownloadCacher {
 
 #[async_trait]
 impl HcCacher for HcDownloadCacher {
-    async fn get_item(&self, item: &HardCacheItem) -> Box<dyn HcCacherItem + Send + Sync> {
-        todo!()
+    async fn get_item(&self, item: HardCacheItem) -> Box<dyn HcCacherItem + Send + Sync> {
+        Box::new(HcDownloadCacherItem::new(self.cache.clone(), self.downloader.clone(), item).await)
     }
     fn generic_cache_sizes(&self) -> (DownloadAmount, DownloadAmount) {
+        todo!()
+    }
+}
+
+struct HcDownloadCacherItem {
+    /// Access to the cache filesystem.
+    cache: Arc<Cache>,
+    /// Access to the downloader.
+    downloader: Arc<Downloader>,
+    /// Details about the item to download.
+    item: HardCacheItem,
+    /// Cached string version of the item's md5.
+    md5: String,
+    /// Cached hard cache dir path.
+    hard_cache_path: PathBuf,
+    /// List of ranges that are cached or in the process of downloading.
+    cached_ranges: ByteRanger<Option<Arc<Mutex<CacheHandle>>>>,
+}
+
+impl HcDownloadCacherItem {
+    async fn new(
+        cache: Arc<Cache>,
+        downloader: Arc<Downloader>,
+        item: HardCacheItem,
+    ) -> HcDownloadCacherItem {
+        let md5 = hex::encode(&item.md5);
+        let hard_cache_path = cache.get_cache_dir_path(&CacheType::HardCache, &md5);
+        let mut cached_ranges = ByteRanger::new();
+        if hard_cache_path.exists() {
+            let hc_ranges = cache
+                .get_cache_files(CacheType::HardCache, &md5)
+                .await
+                .cache_files;
+
+            for (offset, size) in hc_ranges {
+                cached_ranges.add_range(offset, size, None);
+            }
+        } else {
+            tokio::fs::create_dir_all(&hard_cache_path).await.unwrap();
+        }
+
+        HcDownloadCacherItem {
+            cache,
+            downloader,
+            item,
+            md5,
+            hard_cache_path,
+            cached_ranges,
+        }
+    }
+}
+
+#[async_trait]
+impl HcCacherItem for HcDownloadCacherItem {
+    async fn read_data(&mut self, offset: u64, size: u64) -> Vec<u8> {
+        println!("read_data {} {}", offset, size);
+        // Check offset - 1, to see if we can continue an existing stream.
+        let ranges = self
+            .cached_ranges
+            .scan_range(offset.saturating_sub(1), size);
+        dbg!(&ranges);
+
+        let mut last_dl = None;
+        let mut out_data = vec![];
+        for r in ranges {
+            match r {
+                Scan::Data {
+                    start_offset,
+                    size,
+                    data,
+                } => {
+                    if let Some(data) = data {
+                        last_dl = Some(data);
+                    } else {
+                        if size == 0 {
+                            continue;
+                        }
+                    }
+                }
+                Scan::Gap { start_offset, size } => {
+                    println!("{} {} {:?}", start_offset, size, last_dl);
+                    if let Some(ref dl) = last_dl {
+                        let mut dl = dl.lock().await;
+                        let mut data = dl.read_data(size).await;
+                        out_data.append(&mut data);
+                    } else {
+                        let output_file = self
+                            .cache
+                            .get_cache_dir_path(&CacheType::HardCache, &self.md5)
+                            .join(format!("chunk_{}", offset));
+                        dbg!(output_file.display());
+                        let mut dl = self
+                            .downloader
+                            .continuable_cache_data(self.item.id.clone(), output_file, offset)
+                            .await
+                            .unwrap();
+                        let mut data = dl.read_data(size).await;
+                        out_data.append(&mut data);
+                        last_dl = Some(Arc::new(Mutex::new(dl)));
+                    }
+                }
+            }
+        }
+
+        out_data
+
+        /*match ranges.as_slice() {
+            [] => {
+                // No cached data or streams exist here, so start a new stream.
+                let output_file = self
+                    .cache
+                    .get_cache_dir_path(&CacheType::HardCache, &self.md5)
+                    .join(format!("chunk_{}", offset));
+                let mut cache_handle = self
+                    .downloader
+                    .continuable_cache_data(self.item.id.clone(), output_file, offset).await.unwrap();
+                let data = cache_handle.read_data(size).await;
+                let hex_data = hex::encode(&data[..4096]);
+                println!("{}: {}", &self.item.file_name, hex_data);
+            }
+            _ => println!("TODO Something else"),
+        };*/
+    }
+
+    async fn read_data_bridged(
+        &mut self,
+        offset: u64,
+        size: u64,
+        max_bridge_len: Option<u64>,
+    ) -> Vec<u8> {
+        todo!()
+    }
+    fn cache_data(&mut self, offset: u64, size: u64) {
+        todo!()
+    }
+    fn cache_data_bridged(&mut self, offset: u64, size: u64, max_bridge_len: Option<u64>) {
+        todo!()
+    }
+    fn cache_data_to(&mut self, offset: u64) {
+        todo!()
+    }
+    fn cache_data_fully(&mut self) {
+        todo!()
+    }
+    async fn set_metadata(&mut self, meta: HardCacheMetadata) -> Result<()> {
+        todo!()
+    }
+    async fn cancel_with_move(&mut self) -> Result<()> {
+        todo!()
+    }
+    async fn trash(&mut self) -> Result<()> {
+        todo!()
+    }
+    async fn save(&mut self) {
+        todo!()
+    }
+    async fn close(&mut self) {
         todo!()
     }
 }

@@ -1,15 +1,15 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::PathBuf,
-    io::SeekFrom,
-};
 use anyhow::Result;
 use async_trait::async_trait;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    io::SeekFrom,
+    path::PathBuf,
+};
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+use super::{HardCacheItem, HardCacheMetadata, HcCacher, HcCacherItem};
 use crate::config::DownloadAmount;
-use super::{HcCacher, HardCacheItem, HcCacherItem, HardCacheMetadata};
 pub struct HcTestCacher {
     pub input: PathBuf,
     pub output: PathBuf,
@@ -20,14 +20,13 @@ pub struct HcTestCacher {
 
 #[async_trait]
 impl HcCacher for HcTestCacher {
-    async fn get_item(&self, item: &HardCacheItem) -> Box<dyn HcCacherItem + Send + Sync> {
+    async fn get_item(&self, item: HardCacheItem) -> Box<dyn HcCacherItem + Send + Sync> {
         if !item.id.is_empty() {
             panic!("BUG: sctest id is not empty.");
         }
         if !item.md5.is_empty() {
             panic!("BUG: sctest md5 is not empty.");
         }
-        // TODO set file_name and size from item
 
         let input = File::open(&self.input).await.unwrap();
         let output = File::create(&self.output).await.unwrap();
@@ -67,7 +66,7 @@ struct HcTestCacherItem {
 impl HcCacherItem for HcTestCacherItem {
     async fn read_data(&mut self, offset: u64, size: u64) -> Vec<u8> {
         println!("read_data {} {}", offset, size);
-        self.bridge_points.insert(offset+size);
+        self.bridge_points.insert(offset + size);
         self.input.seek(SeekFrom::Start(offset)).await.unwrap();
         let mut buf = vec![0u8; size as usize];
         self.input.read_exact(&mut buf).await.unwrap();
@@ -75,20 +74,28 @@ impl HcCacherItem for HcTestCacherItem {
         self.output.write_all(&buf).await.unwrap();
         buf
     }
-    async fn read_data_bridged(&mut self, offset: u64, size: u64, max_bridge_len: Option<u64>) -> Vec<u8> {
+    async fn read_data_bridged(
+        &mut self,
+        offset: u64,
+        size: u64,
+        max_bridge_len: Option<u64>,
+    ) -> Vec<u8> {
         println!("read_data_bridged {} {} {:?}", offset, size, max_bridge_len);
-        let last_bridge_point = if let Some(last_bridge_point) = self.bridge_points.range(..offset).rev().next() {
-            *last_bridge_point
-        } else {
-            0
-        };
+        let last_bridge_point =
+            if let Some(last_bridge_point) = self.bridge_points.range(..offset).rev().next() {
+                *last_bridge_point
+            } else {
+                0
+            };
 
         if let Some(max_bridge_len) = max_bridge_len {
             if offset - last_bridge_point <= max_bridge_len {
-                self.ranges_to_cache.insert(last_bridge_point, offset - last_bridge_point);
+                self.ranges_to_cache
+                    .insert(last_bridge_point, offset - last_bridge_point);
             }
         } else {
-            self.ranges_to_cache.insert(last_bridge_point, offset - last_bridge_point);
+            self.ranges_to_cache
+                .insert(last_bridge_point, offset - last_bridge_point);
         }
 
         self.read_data(offset, size).await
@@ -98,19 +105,25 @@ impl HcCacherItem for HcTestCacherItem {
         self.ranges_to_cache.insert(offset, size);
     }
     fn cache_data_bridged(&mut self, offset: u64, size: u64, max_bridge_len: Option<u64>) {
-        println!("cache_data_bridged {} {} {:?}", offset, size, max_bridge_len);
-        let last_bridge_point = if let Some(last_bridge_point) = self.bridge_points.range(..offset).rev().next() {
-            *last_bridge_point
-        } else {
-            0
-        };
+        println!(
+            "cache_data_bridged {} {} {:?}",
+            offset, size, max_bridge_len
+        );
+        let last_bridge_point =
+            if let Some(last_bridge_point) = self.bridge_points.range(..offset).rev().next() {
+                *last_bridge_point
+            } else {
+                0
+            };
 
         if let Some(max_bridge_len) = max_bridge_len {
             if offset - last_bridge_point <= max_bridge_len {
-                self.ranges_to_cache.insert(last_bridge_point, offset - last_bridge_point + size);
+                self.ranges_to_cache
+                    .insert(last_bridge_point, offset - last_bridge_point + size);
             }
         } else {
-            self.ranges_to_cache.insert(last_bridge_point, offset - last_bridge_point + size);
+            self.ranges_to_cache
+                .insert(last_bridge_point, offset - last_bridge_point + size);
         }
     }
     fn cache_data_to(&mut self, offset: u64) {
@@ -153,5 +166,4 @@ impl HcCacherItem for HcTestCacherItem {
         }
         self.output.flush();
     }
-
 }

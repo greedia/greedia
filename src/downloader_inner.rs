@@ -1,5 +1,5 @@
 use crate::{
-    downloader::{CacheFileResult, ChanMessage, ReturnWhen, ToDownload},
+    downloader::{CacheFileResult, ChanMessage, Downloader, ReturnWhen, ToDownload},
     types::Page,
 };
 use chrono::{DateTime, Utc};
@@ -11,10 +11,11 @@ use oauth2::basic::BasicClient;
 use oauth2::reqwest::async_http_client;
 use oauth2::AsyncRefreshTokenRequest;
 use oauth2::{AccessToken, AuthUrl, ClientId, ClientSecret, RefreshToken, TokenResponse, TokenUrl};
-use std::{path::Path, time::Duration};
+use std::sync::Arc;
+use std::{cmp::max, path::Path, time::Duration};
 use tokio::fs::create_dir_all;
-use tokio::fs::{OpenOptions, File};
-use tokio::io::AsyncWriteExt;
+use tokio::fs::{File, OpenOptions};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 
 async fn get_new_token(
@@ -221,6 +222,7 @@ async fn handle_continuable_cache_file(
     file_id: &str,
     path: &Path,
     pos: u64,
+    send_chan: &mut mpsc::Sender<ChanMessage>,
     result: &mut mpsc::Sender<CacheHandle>,
 ) -> CacheFileResult {
     // If cache file exists, open and read to end. Ignore caching up to this point.
@@ -236,21 +238,40 @@ async fn handle_continuable_cache_file(
     } else {
         let downloader = match open_downloader(http_client, access_token, file_id, pos).await {
             Ok(downloader) => downloader,
-            Err(cache_file_result) => return cache_file_result
+            Err(cache_file_result) => return cache_file_result,
         };
 
-        let reader =  CacheHandleReader::Downloader(downloader);
+        let reader = CacheHandleReader::Downloader(downloader);
         let writer = File::create(path).await.unwrap();
         (reader, writer)
     };
 
     let cache_handle = CacheHandle {
         pos,
+        file_id: file_id.to_string(),
+        send_chan: send_chan.clone(),
         reader,
-        writer
+        writer,
     };
 
     result.send(cache_handle).await.unwrap();
+
+    CacheFileResult::Ok
+}
+
+async fn handle_continuable_cache_file_downloader(
+    http_client: reqwest::Client,
+    access_token: &AccessToken,
+    file_id: &str,
+    start_offset: u64,
+    result: &mut mpsc::Sender<reqwest::Response>,
+) -> CacheFileResult {
+    let downloader = match open_downloader(http_client, access_token, file_id, start_offset).await {
+        Ok(downloader) => downloader,
+        Err(cache_file_result) => return cache_file_result,
+    };
+
+    result.send(downloader).await.unwrap();
 
     CacheFileResult::Ok
 }
@@ -316,25 +337,73 @@ async fn open_downloader(
 
 #[derive(Debug)]
 enum CacheHandleReader {
-    Downloader(reqwest::Response),
     File { file: File, data_left: u64 },
+    Downloader(reqwest::Response),
 }
 
 #[derive(Debug)]
 pub struct CacheHandle {
     pos: u64,
+    file_id: String,
+    send_chan: mpsc::Sender<ChanMessage>,
     reader: CacheHandleReader,
     writer: File,
 }
 
 impl CacheHandle {
     // Read exact amount of data, unless EOF is reached.
-    pub fn read_data(&mut self, size: u64) -> Vec<u8> {
-        todo!()
+    pub async fn read_data(&mut self, size: u64) -> Vec<u8> {
+        let mut out = Vec::with_capacity(size as usize);
+        out.resize(size as usize, 0);
+
+        let mut out_data_offset = 0usize;
+        let mut out_data_left = size as usize;
+        loop {
+            if out_data_left == 0 {
+                // TODO: also cache/save data
+                // TODO: update pos
+                return out;
+            }
+            let new_dl = match &mut self.reader {
+                CacheHandleReader::File { file, data_left } => {
+                    let amount_read = file
+                        .read(
+                            &mut out[out_data_offset
+                                ..max(out_data_left, out_data_offset + out_data_left)],
+                        )
+                        .await
+                        .unwrap();
+                    *data_left -= amount_read as u64;
+                    self.pos += amount_read as u64;
+                    out_data_left -= amount_read;
+                    out_data_offset += amount_read;
+                    if *data_left == 0 && out_data_left != 0 {
+                        // Get a new downloader
+                        let (result, mut res_receiver) = mpsc::channel(1);
+                        let msg = ChanMessage::ContinuableCacheFileDownloader {
+                            file_id: self.file_id.to_string(),
+                            start_offset: self.pos,
+                            result,
+                        };
+
+                        self.send_chan.clone().send(msg).await.unwrap();
+                        Some(res_receiver.next().await.unwrap())
+                    } else {
+                        None
+                    }
+                }
+                CacheHandleReader::Downloader(dl) => todo!(),
+            };
+            if let Some(new_dl) = new_dl {
+                self.reader = CacheHandleReader::Downloader(new_dl);
+            }
+        }
     }
 
     // Read exact amount of data and save it, but don't return it.
-    pub fn cache_data(&mut self, size: u64) {}
+    pub async fn cache_data(&mut self, size: u64) {
+        todo!()
+    }
 }
 
 async fn handle_message(
@@ -403,6 +472,7 @@ async fn handle_message(
             file_id,
             path,
             start_offset,
+            send_chan,
             result,
         } => {
             let result = handle_continuable_cache_file(
@@ -411,9 +481,40 @@ async fn handle_message(
                 file_id,
                 path,
                 *start_offset,
+                send_chan,
                 result,
             )
             .await;
+            match result {
+                CacheFileResult::InvalidAccessToken => {
+                    access_token_sender
+                        .send(ChanMessage::InvalidAccessToken(access_token.clone()))
+                        .unwrap();
+                    retry = true;
+                }
+                CacheFileResult::RateLimit | CacheFileResult::DownloadError => {
+                    retry = true;
+                }
+                CacheFileResult::NotFound => {
+                    println!("Notfound, TODO delete?");
+                }
+                _ => (),
+            }
+        }
+        ChanMessage::ContinuableCacheFileDownloader {
+            file_id,
+            start_offset,
+            result,
+        } => {
+            let result = handle_continuable_cache_file_downloader(
+                http_client,
+                &access_token,
+                file_id,
+                *start_offset,
+                result,
+            )
+            .await;
+
             match result {
                 CacheFileResult::InvalidAccessToken => {
                     access_token_sender

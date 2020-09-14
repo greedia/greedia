@@ -1,10 +1,10 @@
-use super::{HardCacheDownloader, smart_cacher::{
-    FileSpec, ScErr::*, ScOk::*, ScResult, SmartCacher,
-    SmartCacherSpec,
-}};
+use super::{
+    smart_cacher::{FileSpec, ScErr::*, ScOk::*, ScResult, SmartCacher, SmartCacherSpec},
+    HardCacheDownloader,
+};
+use crate::config::SmartCacherConfig;
 use async_trait::async_trait;
 use byteorder::{BigEndian, ByteOrder};
-use crate::config::SmartCacherConfig;
 
 // Related resources:
 // - https://www.codeproject.com/Articles/8295/MPEG-Audio-Frame-Header
@@ -98,7 +98,10 @@ fn read_id3_len(data: &[u8]) -> Option<u32> {
 fn find_mp3_header<'a>(data: &'a [u8]) -> Option<(u64, &'a [u8])> {
     let header_offset = data.iter().position(|x| *x == 0xff)?;
     if data.get(header_offset + 1)? & 0xE0 == 0xE0 {
-        Some((header_offset as u64, data.get(header_offset..header_offset + 8)?))
+        Some((
+            header_offset as u64,
+            data.get(header_offset..header_offset + 8)?,
+        ))
     } else {
         None
     }

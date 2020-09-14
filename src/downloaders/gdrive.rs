@@ -1,0 +1,474 @@
+use super::{
+    DownloaderClient, DownloaderDrive, DownloaderError, DownloaderFile, FileInfo, Page, PageItem,
+};
+use crate::prio_limit::PrioLimit;
+use anyhow::{format_err, Result};
+use async_stream::try_stream;
+use async_trait::async_trait;
+use bytes::{Bytes, BytesMut};
+use chrono::{DateTime, Utc};
+use futures::{AsyncWrite, Stream};
+use oauth2::{
+    basic::BasicClient, reqwest::async_http_client, AccessToken, AsyncRefreshTokenRequest, AuthUrl,
+    ClientId, ClientSecret, RefreshToken, TokenResponse, TokenUrl,
+};
+use reqwest;
+use serde::Deserialize;
+use std::{cmp::min, pin::Pin, sync::Arc, time::Duration};
+use tokio::sync::Mutex;
+
+#[derive(Clone, Debug)]
+struct ConnInfo {
+    client_id: ClientId,
+    client_secret: ClientSecret,
+    refresh_token: RefreshToken,
+}
+
+#[derive(Debug)]
+struct GDriveClient {
+    http_client: reqwest::Client,
+    rate_limiter: Arc<PrioLimit>,
+    access_token: Arc<Mutex<AccessToken>>,
+    conn_info: ConnInfo,
+}
+
+impl GDriveClient {
+    pub async fn new(
+        client_id: String,
+        client_secret: String,
+        refresh_token: String,
+    ) -> Result<GDriveClient> {
+        let http_client = reqwest::Client::builder().referer(false).build().unwrap();
+        let rate_limiter = Arc::new(PrioLimit::new(1, 10, Duration::from_millis(120)));
+
+        let client_id = ClientId::new(client_id);
+        let client_secret = ClientSecret::new(client_secret);
+        let refresh_token = RefreshToken::new(refresh_token);
+
+        let conn_info = ConnInfo {
+            client_id,
+            client_secret,
+            refresh_token,
+        };
+
+        let initial_access_token =
+            get_new_token(&conn_info, &rate_limiter)
+                .await
+                .ok_or_else(|| {
+                    format_err!(
+                        "Could not initiate access token for gdrive client {}",
+                        conn_info.client_id.as_str(),
+                    )
+                })?;
+        let access_token = Arc::new(Mutex::new(initial_access_token));
+        Ok(GDriveClient {
+            http_client,
+            rate_limiter,
+            access_token,
+            conn_info,
+        })
+    }
+}
+
+//#[async_trait]
+impl DownloaderClient for GDriveClient {
+    fn open_drive(&self, drive_id: String) -> Box<dyn DownloaderDrive> {
+        Box::new(GDriveDrive {
+            http_client: self.http_client.clone(),
+            rate_limiter: self.rate_limiter.clone(),
+            access_token: self.access_token.clone(),
+            conn_info: self.conn_info.clone(),
+            drive_id,
+        })
+    }
+}
+
+struct GDriveDrive {
+    http_client: reqwest::Client,
+    rate_limiter: Arc<PrioLimit>,
+    access_token: Arc<Mutex<AccessToken>>,
+    conn_info: ConnInfo,
+    drive_id: String,
+}
+
+#[async_trait]
+impl DownloaderDrive for GDriveDrive {
+    fn scan_pages(
+        &self,
+        last_page_token: Option<String>,
+        last_modified_date: Option<DateTime<Utc>>,
+    ) -> Pin<Box<dyn Stream<Item = Result<Page, DownloaderError>>>> {
+        let drive_id = self.drive_id.to_string();
+        let access_token_mutex = self.access_token.clone();
+        let rate_limiter = self.rate_limiter.clone();
+        let http_client = self.http_client.clone();
+        let conn_info = self.conn_info.clone();
+
+        Box::pin(try_stream! {
+            let mut query = "trashed = false".to_string();
+
+            if last_page_token.is_none() {
+                if let Some(last_modified_date) = last_modified_date {
+                    query.push_str(&format!(
+                        " and modifiedTime > '{}'",
+                        last_modified_date.to_rfc3339()
+                    ));
+                }
+            }
+
+            let mut query = vec![
+                ("alt", "json".to_string()),
+                ("includeItemsFromAllDrives", "true".to_string()),
+                ("prettyPrint", "false".to_string()),
+                ("supportsAllDrives", "true".to_string()),
+                ("pageSize", "1000".to_string()),
+                ("driveId", drive_id.to_string()),
+                ("corpora", "drive".to_string()),
+                ("q", query.to_string()),
+                (
+                    "fields",
+                    "files(id,name,parents,modifiedTime,md5Checksum,size,mimeType),nextPageToken"
+                        .to_string(),
+                ),
+            ];
+
+            let mut access_token = access_token_mutex.lock().await.clone();
+            let mut page_token = last_page_token.clone();
+
+            loop {
+                let mut query = query.clone();
+
+                if let Some(page_token) = &page_token {
+                    query.push(("pageToken", page_token.to_string()));
+                }
+
+                rate_limiter.bg_wait().await;
+
+                let res = http_client
+                    .get("https://www.googleapis.com/drive/v3/files")
+                    .bearer_auth(access_token.secret())
+                    .query(&query)
+                    .send()
+                    .await;
+
+                match res {
+                    Ok(r) => {
+                        match r.status().as_u16() {
+                            // Everything's good
+                            200 => (),
+                            // Bad access token, refresh it and retry request
+                            401 => {
+                                access_token = refresh_access_token(
+                                    &access_token_mutex,
+                                    &rate_limiter,
+                                    &conn_info,
+                                    access_token).await;
+                                continue;
+                            }
+                            // Rate limit or server error, retry request
+                            _ => continue,
+                        }
+
+                        let page = r.json::<GPage>().await.unwrap();
+                        page_token = page.next_page_token;
+                        if let Some(files) = page.files {
+                            let items = files
+                                .into_iter()
+                                .filter(|x| accepted_document_type(x))
+                                .map(|x| to_page_item(x))
+                                .collect();
+
+                            yield Page {
+                                items,
+                                next_page_token: page_token.clone(),
+                            };
+                        }
+
+                        if page_token.is_none() {
+                            break;
+                        }
+                    }
+                    Err(_) => {
+                        // Something bad happened, but continue anyways.
+                        continue;
+                    }
+                }
+            }
+        })
+    }
+
+    async fn open_file(
+        &self,
+        file_id: String,
+        offset: u64,
+        bg_request: bool,
+    ) -> Result<Box<dyn DownloaderFile>, DownloaderError> {
+        let res = open_request(
+            file_id,
+            offset,
+            bg_request,
+            &self.http_client,
+            &self.access_token,
+            &self.rate_limiter,
+            &self.conn_info,
+        )
+        .await?;
+
+        let chunk = Bytes::new();
+
+        Ok(Box::new(GDriveFile { res, chunk }))
+    }
+}
+
+struct GDriveFile {
+    res: reqwest::Response,
+    chunk: Bytes,
+}
+
+#[async_trait]
+impl DownloaderFile for GDriveFile {
+    async fn read_into(&mut self, buf: &mut [u8]) -> usize {
+        //res.
+        todo!()
+    }
+
+    async fn read_bytes(&mut self, len: usize) -> Bytes {
+        if self.chunk.is_empty() {
+            if let Some(chunk) = self.res.chunk().await.unwrap() {
+                self.chunk = chunk;
+            }
+        }
+        self.chunk.split_to(min(self.chunk.len(), len))
+    }
+
+    async fn cache(&mut self, len: usize, writer: &mut (dyn AsyncWrite + Send)) {
+        todo!()
+    }
+
+    async fn remaining_data(&mut self) -> Bytes {
+        std::mem::replace(&mut self.chunk, Bytes::new())
+    }
+
+    /// Read the exact amount of bytes from the stream.
+    /// May return fewer bytes on EOF.
+    // This should be a trait default implementation, but can't be due to issue 51443.
+    async fn read_exact(&mut self, len: usize) -> Bytes {
+        let start = self.read_bytes(len).await;
+        if start.len() == len as usize {
+            start
+        } else {
+            let mut remaining = len - start.len();
+            let mut new_bytes = BytesMut::with_capacity(len);
+            new_bytes.extend_from_slice(&start);
+
+            loop {
+                let next = self.read_bytes(remaining).await;
+                if next.is_empty() || remaining == 0 {
+                    break;
+                }
+                new_bytes.extend_from_slice(&next);
+                remaining -= next.len();
+            }
+            new_bytes.freeze()
+        }
+    }
+}
+
+async fn open_request(
+    file_id: String,
+    offset: u64,
+    bg_request: bool,
+    http_client: &reqwest::Client,
+    access_token_mutex: &Arc<Mutex<AccessToken>>,
+    rate_limiter: &Arc<PrioLimit>,
+    conn_info: &ConnInfo,
+) -> Result<reqwest::Response, DownloaderError> {
+    let url = format!("https://www.googleapis.com/drive/v3/files/{}", file_id);
+    let range_string = format!("bytes={}-", offset);
+
+    let mut access_token = access_token_mutex.lock().await.clone();
+    let mut retry = false;
+
+    for _ in 0..5 {
+        if bg_request {
+            if retry {
+                rate_limiter.bg_retry_wait().await;
+            } else {
+                rate_limiter.bg_wait().await;
+            }
+        } else {
+            if retry {
+                rate_limiter.retry_wait().await;
+            } else {
+                rate_limiter.wait().await;
+            }
+        }
+
+        let res = http_client
+            .get(&url)
+            .bearer_auth(access_token.secret())
+            .header("Range", &range_string)
+            .query(&[("alt", "media")])
+            .send()
+            .await;
+
+        match res {
+            Ok(r) => {
+                match r.status().as_u16() {
+                    // Everything's good
+                    200 | 206 => {
+                        return Ok(r);
+                    }
+                    // Bad access token, refresh it and retry request
+                    401 => {
+                        access_token = refresh_access_token(
+                            access_token_mutex,
+                            rate_limiter,
+                            &conn_info,
+                            access_token,
+                        )
+                        .await;
+                    }
+                    // Rate limit or server error, retry request
+                    _ => (),
+                }
+            }
+            Err(_) => {}
+        }
+
+        retry = true
+    }
+
+    // KTODO: 5 tries failed, return error
+    todo!()
+}
+
+async fn refresh_access_token(
+    access_token_mutex: &Arc<Mutex<AccessToken>>,
+    rate_limiter: &Arc<PrioLimit>,
+    conn_info: &ConnInfo,
+    old_access_token: AccessToken,
+) -> AccessToken {
+    let mut current_access_token_lock = access_token_mutex.lock().await;
+    let current_access_token = current_access_token_lock.clone();
+    if old_access_token.secret() != current_access_token.secret() {
+        current_access_token
+    } else {
+        let new_access_token = get_new_token(conn_info, rate_limiter).await.unwrap();
+        *current_access_token_lock = new_access_token.clone();
+        new_access_token
+    }
+}
+
+async fn get_new_token(conn_info: &ConnInfo, rate_limiter: &PrioLimit) -> Option<AccessToken> {
+    let auth_url = AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string())
+        .expect("Invalid authorization endpoint URL");
+    let token_url = TokenUrl::new("https://www.googleapis.com/oauth2/v3/token".to_string())
+        .expect("Invalid token endpoint URL");
+
+    // Set up the config for the Google OAuth2 process.
+    let client = BasicClient::new(
+        conn_info.client_id.clone(),
+        Some(conn_info.client_secret.clone()),
+        auth_url,
+        Some(token_url),
+    );
+
+    rate_limiter.access_token_wait().await;
+
+    let rtr = client.exchange_refresh_token(&conn_info.refresh_token);
+    let access_key = rtr.request_async(async_http_client).await.ok()?;
+
+    Some(access_key.access_token().clone())
+}
+
+fn accepted_document_type(page_item: &GPageItem) -> bool {
+    // Allow any mime type that doesn't start with vnd.google-apps, unless it's a folder
+    match page_item.mime_type {
+        Some(ref m) if m == "application/vnd.google-apps.folder" => true,
+        Some(ref m) if m.starts_with("application/vnd.google-apps.") => false,
+        Some(_) => true,
+        None => false,
+    }
+}
+
+fn to_page_item(file: GPageItem) -> PageItem {
+    PageItem {
+        id: file.id,
+        name: file.name,
+        parent: file.parents[0].clone(),
+        modified_time: file.modified_time.parse().unwrap(),
+        file_info: if file.mime_type.as_deref() == Some("application/vnd.google-apps.folder") {
+            None
+        } else {
+            Some(FileInfo {
+                md5: file.md5_checksum.unwrap(),
+                size: file.size.unwrap().parse().unwrap(),
+            })
+        },
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GPage {
+    pub files: Option<Vec<GPageItem>>,
+    pub next_page_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GPageItem {
+    pub id: String,
+    pub name: String,
+    pub parents: Vec<String>,
+    pub modified_time: String,
+    pub md5_checksum: Option<String>,
+    pub size: Option<String>,
+    pub mime_type: Option<String>,
+}
+
+#[cfg(test)]
+mod test {
+    use super::{DownloaderClient, GDriveClient};
+
+    use futures::{io::Cursor, StreamExt};
+    #[tokio::test]
+    async fn do_stuff() {
+        let client_id =
+            "***REMOVED***".to_string();
+        let client_secret = "***REMOVED***".to_string();
+        let refresh_token = "***REMOVED***".to_string();
+        let drive_id = "***REMOVED***".to_string();
+
+        let c = GDriveClient::new(client_id, client_secret, refresh_token)
+            .await
+            .unwrap();
+
+        let d = c.open_drive(drive_id);
+
+        let mut pages = d.scan_pages(None, None);
+
+        let mut items = vec![];
+        while let Some(Ok(mut page)) = pages.next().await {
+            dbg!(&page);
+            items.append(&mut page.items);
+        }
+
+        dbg!(&items[1]);
+
+        let mut cursor = Cursor::new(Vec::new());
+
+        let mut f = d
+            .open_file(items[1].id.to_string(), 0, false)
+            .await
+            .unwrap();
+
+        let buf_out = f.read_bytes(4).await;
+        dbg!(&buf_out);
+
+        f.cache(4, &mut cursor).await;
+
+        dbg!(&cursor);
+    }
+}

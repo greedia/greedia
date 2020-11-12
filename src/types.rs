@@ -76,7 +76,7 @@ pub struct FileInfo {
     pub size: u64,
 }
 
-enum DataIdentifier {
-    DriveSpecific(Vec<u8>),
+pub enum DataIdentifier {
     GlobalMd5(Vec<u8>),
+    // DriveUnique(Vec<u8>)  // probably needed for future S3, etc support
 }

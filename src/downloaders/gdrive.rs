@@ -25,7 +25,7 @@ struct ConnInfo {
 }
 
 #[derive(Debug)]
-struct GDriveClient {
+pub struct GDriveClient {
     http_client: reqwest::Client,
     rate_limiter: Arc<PrioLimit>,
     access_token: Arc<Mutex<AccessToken>>,
@@ -83,7 +83,7 @@ impl DownloaderClient for GDriveClient {
     }
 }
 
-struct GDriveDrive {
+pub struct GDriveDrive {
     http_client: reqwest::Client,
     rate_limiter: Arc<PrioLimit>,
     access_token: Arc<Mutex<AccessToken>>,
@@ -220,7 +220,7 @@ impl DownloaderDrive for GDriveDrive {
     }
 }
 
-struct GDriveFile {
+pub struct GDriveFile {
     res: reqwest::Response,
     chunk: Bytes,
 }

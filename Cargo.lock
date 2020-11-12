@@ -498,6 +498,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dashmap"
+version = "4.0.0-rc6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "308a6703be2d759cb5fb7b80a23547fe73a8d5ebf70d3a4ca7f0ef4c0bfc2265"
+dependencies = [
+ "once_cell",
+]
+
+[[package]]
 name = "data-encoding"
 version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -636,11 +645,12 @@ dependencies = [
 
 [[package]]
 name = "flume"
-version = "0.8.4"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21f39cf120a8b2e25f325d4ca7637f9cae8e3dcc9134b7811a3c35e0353f5518"
+checksum = "d9e818efa7776f4dd7df0e542f877f7a5a87bddd6a1a10f59a7732b71ffb9d55"
 dependencies = [
- "futures 0.3.5",
+ "futures-core",
+ "futures-sink",
  "rand 0.7.3",
  "spinning_top",
 ]
@@ -843,6 +853,7 @@ dependencies = [
  "byteorder",
  "bytes 0.5.6",
  "chrono",
+ "dashmap",
  "flatbuffers",
  "flume",
  "futures 0.3.5",

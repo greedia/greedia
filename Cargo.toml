@@ -9,15 +9,10 @@ sctest = []
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
+byte-ranger = { path = "byte-ranger" }
 leaky-bucket = "0.7.3"
 anyhow = "1.0.32"
-tokio = { version = "0.2.22", features = [
-    "rt-core",
-    "rt-threaded",
-    "macros",
-    "blocking",
-    "fs"
-] }
+tokio = { version = "0.2.22", features = [ "rt-core", "rt-threaded", "macros", "blocking", "fs" ] }
 futures = "0.3.5"
 serde = { version = "1.0.115", features = ["derive"] }
 structopt = "0.3.17"
@@ -39,7 +34,7 @@ rustc-hash = "1.1.0"
 async-trait = "0.1.40"
 access-queue = "1.1.0"
 serde_json = "1.0.57"
-byte-ranger = { path = "byte-ranger" }
 async-stream = "0.3.0"
-flume = "0.8.4"
+flume = "0.9.1"
 bytes = "0.5.6"
+dashmap = "4.0.0-rc6"

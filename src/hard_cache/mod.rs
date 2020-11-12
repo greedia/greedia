@@ -277,6 +277,7 @@ struct HcDownloadCacherItem {
 }
 
 impl HcDownloadCacherItem {
+    // TODO: replace this with filesystem cache_handler
     async fn new(
         cache: Arc<Cache>,
         downloader: Arc<Downloader>,
@@ -313,11 +314,15 @@ impl HcDownloadCacherItem {
 impl HcCacherItem for HcDownloadCacherItem {
     async fn read_data(&mut self, offset: u64, size: u64) -> Vec<u8> {
         println!("read_data {} {}", offset, size);
+        
+        todo!()
+    }
+
+    /*async fn read_data(&mut self, offset: u64, size: u64) -> Vec<u8> {
+        println!("read_data {} {}", offset, size);
         // Check offset - 1, to see if we can continue an existing stream.
-        let ranges = self
-            .cached_ranges
-            .scan_range(offset.saturating_sub(1), size);
-        dbg!(&ranges);
+
+        // TODO: switch to get_range_at in byte-ranger
 
         let mut last_dl = None;
         let mut out_data = vec![];
@@ -379,7 +384,7 @@ impl HcCacherItem for HcDownloadCacherItem {
             }
             _ => println!("TODO Something else"),
         };*/
-    }
+    }*/
 
     async fn read_data_bridged(
         &mut self,

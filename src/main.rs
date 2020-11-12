@@ -6,10 +6,10 @@ use futures::future::join_all;
 use structopt::StructOpt;
 
 mod cache;
+mod cache_handlers;
 mod cache_reader;
 mod config;
 mod crypt_context;
-mod cache_handlers;
 mod downloader;
 mod downloader_inner;
 mod downloaders;

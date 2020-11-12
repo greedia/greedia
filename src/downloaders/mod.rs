@@ -9,12 +9,12 @@ pub mod gdrive;
 #[derive(Debug)]
 struct DownloaderError {}
 
-trait DownloaderClient {
+pub trait DownloaderClient {
     fn open_drive(&self, drive_id: String) -> Box<dyn DownloaderDrive>;
 }
 
 #[async_trait]
-trait DownloaderDrive {
+pub trait DownloaderDrive {
     fn scan_pages(
         &self,
         last_page_token: Option<String>,
@@ -30,7 +30,7 @@ trait DownloaderDrive {
 }
 
 #[async_trait]
-trait DownloaderFile {
+pub trait DownloaderFile {
     async fn read_into(&mut self, buf: &mut [u8]) -> usize;
     async fn read_bytes(&mut self, len: usize) -> Bytes;
     async fn read_exact(&mut self, len: usize) -> Bytes;

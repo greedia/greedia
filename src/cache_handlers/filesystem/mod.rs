@@ -9,7 +9,7 @@ use crate::downloaders::DownloaderDrive;
 use crate::types::DataIdentifier;
 use async_trait::async_trait;
 use bytes::Bytes;
-use tokio::sync::Mutex;
+use tokio::{fs::File, sync::Mutex};
 
 mod open_file;
 use open_file::OpenFile;
@@ -19,6 +19,7 @@ struct FilesystemCacheHandler {
     hard_cache_root: PathBuf,
     soft_cache_root: PathBuf,
     open_files: Mutex<HashMap<String, Weak<Mutex<OpenFile>>>>,
+    downloader_drive: Arc<dyn DownloaderDrive>,
 }
 
 // TODO: create OpenFileStruct that contains gc_count for garbage collection
@@ -29,7 +30,7 @@ impl FilesystemCacheHandler {
         drive_id: String,
         hard_cache_root: &Path,
         soft_cache_root: &Path,
-        downloader: Box<dyn DownloaderDrive>,
+        downloader_drive: Arc<dyn DownloaderDrive>,
     ) -> Box<dyn CacheDriveHandler> {
         let open_files = Mutex::new(HashMap::new());
         let hard_cache_root = hard_cache_root.to_path_buf();
@@ -39,6 +40,7 @@ impl FilesystemCacheHandler {
             hard_cache_root,
             soft_cache_root,
             open_files,
+            downloader_drive,
         })
     }
 
@@ -66,11 +68,13 @@ impl FilesystemCacheHandler {
     }
 
     async fn create_open_handle(&self, file_id: &str, data_id: &DataIdentifier) -> OpenFile {
+        let downloader_drive = self.downloader_drive.clone();
         OpenFile::new(
             &self.hard_cache_root,
             &self.soft_cache_root,
             file_id,
             data_id,
+            downloader_drive,
         )
         .await
     }
@@ -93,6 +97,7 @@ impl CacheDriveHandler for FilesystemCacheHandler {
             size,
             offset,
             hard_cache: true, // TODO: not hardcode hard cache
+            current_chunk: None,
         }))
     }
 }
@@ -103,23 +108,70 @@ struct FilesystemCacheFileHandler {
     size: u64,
     offset: u64,
     hard_cache: bool,
+    current_chunk: Option<CurrentChunk>,
+}
+
+enum CurrentChunk {
+    Downloading {
+        file: File,
+    },
+    Reading {
+        file: File,
+        end_offset: u64
+    }
 }
 
 #[async_trait]
 impl CacheFileHandler for FilesystemCacheFileHandler {
     async fn read_into(&mut self, buf: &mut [u8]) -> usize {
+        println!("read bytes len {} offset {}", buf.len(), self.offset);
+        // Steps
+
+        match &mut self.current_chunk {
+            Some(CurrentChunk::Downloading{ file }) => todo!(),
+            Some(CurrentChunk::Reading{ file, end_offset }) => todo!(),
+            None => {
+                let mut of = self.handle.lock().await;
+                let chunk = of.get_chunk_at(self.offset).await;
+                dbg!(&chunk);
+                if chunk.is_none() {
+                    // start downloading?
+                    let dl_handle = of.download_chunk(self.offset, false).await;
+                    // TODO: this next.
+                }
+                
+            }
+        }
+
+        // If current chunk exists
+          // If data is left in current chunk
+            // Read data
+          // Else if current chunk at end
+            // If more data has been downloaded
+              // Update current chunk
+              // Drop openfile lock
+              // Read data
+            // Else
+              // If next chunk is sequential
+                // Open next chunk as current chunk
+                // Drop openfile lock
+                // Read data
+              // Else
+                // Start downloading data
+                // TODO figure this out
+        // Else
+          // Lock openfile
+          // Get chunk at offset
+          
         todo!()
     }
 
     async fn read_bytes(&mut self, len: usize) -> Bytes {
-        println!("read bytes len {} offset {}", len, self.offset);
-        let of = self.handle.lock().await;
-        let hsc = of.hard_cache.scan_range(self.offset, len as u64);
-        dbg!(&hsc);
         todo!()
     }
 
     async fn read_exact(&mut self, len: usize) -> Bytes {
+        // Call read_bytes repeatedly until correct length, or EOF
         todo!()
     }
 }
@@ -154,13 +206,14 @@ mod test {
         let soft_cache_root = PathBuf::from("/home/main/greed_test/soft_cache");
 
         let fsch =
-            FilesystemCacheHandler::new("main".to_string(), &hard_cache_root, &soft_cache_root, d);
+            FilesystemCacheHandler::new("main".to_string(), &hard_cache_root, &soft_cache_root, d.into());
         let mut f = fsch
             .open_file(file_id, data_id, file_size, 0)
             .await
             .unwrap();
 
-        let x = f.read_bytes(4).await;
+        let mut buf = [0u8; 4];
+        let x = f.read_into(&mut buf).await;
 
         dbg!(&x);
     }

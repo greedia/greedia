@@ -7,14 +7,14 @@ use std::pin::Pin;
 pub mod gdrive;
 
 #[derive(Debug)]
-struct DownloaderError {}
+pub struct DownloaderError {}
 
 pub trait DownloaderClient {
     fn open_drive(&self, drive_id: String) -> Box<dyn DownloaderDrive>;
 }
 
 #[async_trait]
-pub trait DownloaderDrive {
+pub trait DownloaderDrive: Sync + Send + 'static {
     fn scan_pages(
         &self,
         last_page_token: Option<String>,
@@ -39,7 +39,7 @@ pub trait DownloaderFile {
 }
 
 #[derive(Debug)]
-struct Page {
+pub struct Page {
     items: Vec<PageItem>,
     next_page_token: Option<String>,
 }

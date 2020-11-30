@@ -1,8 +1,8 @@
 use std::{sync::Arc, path::Path, path::PathBuf};
 use tokio::{fs::DirEntry, sync::broadcast, fs::read_dir, stream::StreamExt};
 
-use byte_ranger::ByteRanger;
-use crate::types::DataIdentifier;
+use byte_ranger::{ByteRanger, Scan};
+use crate::{types::DataIdentifier, downloaders::{DownloaderDrive, DownloaderFile}};
 
 /// OpenFile is a struct representing a single open file within the cache. It is a requirement
 /// that, for any file, only one of these structs exist and that it is protected by a mutex.
@@ -25,6 +25,9 @@ use crate::types::DataIdentifier;
 /// much data has been written to disk. This is in order to ensure other readers can read data chunks
 /// without having to re-lock the mutex on each read operation.
 pub struct OpenFile {
+    file_id: String,
+    data_id: DataIdentifier,
+    downloader_drive: Arc<dyn DownloaderDrive>,
     pub hard_cache: ByteRanger<ChunkStatus>,
     pub soft_cache: ByteRanger<ChunkStatus>,
 }
@@ -35,21 +38,73 @@ impl OpenFile {
         soft_cache_root: &Path,
         file_id: &str,
         data_id: &DataIdentifier,
+        downloader_drive: Arc<dyn DownloaderDrive>,
     ) -> OpenFile {
         // Scan for existing cache files
         let hard_cache = Self::get_cache_files(hard_cache_root, data_id).await;
         let soft_cache = Self::get_cache_files(soft_cache_root, data_id).await;
 
+        let file_id = file_id.to_string();
+        let data_id = data_id.clone();
+        let downloader_drive = downloader_drive.into();
+
         dbg!(&hard_cache);
         dbg!(&soft_cache);
         OpenFile {
+            file_id,
+            data_id,
+            downloader_drive,
             hard_cache,
             soft_cache,
         }
     }
 
-    pub async fn get_chunk_at(offset: u64) {
-        todo!()
+    pub async fn get_chunk_at<'a>(&'a self, offset: u64) -> Option<Scan<&'a ChunkStatus>> {
+        let hcs = self.hard_cache.get_range_at(offset);
+        if hcs.is_data() {
+            Some(hcs)
+        } else {
+            let scs = self.soft_cache.get_range_at(offset);
+            if scs.is_data() {
+                Some(scs)
+            } else {
+                None
+            }
+        }
+    }
+
+    // Use this to start a new chunk by downloading it.
+    pub async fn download_chunk(&mut self, offset: u64, hard_cache: bool) -> DownloadHandle {
+        let downloader = self.downloader_drive.open_file(self.file_id.clone(), offset, hard_cache).await.unwrap();
+        // TODO: eventually change this to something that doesn't require a sender to create new receivers
+        let (progress_channel, _) = broadcast::channel(1);
+        let download_handle = DownloadHandle {
+            progress_channel: progress_channel.clone(),
+            downloader,
+            max_file_size: 200_000_000, // TODO: not hardcode this
+        };
+
+        let download_status = DownloadStatus {
+            current_offset: offset,
+            progress_channel,
+        };
+
+        let cache = if hard_cache {
+            &mut self.hard_cache
+        } else {
+            &mut self.soft_cache
+        };
+
+        cache.add_range(offset, 0, ChunkStatus {
+            download_status: Some(Arc::new(download_status))
+        });
+
+        download_handle
+    }
+
+    // TODO
+    pub async fn append_download_chunk() {
+        
     }
 
     /// Get the hard cache and soft cache paths, given an identifier.
@@ -115,5 +170,16 @@ pub struct DownloadStatus {
     current_offset: u64,
     /// When waiting for new data to show up in a chunk, readers can use
     /// this 
-    progress_channel: broadcast::Receiver<u64>,
+    progress_channel: broadcast::Sender<u64>,
+}
+
+/// When a download is started, give this handle to the reader.
+pub struct DownloadHandle {
+    progress_channel: broadcast::Sender<u64>,
+    downloader: Box<dyn DownloaderFile>,
+    max_file_size: u64,
+}
+
+impl DownloadHandle {
+
 }

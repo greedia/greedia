@@ -3,11 +3,15 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{AsyncWrite, Stream};
 use std::pin::Pin;
+use thiserror::Error;
 
 pub mod gdrive;
 
-#[derive(Debug)]
-pub struct DownloaderError {}
+#[derive(Error, Debug)]
+pub enum DownloaderError {
+    #[error("Reqwest error")]
+    ReqwestError(#[from] reqwest::Error),
+}
 
 pub trait DownloaderClient {
     fn open_drive(&self, drive_id: String) -> Box<dyn DownloaderDrive>;
@@ -26,7 +30,7 @@ pub trait DownloaderDrive: Sync + Send + 'static {
         file_id: String,
         offset: u64,
         bg_request: bool,
-    ) -> Result<Box<dyn DownloaderFile>, DownloaderError>;
+    ) -> Result<Box<dyn Stream<Item = Result<Bytes, DownloaderError>> + Unpin>, DownloaderError>;
 }
 
 #[async_trait]

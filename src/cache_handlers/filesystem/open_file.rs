@@ -1,8 +1,10 @@
 use std::{sync::Arc, path::Path, path::PathBuf};
+use bytes::Bytes;
+use futures::Stream;
 use tokio::{fs::DirEntry, sync::broadcast, fs::read_dir, stream::StreamExt};
 
 use byte_ranger::{ByteRanger, Scan};
-use crate::{types::DataIdentifier, downloaders::{DownloaderDrive, DownloaderFile}};
+use crate::{downloaders::{DownloaderDrive, DownloaderError, DownloaderFile}, types::DataIdentifier};
 
 /// OpenFile is a struct representing a single open file within the cache. It is a requirement
 /// that, for any file, only one of these structs exist and that it is protected by a mutex.
@@ -176,10 +178,13 @@ pub struct DownloadStatus {
 /// When a download is started, give this handle to the reader.
 pub struct DownloadHandle {
     progress_channel: broadcast::Sender<u64>,
-    downloader: Box<dyn DownloaderFile>,
+    downloader: Box<dyn Stream<Item = Result<Bytes, DownloaderError>>>,
     max_file_size: u64,
 }
 
 impl DownloadHandle {
-
+    pub fn get_next_bytes(&mut self) -> Bytes {
+        //self.downloader;
+        todo!()
+    }
 }

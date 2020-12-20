@@ -7,7 +7,7 @@ use async_stream::try_stream;
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use chrono::{DateTime, Utc};
-use futures::{AsyncWrite, Stream};
+use futures::{AsyncWrite, Stream, TryStreamExt};
 use oauth2::{
     basic::BasicClient, reqwest::async_http_client, AccessToken, AsyncRefreshTokenRequest, AuthUrl,
     ClientId, ClientSecret, RefreshToken, TokenResponse, TokenUrl,
@@ -202,7 +202,7 @@ impl DownloaderDrive for GDriveDrive {
         file_id: String,
         offset: u64,
         bg_request: bool,
-    ) -> Result<Box<dyn DownloaderFile>, DownloaderError> {
+    ) -> Result<Box<dyn Stream<Item = Result<Bytes, DownloaderError>> + Unpin>, DownloaderError> {
         let res = open_request(
             file_id,
             offset,
@@ -214,63 +214,8 @@ impl DownloaderDrive for GDriveDrive {
         )
         .await?;
 
-        let chunk = Bytes::new();
-
-        Ok(Box::new(GDriveFile { res, chunk }))
-    }
-}
-
-pub struct GDriveFile {
-    res: reqwest::Response,
-    chunk: Bytes,
-}
-
-#[async_trait]
-impl DownloaderFile for GDriveFile {
-    async fn read_into(&mut self, buf: &mut [u8]) -> usize {
-        //res.
-        todo!()
-    }
-
-    async fn read_bytes(&mut self, len: usize) -> Bytes {
-        if self.chunk.is_empty() {
-            if let Some(chunk) = self.res.chunk().await.unwrap() {
-                self.chunk = chunk;
-            }
-        }
-        self.chunk.split_to(min(self.chunk.len(), len))
-    }
-
-    async fn cache(&mut self, len: usize, writer: &mut (dyn AsyncWrite + Send)) {
-        todo!()
-    }
-
-    async fn remaining_data(&mut self) -> Bytes {
-        std::mem::replace(&mut self.chunk, Bytes::new())
-    }
-
-    /// Read the exact amount of bytes from the stream.
-    /// May return fewer bytes on EOF.
-    // This should be a trait default implementation, but can't be due to issue 51443.
-    async fn read_exact(&mut self, len: usize) -> Bytes {
-        let start = self.read_bytes(len).await;
-        if start.len() == len as usize {
-            start
-        } else {
-            let mut remaining = len - start.len();
-            let mut new_bytes = BytesMut::with_capacity(len);
-            new_bytes.extend_from_slice(&start);
-
-            loop {
-                let next = self.read_bytes(remaining).await;
-                if next.is_empty() || remaining == 0 {
-                    break;
-                }
-                new_bytes.extend_from_slice(&next);
-                remaining -= next.len();
-            }
-            new_bytes.freeze()
-        }
+        let stream = res.bytes_stream().map_err(|e| e.into());
+        Ok(Box::new(stream))
     }
 }
 
@@ -457,18 +402,30 @@ mod test {
 
         dbg!(&items[1]);
 
-        let mut cursor = Cursor::new(Vec::new());
+        //let mut cursor = Cursor::new(Vec::new());
 
         let mut f = d
             .open_file(items[1].id.to_string(), 0, false)
             .await
             .unwrap();
 
-        let buf_out = f.read_bytes(4).await;
+        if let Some(Ok(a)) = f.next().await {
+            dbg!(&a.len());
+        };
+
+        if let Some(Ok(a)) = f.next().await {
+            dbg!(&a.len());
+        };
+
+        if let Some(Ok(a)) = f.next().await {
+            dbg!(&a.len());
+        };
+
+        /*let buf_out = f.read_bytes(4).await;
         dbg!(&buf_out);
 
         f.cache(4, &mut cursor).await;
 
-        dbg!(&cursor);
+        dbg!(&cursor);*/
     }
 }

@@ -1,18 +1,17 @@
 // Filesystem cache handler
 
-use std::{
-    collections::HashMap, path::Path, path::PathBuf, sync::Arc, sync::Weak,
-};
+use std::{collections::HashMap, path::Path, path::PathBuf, sync::Arc, sync::Weak};
 
-use super::{CacheDriveHandler, CacheError, CacheFileHandler};
+use super::{CacheDriveHandler, CacheHandlerError, CacheFileHandler};
 use crate::downloaders::DownloaderDrive;
 use crate::types::DataIdentifier;
 use async_trait::async_trait;
+use byte_ranger::Scan;
 use bytes::Bytes;
 use tokio::{fs::File, sync::Mutex};
 
 mod open_file;
-use open_file::OpenFile;
+use open_file::{DownloadHandle, OpenFile};
 
 struct FilesystemCacheHandler {
     drive_id: String,
@@ -88,15 +87,20 @@ impl CacheDriveHandler for FilesystemCacheHandler {
         data_id: DataIdentifier,
         size: u64,
         offset: u64,
-    ) -> Result<Box<dyn CacheFileHandler>, CacheError> {
+        write_hard_cache: bool,
+    ) -> Result<Box<dyn CacheFileHandler>, CacheHandlerError> {
         let handle = self.get_open_handle(&file_id, &data_id).await;
+        let hard_cache_file_root = get_file_cache_path(&self.hard_cache_root, &data_id);
+        let soft_cache_file_root = get_file_cache_path(&self.soft_cache_root, &data_id);
 
         Ok(Box::new(FilesystemCacheFileHandler {
             file_id,
             handle,
             size,
             offset,
-            hard_cache: true, // TODO: not hardcode hard cache
+            write_hard_cache,
+            hard_cache_file_root,
+            soft_cache_file_root,
             current_chunk: None,
         }))
     }
@@ -107,40 +111,50 @@ struct FilesystemCacheFileHandler {
     handle: Arc<Mutex<OpenFile>>,
     size: u64,
     offset: u64,
-    hard_cache: bool,
+    hard_cache_file_root: PathBuf,
+    soft_cache_file_root: PathBuf,
+    write_hard_cache: bool,
     current_chunk: Option<CurrentChunk>,
 }
 
 enum CurrentChunk {
-    Downloading {
-        file: File,
-    },
-    Reading {
-        file: File,
-        end_offset: u64
+    Downloading { file: File, dl: DownloadHandle },
+    Reading { file: File, end_offset: u64 },
     }
-}
 
 #[async_trait]
 impl CacheFileHandler for FilesystemCacheFileHandler {
     async fn read_into(&mut self, buf: &mut [u8]) -> usize {
         println!("read bytes len {} offset {}", buf.len(), self.offset);
-        // Steps
 
         match &mut self.current_chunk {
-            Some(CurrentChunk::Downloading{ file }) => todo!(),
-            Some(CurrentChunk::Reading{ file, end_offset }) => todo!(),
+            Some(CurrentChunk::Downloading { file, dl }) => todo!(),
+            Some(CurrentChunk::Reading { file, end_offset }) => todo!(),
             None => {
                 let mut of = self.handle.lock().await;
                 let chunk = of.get_chunk_at(self.offset).await;
                 dbg!(&chunk);
-                if chunk.is_none() {
-                    // start downloading?
-                    let dl_handle = of.download_chunk(self.offset, false).await;
-                    // TODO: this next.
+                let file_path = self.get_file_cache_chunk_path(self.write_hard_cache, self.offset);
+                if let Some(Scan::Data{ start_offset, size, data }) = chunk {
+                    println!("CHUNK!");
+                    // TODO: look closely at this section. Here be dragons.
+                    // This logic is probably incorrect.
+                    // Really, we want to check if we're at the end of the chunk, rather than check if the size is 0.
+                    // TODO: also handle when download is already in progress
+                    if size == 0 {
+                        let (file, mut dl) = of.append_download_chunk(start_offset, start_offset + size, self.write_hard_cache, &file_path).await.unwrap();
+                        let bytes = dl.get_next_bytes().await.unwrap();
                 }
                 
+                    todo!();
+                } else {
+                    let (file, dl) = of.start_download_chunk(self.offset, self.write_hard_cache, &file_path).await.unwrap();
+                    
+                    
+                    todo!();
+                    // TODO: this next.
             }
+        }
         }
 
         // If current chunk exists
@@ -176,6 +190,28 @@ impl CacheFileHandler for FilesystemCacheFileHandler {
     }
 }
 
+impl FilesystemCacheFileHandler {
+    fn get_file_cache_chunk_path(&self, hard_cache: bool, offset: u64) -> PathBuf {
+        if hard_cache {
+            &self.hard_cache_file_root
+        } else {
+            &self.soft_cache_file_root
+        }.join(format!("chunk_{}", offset))
+    }
+}
+
+/// Get the hard cache and soft cache paths, given an identifier.
+fn get_file_cache_path(cache_root: &Path, data_id: &DataIdentifier) -> PathBuf {
+    match data_id {
+        DataIdentifier::GlobalMd5(ref md5) => {
+            let hex_md5 = hex::encode(md5);
+            let dir_1 = hex_md5.get(0..2).unwrap();
+            let dir_2 = hex_md5.get(2..4).unwrap();
+            cache_root.join(dir_1).join(dir_2).join(hex_md5)
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -202,13 +238,17 @@ mod test {
             DataIdentifier::GlobalMd5(hex::decode("***REMOVED***").unwrap());
         let file_size = 1073741824;
 
-        let hard_cache_root = PathBuf::from("/home/main/greed_test/hard_cache");
-        let soft_cache_root = PathBuf::from("/home/main/greed_test/soft_cache");
+        let hard_cache_root = PathBuf::from("/root/greed_test/hard_cache");
+        let soft_cache_root = PathBuf::from("/root/greed_test/soft_cache");
 
-        let fsch =
-            FilesystemCacheHandler::new("main".to_string(), &hard_cache_root, &soft_cache_root, d.into());
+        let fsch = FilesystemCacheHandler::new(
+            "main".to_string(),
+            &hard_cache_root,
+            &soft_cache_root,
+            d.into(),
+        );
         let mut f = fsch
-            .open_file(file_id, data_id, file_size, 0)
+            .open_file(file_id, data_id, file_size, 0, false)
             .await
             .unwrap();
 

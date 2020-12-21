@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::{AsyncWrite, Stream};
+use futures::{Stream};
 use std::pin::Pin;
 use thiserror::Error;
 
@@ -30,16 +30,7 @@ pub trait DownloaderDrive: Sync + Send + 'static {
         file_id: String,
         offset: u64,
         bg_request: bool,
-    ) -> Result<Box<dyn Stream<Item = Result<Bytes, DownloaderError>> + Unpin>, DownloaderError>;
-}
-
-#[async_trait]
-pub trait DownloaderFile {
-    async fn read_into(&mut self, buf: &mut [u8]) -> usize;
-    async fn read_bytes(&mut self, len: usize) -> Bytes;
-    async fn read_exact(&mut self, len: usize) -> Bytes;
-    async fn cache(&mut self, len: usize, writer: &mut (dyn AsyncWrite + Send));
-    async fn remaining_data(&mut self) -> Bytes;
+    ) -> Result<Box<dyn Stream<Item = Result<Bytes, DownloaderError>> + Unpin + Send>, DownloaderError>;
 }
 
 #[derive(Debug)]

@@ -7,11 +7,11 @@ use crate::{
 };
 use anyhow::Result;
 use async_trait::async_trait;
-use byte_ranger::{ByteRanger, Scan};
+use byte_ranger::ByteRanger;
 use smart_cacher::{FileSpec, ScErr, ScOk, ScResult, SmartCacher};
 use std::{
     cmp::max,
-    collections::{BTreeMap, HashMap},
+    collections::HashMap,
     path::PathBuf,
     sync::Arc,
 };
@@ -314,7 +314,7 @@ impl HcDownloadCacherItem {
 impl HcCacherItem for HcDownloadCacherItem {
     async fn read_data(&mut self, offset: u64, size: u64) -> Vec<u8> {
         println!("read_data {} {}", offset, size);
-        
+
         todo!()
     }
 

@@ -1,5 +1,5 @@
 use crate::{
-    downloader::{CacheFileResult, ChanMessage, Downloader, ReturnWhen, ToDownload},
+    downloader::{CacheFileResult, ChanMessage, ReturnWhen, ToDownload},
     types::Page,
 };
 use chrono::{DateTime, Utc};
@@ -11,7 +11,6 @@ use oauth2::basic::BasicClient;
 use oauth2::reqwest::async_http_client;
 use oauth2::AsyncRefreshTokenRequest;
 use oauth2::{AccessToken, AuthUrl, ClientId, ClientSecret, RefreshToken, TokenResponse, TokenUrl};
-use std::sync::Arc;
 use std::{cmp::max, path::Path, time::Duration};
 use tokio::fs::create_dir_all;
 use tokio::fs::{File, OpenOptions};

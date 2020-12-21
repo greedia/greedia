@@ -1,10 +1,12 @@
-use std::{sync::Arc, path::Path, path::PathBuf};
 use bytes::Bytes;
 use futures::Stream;
-use tokio::{fs::DirEntry, sync::broadcast, fs::read_dir, stream::StreamExt};
+use std::{path::Path, sync::Arc};
+use tokio::{fs::DirEntry, fs::{File, OpenOptions, read_dir}, stream::StreamExt, sync::broadcast};
 
+use crate::{cache_handlers::CacheHandlerError, downloaders::{DownloaderDrive, DownloaderError, Page}, types::DataIdentifier};
 use byte_ranger::{ByteRanger, Scan};
-use crate::{downloaders::{DownloaderDrive, DownloaderError, DownloaderFile}, types::DataIdentifier};
+
+use super::get_file_cache_path;
 
 /// OpenFile is a struct representing a single open file within the cache. It is a requirement
 /// that, for any file, only one of these structs exist and that it is protected by a mutex.
@@ -76,8 +78,12 @@ impl OpenFile {
     }
 
     // Use this to start a new chunk by downloading it.
-    pub async fn download_chunk(&mut self, offset: u64, hard_cache: bool) -> DownloadHandle {
-        let downloader = self.downloader_drive.open_file(self.file_id.clone(), offset, hard_cache).await.unwrap();
+    pub async fn start_download_chunk(&mut self, offset: u64, hard_cache: bool, file_path: &Path) -> Result<(File, DownloadHandle), CacheHandlerError> {
+        let downloader = self
+            .downloader_drive
+            .open_file(self.file_id.clone(), offset, hard_cache)
+            .await
+            .unwrap();
         // TODO: eventually change this to something that doesn't require a sender to create new receivers
         let (progress_channel, _) = broadcast::channel(1);
         let download_handle = DownloadHandle {
@@ -97,41 +103,83 @@ impl OpenFile {
             &mut self.soft_cache
         };
 
-        cache.add_range(offset, 0, ChunkStatus {
-            download_status: Some(Arc::new(download_status))
-        });
+        cache.add_range(
+            offset,
+            0,
+            ChunkStatus {
+                download_status: Some(Arc::new(download_status)),
+            },
+        );
 
-        download_handle
+        let parent = file_path.parent().unwrap();
+        if !parent.exists() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+
+        let file = File::create(file_path).await?;
+
+        Ok((file, download_handle))
     }
 
     // TODO
-    pub async fn append_download_chunk() {
-        
-    }
+    /// Use this to write to an existing chunk
+    pub async fn append_download_chunk(&mut self, start_offset: u64, current_offset: u64, hard_cache: bool, file_path: &Path) -> Result<(File, DownloadHandle), CacheHandlerError> {
+        let downloader = self
+            .downloader_drive
+            .open_file(self.file_id.clone(), start_offset, hard_cache)
+            .await
+            .unwrap();
+        let (progress_channel, _) = broadcast::channel(1);
+        let download_handle = DownloadHandle {
+            progress_channel: progress_channel.clone(),
+            downloader,
+            max_file_size: 200_000_000, // TODO: not hardcode this
+        };
 
-    /// Get the hard cache and soft cache paths, given an identifier.
-    fn get_file_cache_path(cache_root: &Path, data_id: &DataIdentifier) -> PathBuf {
-        match data_id {
-            DataIdentifier::GlobalMd5(ref md5) => {
-                let hex_md5 = hex::encode(md5);
-                let dir_1 = hex_md5.get(0..2).unwrap();
-                let dir_2 = hex_md5.get(2..4).unwrap();
-                cache_root.join(dir_1).join(dir_2).join(hex_md5)
-            }
+        let download_status = DownloadStatus {
+            current_offset,
+            progress_channel,
+        };
+
+        let cache = if hard_cache {
+            &mut self.hard_cache
+        } else {
+            &mut self.soft_cache
+        };
+
+        if let Some(mut cache_data) = cache.get_data_mut(start_offset) {
+            cache_data.download_status = Some(Arc::new(download_status))
         }
+
+
+        let file = OpenOptions::new()
+            .append(true)
+            .open(file_path)
+            .await?;
+
+        Ok((file, download_handle))
     }
 
     /// Get all cache files in a hard/soft cache directory.
     /// This assumes no other Greedia instance has this file open.
-    async fn get_cache_files(cache_root: &Path, data_id: &DataIdentifier) -> ByteRanger<ChunkStatus> {
-        let path = Self::get_file_cache_path(cache_root, data_id);
+    async fn get_cache_files(
+        cache_root: &Path,
+        data_id: &DataIdentifier,
+    ) -> ByteRanger<ChunkStatus> {
+        let path = get_file_cache_path(cache_root, data_id);
 
         if path.exists() {
             let mut dirs = read_dir(path).await.unwrap();
             let mut br = ByteRanger::new();
             while let Some(dir_entry) = dirs.next().await {
                 if let Some((offset, len)) = Self::direntry_to_namelen(dir_entry.unwrap()).await {
-                    br.add_range(offset, len, ChunkStatus { download_status: None });
+                    br.add_range(
+                        offset,
+                        len,
+                        ChunkStatus {
+                            download_status: None,
+                        },
+                    );
                 }
             }
             br
@@ -160,7 +208,7 @@ impl OpenFile {
 #[derive(Clone, Debug)]
 pub struct ChunkStatus {
     /// Status, if a chunk is in the middle of downloading.
-    download_status: Option<Arc<DownloadStatus>>
+    download_status: Option<Arc<DownloadStatus>>,
 }
 
 #[derive(Debug)]
@@ -171,20 +219,24 @@ pub struct DownloadStatus {
     /// is required.
     current_offset: u64,
     /// When waiting for new data to show up in a chunk, readers can use
-    /// this 
+    /// this
     progress_channel: broadcast::Sender<u64>,
 }
 
 /// When a download is started, give this handle to the reader.
 pub struct DownloadHandle {
     progress_channel: broadcast::Sender<u64>,
-    downloader: Box<dyn Stream<Item = Result<Bytes, DownloaderError>>>,
+    downloader: Box<dyn Stream<Item = Result<Bytes, DownloaderError>> + Send + Unpin>,
     max_file_size: u64,
 }
 
 impl DownloadHandle {
-    pub fn get_next_bytes(&mut self) -> Bytes {
-        //self.downloader;
-        todo!()
+    pub async fn get_next_bytes(&mut self, file: &mut File) -> Option<Result<Bytes, CacheHandlerError>> {
+        if let Some(bytes) = self.downloader.next().await {
+            let bytes = bytes.map_err(|e| e.into())?;
+            // TODO: this next
+        }
+
+        None
     }
 }

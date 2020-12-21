@@ -1,20 +1,18 @@
-use super::{
-    DownloaderClient, DownloaderDrive, DownloaderError, DownloaderFile, FileInfo, Page, PageItem,
-};
+use super::{DownloaderClient, DownloaderDrive, DownloaderError, FileInfo, Page, PageItem};
 use crate::prio_limit::PrioLimit;
 use anyhow::{format_err, Result};
 use async_stream::try_stream;
 use async_trait::async_trait;
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::{AsyncWrite, Stream, TryStreamExt};
+use futures::{Stream, TryStreamExt};
 use oauth2::{
     basic::BasicClient, reqwest::async_http_client, AccessToken, AsyncRefreshTokenRequest, AuthUrl,
     ClientId, ClientSecret, RefreshToken, TokenResponse, TokenUrl,
 };
 use reqwest;
 use serde::Deserialize;
-use std::{cmp::min, pin::Pin, sync::Arc, time::Duration};
+use std::{pin::Pin, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 
 #[derive(Clone, Debug)]
@@ -70,7 +68,6 @@ impl GDriveClient {
     }
 }
 
-//#[async_trait]
 impl DownloaderClient for GDriveClient {
     fn open_drive(&self, drive_id: String) -> Box<dyn DownloaderDrive> {
         Box::new(GDriveDrive {
@@ -202,7 +199,8 @@ impl DownloaderDrive for GDriveDrive {
         file_id: String,
         offset: u64,
         bg_request: bool,
-    ) -> Result<Box<dyn Stream<Item = Result<Bytes, DownloaderError>> + Unpin>, DownloaderError> {
+    ) -> Result<Box<dyn Stream<Item = Result<Bytes, DownloaderError>> + Unpin + Send>, DownloaderError>
+    {
         let res = open_request(
             file_id,
             offset,
@@ -377,7 +375,7 @@ pub struct GPageItem {
 mod test {
     use super::{DownloaderClient, GDriveClient};
 
-    use futures::{io::Cursor, StreamExt};
+    use futures::StreamExt;
     #[tokio::test]
     async fn do_stuff() {
         let client_id =
@@ -401,8 +399,6 @@ mod test {
         }
 
         dbg!(&items[1]);
-
-        //let mut cursor = Cursor::new(Vec::new());
 
         let mut f = d
             .open_file(items[1].id.to_string(), 0, false)

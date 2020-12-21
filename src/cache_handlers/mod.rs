@@ -2,11 +2,18 @@ mod filesystem;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use thiserror::Error;
+use tokio::io;
 
-use crate::types::DataIdentifier;
+use crate::{downloaders::DownloaderError, types::DataIdentifier};
 
-#[derive(Debug)]
-struct CacheError {}
+#[derive(Error, Debug)]
+pub enum CacheHandlerError {
+    #[error("IO Error")]
+    IoError(#[from] io::Error),
+    #[error("Downloader Error")]
+    DownloaderError(#[from] DownloaderError),
+}
 
 #[async_trait]
 trait CacheDriveHandler {
@@ -16,7 +23,8 @@ trait CacheDriveHandler {
         data_id: DataIdentifier,
         size: u64,
         offset: u64,
-    ) -> Result<Box<dyn CacheFileHandler>, CacheError>;
+        write_hard_cache: bool,
+    ) -> Result<Box<dyn CacheFileHandler>, CacheHandlerError>;
 }
 
 #[async_trait]

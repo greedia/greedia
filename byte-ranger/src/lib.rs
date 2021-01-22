@@ -15,7 +15,7 @@ pub enum Scan<T> {
         data: T,
     },
     /// Range between two data ranges, or the beginning and a data range.
-    Gap { start_offset: u64, size: u64 },
+    Gap { start_offset: u64, size: u64, prev_range_start_offset: u64 },
     /// End of file.
     FinalRange { start_offset: u64, size: u64 },
     Empty,
@@ -30,8 +30,8 @@ impl<T> Scan<T> {
         }
     }
 
-    pub fn gap(start_offset: u64, size: u64) -> Scan<T> {
-        Scan::Gap { start_offset, size }
+    pub fn gap(start_offset: u64, size: u64, final_range_start_offset: u64) -> Scan<T> {
+        Scan::Gap { start_offset, size, prev_range_start_offset: final_range_start_offset }
     }
 
     pub fn final_range(start_offset: u64, size: u64) -> Scan<T> {
@@ -51,7 +51,7 @@ impl<T> Scan<T> {
     }
 
     pub fn is_gap(&self) -> bool {
-        if let Scan::Gap { start_offset: _, size: _} = self {
+        if let Scan::Gap { start_offset: _, size: _, prev_range_start_offset: _ } = self {
             true
         } else {
             false
@@ -65,7 +65,7 @@ pub struct ByteRanger<T> {
     byte_ranges: BTreeMap<u64, (u64, T)>,
 }
 
-impl<T> ByteRanger<T> {
+impl<T: Debug> ByteRanger<T> {
     pub fn new() -> ByteRanger<T> {
         ByteRanger {
             byte_ranges: BTreeMap::new(),
@@ -93,6 +93,7 @@ impl<T> ByteRanger<T> {
         } else if let &[Scan::Gap {
             start_offset: _,
             size: _,
+            prev_range_start_offset: _
         }] = &existing_ranges[..]
         {
             self.add_range_unchecked(offset, size, data);
@@ -117,7 +118,7 @@ impl<T> ByteRanger<T> {
                         } => {
                             data_offset = start_offset + size;
                         }
-                        Scan::Gap { start_offset, size } => {
+                        Scan::Gap { start_offset, size, prev_range_start_offset: _ } => {
                             let new_size = min(end_offset - data_offset, size);
                             ranges_to_add.push((start_offset, new_size, data.clone()));
                             data_offset = end_offset;
@@ -227,6 +228,7 @@ impl<T> ByteRanger<T> {
 
         // There is no range, or only ranges are after provided offset
         // Check for the end of the gap, if any
+
         if let Some((inner_offset, (_inner_size, _inner_data))) =
             self.byte_ranges.range(last_end_offset..).next()
         {
@@ -234,6 +236,7 @@ impl<T> ByteRanger<T> {
             return Scan::Gap {
                 start_offset: last_end_offset,
                 size: *inner_offset - last_end_offset,
+                prev_range_start_offset: last_start_offset,
             };
         } else {
             // There is no end of the gap, so we're at EOF
@@ -247,6 +250,7 @@ impl<T> ByteRanger<T> {
     /// Return ranges within offset and size.
     pub fn scan_range<'a>(&'a self, offset: u64, size: u64) -> Vec<Scan<&'a T>> {
         let mut last_end_offset = offset;
+        let mut last_start_offset = 0;
         let mut out = vec![];
 
         if let Some((inner_offset, (inner_size, inner_data))) =
@@ -266,6 +270,7 @@ impl<T> ByteRanger<T> {
                     data: inner_data,
                 });
                 last_end_offset = *inner_offset + *inner_size;
+                last_start_offset = *inner_offset;
             }
         }
 
@@ -276,6 +281,7 @@ impl<T> ByteRanger<T> {
                     out.push(Scan::Gap {
                         start_offset: last_end_offset,
                         size: *inner_offset - last_end_offset,
+                        prev_range_start_offset: last_start_offset,
                     });
                 }
                 if *inner_offset >= offset + size {
@@ -294,6 +300,7 @@ impl<T> ByteRanger<T> {
             out.push(Scan::Gap {
                 start_offset: last_end_offset,
                 size: offset + size - last_end_offset,
+                prev_range_start_offset: last_start_offset,
             });
         }
 

@@ -1,9 +1,18 @@
 use bytes::Bytes;
 use futures::Stream;
-use std::{path::Path, sync::Arc};
-use tokio::{fs::DirEntry, fs::{File, OpenOptions, read_dir}, stream::StreamExt, sync::broadcast};
+use std::{fmt::write, path::Path, sync::Arc};
+use tokio::{
+    fs::DirEntry,
+    fs::{read_dir, File, OpenOptions},
+    stream::StreamExt,
+    sync::broadcast,
+};
 
-use crate::{cache_handlers::CacheHandlerError, downloaders::{DownloaderDrive, DownloaderError, Page}, types::DataIdentifier};
+use crate::{
+    cache_handlers::CacheHandlerError,
+    downloaders::{DownloaderDrive, DownloaderError, Page},
+    types::DataIdentifier,
+};
 use byte_ranger::{ByteRanger, Scan};
 
 use super::get_file_cache_path;
@@ -63,7 +72,11 @@ impl OpenFile {
         }
     }
 
-    pub async fn get_chunk_at<'a>(&'a self, offset: u64) -> Option<Scan<&'a ChunkStatus>> {
+    pub async fn get_chunk_at<'a>(
+        &'a self,
+        offset: u64,
+        write_hard_cache: bool,
+    ) -> Option<Scan<&'a ChunkStatus>> {
         let hcs = self.hard_cache.get_range_at(offset);
         if hcs.is_data() {
             Some(hcs)
@@ -72,13 +85,23 @@ impl OpenFile {
             if scs.is_data() {
                 Some(scs)
             } else {
-                None
+                // We want to capture EOFs and gaps based on which cache is to be written
+                if write_hard_cache {
+                    Some(hcs)
+                } else {
+                    Some(scs)
+                }
             }
         }
     }
 
     // Use this to start a new chunk by downloading it.
-    pub async fn start_download_chunk(&mut self, offset: u64, hard_cache: bool, file_path: &Path) -> Result<(File, DownloadHandle), CacheHandlerError> {
+    pub async fn start_download_chunk(
+        &mut self,
+        offset: u64,
+        hard_cache: bool,
+        file_path: &Path,
+    ) -> Result<(File, DownloadHandle), CacheHandlerError> {
         let downloader = self
             .downloader_drive
             .open_file(self.file_id.clone(), offset, hard_cache)
@@ -123,7 +146,13 @@ impl OpenFile {
 
     // TODO
     /// Use this to write to an existing chunk
-    pub async fn append_download_chunk(&mut self, start_offset: u64, current_offset: u64, hard_cache: bool, file_path: &Path) -> Result<(File, DownloadHandle), CacheHandlerError> {
+    pub async fn append_download_chunk(
+        &mut self,
+        start_offset: u64,
+        current_offset: u64,
+        hard_cache: bool,
+        file_path: &Path,
+    ) -> Result<(File, DownloadHandle), CacheHandlerError> {
         let downloader = self
             .downloader_drive
             .open_file(self.file_id.clone(), start_offset, hard_cache)
@@ -151,11 +180,7 @@ impl OpenFile {
             cache_data.download_status = Some(Arc::new(download_status))
         }
 
-
-        let file = OpenOptions::new()
-            .append(true)
-            .open(file_path)
-            .await?;
+        let file = OpenOptions::new().append(true).open(file_path).await?;
 
         Ok((file, download_handle))
     }
@@ -231,12 +256,11 @@ pub struct DownloadHandle {
 }
 
 impl DownloadHandle {
-    pub async fn get_next_bytes(&mut self, file: &mut File) -> Option<Result<Bytes, CacheHandlerError>> {
-        if let Some(bytes) = self.downloader.next().await {
-            let bytes = bytes.map_err(|e| e.into())?;
-            // TODO: this next
-        }
-
-        None
+    pub async fn get_next_bytes(&mut self) -> Result<Option<Bytes>, CacheHandlerError> {
+        self.downloader
+            .next()
+            .await
+            .transpose()
+            .map_err(|e| e.into())
     }
 }

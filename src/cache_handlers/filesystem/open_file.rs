@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use futures::Stream;
-use std::{fmt::write, path::Path, sync::Arc};
+use std::{fmt::write, io::SeekFrom, path::Path, sync::Arc};
 use tokio::{
     fs::DirEntry,
     fs::{read_dir, File, OpenOptions},
@@ -112,7 +112,6 @@ impl OpenFile {
         let download_handle = DownloadHandle {
             progress_channel: progress_channel.clone(),
             downloader,
-            max_file_size: 200_000_000, // TODO: not hardcode this
         };
 
         let download_status = DownloadStatus {
@@ -144,25 +143,23 @@ impl OpenFile {
         Ok((file, download_handle))
     }
 
-    // TODO
     /// Use this to write to an existing chunk
     pub async fn append_download_chunk(
         &mut self,
         start_offset: u64,
         current_offset: u64,
-        hard_cache: bool,
+        write_hard_cache: bool,
         file_path: &Path,
     ) -> Result<(File, DownloadHandle), CacheHandlerError> {
         let downloader = self
             .downloader_drive
-            .open_file(self.file_id.clone(), start_offset, hard_cache)
+            .open_file(self.file_id.clone(), start_offset, write_hard_cache)
             .await
             .unwrap();
         let (progress_channel, _) = broadcast::channel(1);
         let download_handle = DownloadHandle {
             progress_channel: progress_channel.clone(),
-            downloader,
-            max_file_size: 200_000_000, // TODO: not hardcode this
+            downloader
         };
 
         let download_status = DownloadStatus {
@@ -170,7 +167,7 @@ impl OpenFile {
             progress_channel,
         };
 
-        let cache = if hard_cache {
+        let cache = if write_hard_cache {
             &mut self.hard_cache
         } else {
             &mut self.soft_cache
@@ -180,9 +177,20 @@ impl OpenFile {
             cache_data.download_status = Some(Arc::new(download_status))
         }
 
-        let file = OpenOptions::new().append(true).open(file_path).await?;
+        let mut file = OpenOptions::new().append(true).open(file_path).await?;
+        file.seek(SeekFrom::Start(current_offset - start_offset))
+            .await
+            .unwrap();
 
         Ok((file, download_handle))
+    }
+
+    pub async fn update_chunk_size(&mut self, write_hard_cache: bool, start_offset: u64, size: u64) {
+        if write_hard_cache {
+            &mut self.hard_cache
+        } else {
+            &mut self.soft_cache
+        }.extend_range(start_offset, size);
     }
 
     /// Get all cache files in a hard/soft cache directory.
@@ -252,7 +260,6 @@ pub struct DownloadStatus {
 pub struct DownloadHandle {
     progress_channel: broadcast::Sender<u64>,
     downloader: Box<dyn Stream<Item = Result<Bytes, DownloaderError>> + Send + Unpin>,
-    max_file_size: u64,
 }
 
 impl DownloadHandle {

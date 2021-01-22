@@ -3,3 +3,5 @@
 /greed
 config.toml
 settings.json
+byte-ranger/target
+todo.txt

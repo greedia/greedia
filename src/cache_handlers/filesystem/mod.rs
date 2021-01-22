@@ -24,9 +24,6 @@ struct FilesystemCacheHandler {
     downloader_drive: Arc<dyn DownloaderDrive>,
 }
 
-// TODO: create OpenFileStruct that contains gc_count for garbage collection
-// put whole OpenFileStruct within Mutex
-
 impl FilesystemCacheHandler {
     fn new(
         drive_id: String,
@@ -357,7 +354,7 @@ impl FilesystemCacheFileHandler {
             }) => {
                 // Write and fill up buf with rest of last_bytes, if possible
 
-                // TODO: fix this when bytes fixes #468
+                // TODO: fix this when tokio-rs/bytes fixes #468
                 let split_len = min(len, last_bytes.len());
                 let from_last_bytes = last_bytes.split_to(split_len);
                 if from_last_bytes.len() != 0 {
@@ -380,7 +377,7 @@ impl FilesystemCacheFileHandler {
 
                 // Download one more Bytes object if we can
                 if let Some(mut b) = dl.get_next_bytes().await.unwrap() {
-                    // TODO: fix this when bytes fixes #468
+                    // TODO: fix this when tokio-rs/bytes fixes #468
                     let split_len = min(len - from_last_bytes.len(), b.len());
                     let to_output = b.split_to(split_len);
 

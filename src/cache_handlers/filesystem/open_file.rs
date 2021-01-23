@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use futures::Stream;
-use std::{fmt::write, io::SeekFrom, path::Path, sync::Arc};
+use std::{io::SeekFrom, path::Path, sync::Arc};
 use tokio::{
     fs::DirEntry,
     fs::{read_dir, File, OpenOptions},
@@ -10,10 +10,10 @@ use tokio::{
 
 use crate::{
     cache_handlers::CacheHandlerError,
-    downloaders::{DownloaderDrive, DownloaderError, Page},
+    downloaders::{DownloaderDrive, DownloaderError},
     types::DataIdentifier,
 };
-use byte_ranger::{ByteRanger, Scan};
+use byte_ranger::{ByteRanger, GetRange};
 
 use super::get_file_cache_path;
 
@@ -23,13 +23,13 @@ use super::get_file_cache_path;
 ///
 /// When reading a file, the reader must first check the hard cache, then the soft cache, and if
 /// neither cache contains data, it must download the data and simultaneously stream it to the
-/// reader, and to the filesystem. A flag (TODO WHICH FLAG?) will specify whether downloaded data
+/// reader, and to the filesystem. The write_hard_cache flag will specify whether downloaded data
 /// gets written to the hard cache or soft cache.
 ///
 /// The caches are made up of chunk files, named by their offsets in the original file. If a chunk
-/// file does not exist that the reader needs, it will download the data needed until either the
-/// reader closes, or the chunk file reaches 100MB, at which point it will create a new chunk file
-/// and continue downloading.
+/// file that the reader needs does not exist, it will download the data needed until either the
+/// reader closes or the chunk file reaches 100MB, at which point a new chunk file will be created
+/// and the download will continue.
 ///
 /// When a reader reaches the end of a chunk, it must download new data and append to the chunk
 /// until it becomes 100MB, or it reaches the beginning of the next chunk, whichever comes first.
@@ -39,10 +39,8 @@ use super::get_file_cache_path;
 /// without having to re-lock the mutex on each read operation.
 pub struct OpenFile {
     file_id: String,
-    data_id: DataIdentifier,
     downloader_drive: Arc<dyn DownloaderDrive>,
-    pub hard_cache: ByteRanger<ChunkStatus>,
-    pub soft_cache: ByteRanger<ChunkStatus>,
+    pub chunks: ByteRanger<ChunkData>,
 }
 
 impl OpenFile {
@@ -54,57 +52,36 @@ impl OpenFile {
         downloader_drive: Arc<dyn DownloaderDrive>,
     ) -> OpenFile {
         // Scan for existing cache files
-        let hard_cache = Self::get_cache_files(hard_cache_root, data_id).await;
-        let soft_cache = Self::get_cache_files(soft_cache_root, data_id).await;
+        let chunks = Self::get_cache_files(&[(hard_cache_root, true), (soft_cache_root, false)], data_id).await;
 
         let file_id = file_id.to_string();
-        let data_id = data_id.clone();
-        let downloader_drive = downloader_drive.into();
 
-        dbg!(&hard_cache);
-        dbg!(&soft_cache);
+        dbg!(&chunks);
         OpenFile {
             file_id,
-            data_id,
             downloader_drive,
-            hard_cache,
-            soft_cache,
+            chunks,
         }
     }
 
     pub async fn get_chunk_at<'a>(
         &'a self,
         offset: u64,
-        write_hard_cache: bool,
-    ) -> Option<Scan<&'a ChunkStatus>> {
-        let hcs = self.hard_cache.get_range_at(offset);
-        if hcs.is_data() {
-            Some(hcs)
-        } else {
-            let scs = self.soft_cache.get_range_at(offset);
-            if scs.is_data() {
-                Some(scs)
-            } else {
-                // We want to capture EOFs and gaps based on which cache is to be written
-                if write_hard_cache {
-                    Some(hcs)
-                } else {
-                    Some(scs)
-                }
-            }
-        }
+    ) -> GetRange<&'a ChunkData> {
+        self.chunks.get_range_at(offset)
     }
 
     // Use this to start a new chunk by downloading it.
     pub async fn start_download_chunk(
         &mut self,
         offset: u64,
-        hard_cache: bool,
+        write_hard_cache: bool,
         file_path: &Path,
     ) -> Result<(File, DownloadHandle), CacheHandlerError> {
+        println!("START DL");
         let downloader = self
             .downloader_drive
-            .open_file(self.file_id.clone(), offset, hard_cache)
+            .open_file(self.file_id.clone(), offset, write_hard_cache)
             .await
             .unwrap();
         // TODO: eventually change this to something that doesn't require a sender to create new receivers
@@ -119,20 +96,17 @@ impl OpenFile {
             progress_channel,
         };
 
-        let cache = if hard_cache {
-            &mut self.hard_cache
-        } else {
-            &mut self.soft_cache
-        };
-
-        cache.add_range(
+        self.chunks.add_range(
             offset,
             0,
-            ChunkStatus {
+            ChunkData {
+                is_hard_cache: write_hard_cache,
+                start_offset: offset,
                 download_status: Some(Arc::new(download_status)),
             },
         );
 
+        // dbg!(file_path.parent());
         let parent = file_path.parent().unwrap();
         if !parent.exists() {
             tokio::fs::create_dir_all(parent).await?;
@@ -143,7 +117,9 @@ impl OpenFile {
         Ok((file, download_handle))
     }
 
-    /// Use this to write to an existing chunk
+    /// Use this to write to an existing chunk.
+    /// Errors out if existing chunk is the opposite cache,
+    /// e.g. when writing to hard cache, the chunk is located in the soft cache.
     pub async fn append_download_chunk(
         &mut self,
         start_offset: u64,
@@ -151,74 +127,96 @@ impl OpenFile {
         write_hard_cache: bool,
         file_path: &Path,
     ) -> Result<(File, DownloadHandle), CacheHandlerError> {
-        let downloader = self
-            .downloader_drive
-            .open_file(self.file_id.clone(), start_offset, write_hard_cache)
-            .await
-            .unwrap();
-        let (progress_channel, _) = broadcast::channel(1);
-        let download_handle = DownloadHandle {
-            progress_channel: progress_channel.clone(),
-            downloader
-        };
+        println!("APPEND DL");
 
-        let download_status = DownloadStatus {
-            current_offset,
-            progress_channel,
-        };
+        if let Some(mut cache_data) = self.chunks.get_data_mut(start_offset) {
+            if cache_data.is_hard_cache != write_hard_cache {
+                return Err(CacheHandlerError::CacheMismatchError{ write_hard_cache, is_hard_cache: cache_data.is_hard_cache, start_offset });
+            }
 
-        let cache = if write_hard_cache {
-            &mut self.hard_cache
+            let downloader = self
+                .downloader_drive
+                .open_file(self.file_id.clone(), start_offset, write_hard_cache)
+                .await
+                .unwrap();
+            let (progress_channel, _) = broadcast::channel(1);
+            let download_handle = DownloadHandle {
+                progress_channel: progress_channel.clone(),
+                downloader
+            };
+
+            let download_status = Arc::new(DownloadStatus {
+                current_offset,
+                progress_channel,
+            });
+
+            cache_data.download_status = Some(download_status);
+
+            let mut file = OpenOptions::new().append(true).open(file_path).await?;
+            file.seek(SeekFrom::Start(current_offset - start_offset))
+                .await
+                .unwrap();
+
+            Ok((file, download_handle))
         } else {
-            &mut self.soft_cache
-        };
+            Err(CacheHandlerError::AppendChunkError { start_offset })
+        }
+    }
 
-        if let Some(mut cache_data) = cache.get_data_mut(start_offset) {
-            cache_data.download_status = Some(Arc::new(download_status))
+    /// Use this to copy from soft_cache to hard_cache. Creates a new hard_cache chunk.
+    pub async fn new_copy_chunk(&mut self, file_path: &Path) -> Result<File, CacheHandlerError> {
+        println!("COPY CHUNK");
+
+        // dbg!(file_path.parent());
+        let parent = file_path.parent().unwrap();
+        if !parent.exists() {
+            tokio::fs::create_dir_all(parent).await?;
         }
 
-        let mut file = OpenOptions::new().append(true).open(file_path).await?;
-        file.seek(SeekFrom::Start(current_offset - start_offset))
-            .await
-            .unwrap();
+        let file = File::create(file_path).await?;
 
-        Ok((file, download_handle))
+        Ok(file)
     }
 
-    pub async fn update_chunk_size(&mut self, write_hard_cache: bool, start_offset: u64, size: u64) {
-        if write_hard_cache {
-            &mut self.hard_cache
-        } else {
-            &mut self.soft_cache
-        }.extend_range(start_offset, size);
+    pub async fn update_chunk_size(&mut self, start_offset: u64, new_size: u64) {
+        println!("UPDATE CHUNK {} {}", start_offset, new_size);
+        self.chunks.extend_range(start_offset, new_size);
     }
 
-    /// Get all cache files in a hard/soft cache directory.
-    /// This assumes no other Greedia instance has this file open.
+    /// Get all cache files in a list of directories.
+    /// Earlier cache roots get priority over later cache roots.
     async fn get_cache_files(
-        cache_root: &Path,
+        cache_roots: &[(&Path, bool)],
         data_id: &DataIdentifier,
-    ) -> ByteRanger<ChunkStatus> {
-        let path = get_file_cache_path(cache_root, data_id);
+    ) -> ByteRanger<ChunkData> {
+        let mut br = ByteRanger::new();
 
-        if path.exists() {
-            let mut dirs = read_dir(path).await.unwrap();
-            let mut br = ByteRanger::new();
-            while let Some(dir_entry) = dirs.next().await {
-                if let Some((offset, len)) = Self::direntry_to_namelen(dir_entry.unwrap()).await {
-                    br.add_range(
-                        offset,
-                        len,
-                        ChunkStatus {
-                            download_status: None,
-                        },
-                    );
+        for (cache_root, is_hard_cache) in cache_roots {
+            let cache_path = get_file_cache_path(cache_root, data_id);
+            if cache_path.exists() {
+                let mut dirs = read_dir(cache_path).await.unwrap();
+                while let Some(dir_entry) = dirs.next().await {
+                    if let Some((offset, len)) = Self::direntry_to_namelen(dir_entry.unwrap()).await {
+                        println!("add_range {} {}", offset, len);
+                        if len == 0 {
+                            // Ignore zero-length chunks
+                            continue;
+                        }
+                        br.add_range(
+                            offset,
+                            len,
+                            ChunkData {
+                                is_hard_cache: *is_hard_cache,
+                                start_offset: offset,
+                                download_status: None,
+                            },
+                        );
+                    }
                 }
             }
-            br
-        } else {
-            ByteRanger::new()
         }
+        
+        br
     }
 
     /// Converts a Tokio DirEntry to a two-item tuple.
@@ -239,9 +237,13 @@ impl OpenFile {
 }
 
 #[derive(Clone, Debug)]
-pub struct ChunkStatus {
+pub struct ChunkData {
+    /// Flag if this chunk is in hard_cache.
+    pub is_hard_cache: bool,
+    /// Start offset of this chunk.
+    pub start_offset: u64,
     /// Status, if a chunk is in the middle of downloading.
-    download_status: Option<Arc<DownloadStatus>>,
+    pub download_status: Option<Arc<DownloadStatus>>,
 }
 
 #[derive(Debug)]

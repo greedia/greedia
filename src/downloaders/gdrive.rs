@@ -199,7 +199,7 @@ impl DownloaderDrive for GDriveDrive {
         file_id: String,
         offset: u64,
         bg_request: bool,
-    ) -> Result<Box<dyn Stream<Item = Result<Bytes, DownloaderError>> + Unpin + Send>, DownloaderError>
+    ) -> Result<Box<dyn Stream<Item = Result<Bytes, DownloaderError>> + Unpin + Send + Sync>, DownloaderError>
     {
         let res = open_request(
             file_id,

@@ -82,7 +82,7 @@ impl<T> Scan<T> {
         }
     }
 
-    pub fn gap(start_offset: u64, size: u64, final_range_start_offset: u64, prev_range_data: T) -> Scan<T> {
+    pub fn gap(start_offset: u64, size: u64) -> Scan<T> {
         Scan::Gap { start_offset, size }
     }
 

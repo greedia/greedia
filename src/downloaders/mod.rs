@@ -30,7 +30,7 @@ pub trait DownloaderDrive: Sync + Send + 'static {
         file_id: String,
         offset: u64,
         bg_request: bool,
-    ) -> Result<Box<dyn Stream<Item = Result<Bytes, DownloaderError>> + Unpin + Send>, DownloaderError>;
+    ) -> Result<Box<dyn Stream<Item = Result<Bytes, DownloaderError>> + Send + Sync + Unpin>, DownloaderError>;
 }
 
 #[derive(Debug)]

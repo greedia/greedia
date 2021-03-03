@@ -218,11 +218,7 @@ impl FilesystemCacheFileHandler {
             self.current_chunk = Some(new_chunk);
         }
 
-        // TODO: some sort of twice-run loop?
-        // In order to reset reading when we get to the end of a chunk
-
-        // separate this if statement into something that returns Option<usize>?
-
+        // TODO: limit this and error if too many loops occur
         loop {
             if let Some(data_read) = self.handle_chunk(len, &mut buf).await {
                 return data_read
@@ -524,7 +520,10 @@ impl FilesystemCacheFileHandler {
                             }
                         }
                         Receiver::CacheReader(cache_reader) => {
-                            let mut temp_buf = [0u8; 65536];
+                            // Terribly inefficient way of doing this, causing two allocations.
+                            // Luckily this code isn't called very often, but surely there's a better
+                            // way to do this.
+                            let mut temp_buf = vec![0u8; 65536];
                             let read_len = cache_reader.read(&mut temp_buf).await.unwrap();
                             if read_len == 0 {
                                 0

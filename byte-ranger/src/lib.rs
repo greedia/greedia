@@ -1,7 +1,4 @@
-use std::{
-    cmp::min, collections::btree_map::Entry,
-    collections::BTreeMap, fmt::Debug,
-};
+use std::{cmp::min, collections::btree_map::Entry, collections::BTreeMap, fmt::Debug};
 
 /// Output from the get_range_at method.
 /// These structs are more advanced than their scan counterparts.
@@ -15,10 +12,24 @@ pub enum GetRange<T> {
         data: T,
     },
     /// Range between two data ranges, or the beginning and a data range.
-    Gap { start_offset: u64, size: u64, prev_range_start_offset: u64, prev_range_data: T },
+    Gap {
+        start_offset: u64,
+        size: u64,
+        prev_range: Option<PrevRange<T>>,
+    },
     /// End of file.
-    FinalRange { start_offset: u64, size: u64, data: T },
+    FinalRange {
+        start_offset: u64,
+        size: u64,
+        data: T,
+    },
     Empty,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct PrevRange<T> {
+    pub start_offset: u64,
+    pub data: T,
 }
 
 impl<T> GetRange<T> {
@@ -30,12 +41,49 @@ impl<T> GetRange<T> {
         }
     }
 
-    pub fn gap(start_offset: u64, size: u64, final_range_start_offset: u64, prev_range_data: T) -> GetRange<T> {
-        GetRange::Gap { start_offset, size, prev_range_start_offset: final_range_start_offset, prev_range_data }
+    pub fn gap(
+        start_offset: u64,
+        size: u64,
+        final_range_start_offset: u64,
+        prev_range: Option<PrevRange<T>>,
+    ) -> GetRange<T> {
+        GetRange::Gap {
+            start_offset,
+            size,
+            prev_range
+        }
+    }
+
+    pub fn gap_no_prev_range(start_offset: u64, size: u64) -> GetRange<T> {
+        GetRange::Gap {
+            start_offset,
+            size,
+            prev_range: None,
+        }
+    }
+
+    pub fn gap_with_prev_range(
+        start_offset: u64,
+        size: u64,
+        prev_range_start_offset: u64,
+        prev_range_data: T,
+    ) -> GetRange<T> {
+        GetRange::Gap {
+            start_offset,
+            size,
+            prev_range: Some(PrevRange {
+                start_offset: prev_range_start_offset,
+                data: prev_range_data,
+            }),
+        }
     }
 
     pub fn final_range(start_offset: u64, size: u64, data: T) -> GetRange<T> {
-        GetRange::FinalRange { start_offset, size, data }
+        GetRange::FinalRange {
+            start_offset,
+            size,
+            data,
+        }
     }
 
     pub fn empty() -> GetRange<T> {
@@ -43,7 +91,12 @@ impl<T> GetRange<T> {
     }
 
     pub fn is_data(&self) -> bool {
-        if let GetRange::Data { start_offset: _, size: _, data: _ } = self {
+        if let GetRange::Data {
+            start_offset: _,
+            size: _,
+            data: _,
+        } = self
+        {
             true
         } else {
             false
@@ -51,7 +104,12 @@ impl<T> GetRange<T> {
     }
 
     pub fn is_gap(&self) -> bool {
-        if let GetRange::Gap { start_offset: _, size: _, prev_range_start_offset: _, prev_range_data: _ } = self {
+        if let GetRange::Gap {
+            start_offset: _,
+            size: _,
+            prev_range: _
+        } = self
+        {
             true
         } else {
             false
@@ -87,7 +145,12 @@ impl<T> Scan<T> {
     }
 
     pub fn is_data(&self) -> bool {
-        if let Scan::Data { start_offset: _, size: _, data: _ } = self {
+        if let Scan::Data {
+            start_offset: _,
+            size: _,
+            data: _,
+        } = self
+        {
             true
         } else {
             false
@@ -95,7 +158,11 @@ impl<T> Scan<T> {
     }
 
     pub fn is_gap(&self) -> bool {
-        if let Scan::Gap { start_offset: _, size: _, } = self {
+        if let Scan::Gap {
+            start_offset: _,
+            size: _,
+        } = self
+        {
             true
         } else {
             false
@@ -197,7 +264,6 @@ impl<T: Debug> ByteRanger<T> {
         match self.byte_ranges.entry(offset) {
             Entry::Vacant(_) => None,
             Entry::Occupied(mut oe) => {
-
                 let (ref mut size, _data) = oe.get_mut();
                 std::mem::swap(&mut new_size, size);
                 Some(new_size)
@@ -219,14 +285,12 @@ impl<T: Debug> ByteRanger<T> {
     }
 
     /// Get a reference to a range's data.
-    pub fn get_data<'a>(&'a self, offset: u64) -> Option<&'a T>
-    {
+    pub fn get_data<'a>(&'a self, offset: u64) -> Option<&'a T> {
         self.byte_ranges.get(&offset).map(|(_size, data)| data)
     }
 
     /// Get a mutable reference to a range's data.
-    pub fn get_data_mut<'a>(&'a mut self, offset: u64) -> Option<&'a mut T>
-    {
+    pub fn get_data_mut<'a>(&'a mut self, offset: u64) -> Option<&'a mut T> {
         self.byte_ranges.get_mut(&offset).map(|(_size, data)| data)
     }
 
@@ -236,15 +300,18 @@ impl<T: Debug> ByteRanger<T> {
         let mut last_start_offset = 0;
         let mut last_size = 0;
         let mut last_data: Option<&T> = None;
-        
+
+        // Short-circuit if empty
         if self.byte_ranges.is_empty() {
             return GetRange::Empty;
         }
+
         // Iter btree in reverse from offset+1 to 0 and get first value, if exists
         if let Some((inner_offset, (inner_size, inner_data))) =
             self.byte_ranges.range(..offset + 1).rev().next()
         {
             if offset == *inner_offset {
+                println!("a");
                 // If provided offset is spot-on
                 return GetRange::Data {
                     start_offset: *inner_offset,
@@ -252,6 +319,7 @@ impl<T: Debug> ByteRanger<T> {
                     data: inner_data,
                 };
             } else if offset > *inner_offset && offset < *inner_offset + *inner_size {
+                println!("b");
                 // If provided offset is somewhere within range's offset and size
                 return GetRange::Data {
                     start_offset: *inner_offset,
@@ -259,6 +327,7 @@ impl<T: Debug> ByteRanger<T> {
                     data: inner_data,
                 };
             } else {
+                println!("c");
                 // If provided offset is after scanned range
                 // Record the end offset, as this will be the beginning of the gap
                 last_end_offset = *inner_offset + *inner_size;
@@ -271,17 +340,35 @@ impl<T: Debug> ByteRanger<T> {
 
         // There is no range, or only ranges are after provided offset
         // Check for the end of the gap, if any
+        dbg!(&self.byte_ranges);
+        dbg!(&offset);
+        dbg!(&last_start_offset);
+        dbg!(&last_end_offset);
+        dbg!(&last_size);
+        dbg!(&last_data);
 
         if let Some((inner_offset, (_inner_size, _inner_data))) =
             self.byte_ranges.range(last_end_offset..).next()
         {
-            // Return the gap between the last range and the next one
-            return GetRange::Gap {
-                start_offset: last_end_offset,
-                size: *inner_offset - last_end_offset,
-                prev_range_start_offset: last_start_offset,
-                prev_range_data: last_data.unwrap(),
-            };
+            dbg!(&inner_offset);
+            dbg!(&_inner_size);
+            dbg!(&_inner_data);
+            if let Some(data) = last_data {
+                return GetRange::Gap {
+                    start_offset: last_end_offset,
+                    size: *inner_offset - last_end_offset,
+                    prev_range: Some(PrevRange {
+                        start_offset: last_start_offset,
+                        data,
+                    })
+                };
+            } else {
+                return GetRange::Gap {
+                    start_offset: last_end_offset,
+                    size: *inner_offset - last_end_offset,
+                    prev_range: None,
+                };
+            }
         } else {
             // There is no end of the gap, so we're at EOF
             return GetRange::FinalRange {
@@ -524,7 +611,7 @@ mod tests {
         byte_ranger.add_range(50, 100, 2);
 
         byte_ranger.extend_range(50, 101);
-        
+
         let b = byte_ranger.get_range_at(50);
         assert_eq!(b, Scan::data(50, 101, &2));
     }
@@ -538,7 +625,7 @@ mod tests {
         println!("{:?}", byte_ranger);
         let a = byte_ranger.get_data_mut(50).unwrap();
         *a = 5;
-        
+
         let b = byte_ranger.get_data(50).unwrap();
         assert_eq!(b, &5);
     }

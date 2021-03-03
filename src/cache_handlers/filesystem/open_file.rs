@@ -94,12 +94,14 @@ impl OpenFile {
             .await
             .unwrap();
 
+        let receiver = Receiver::Downloader(downloader);
+
         let end_offset = offset;
         let split_offset = offset + MAX_CHUNK_SIZE;
 
         let dl_handle = Arc::new(());
 
-        let download_status = DownloadStatus::new(downloader, write_file, end_offset, split_offset, dl_handle.clone());
+        let download_status = DownloadStatus::new(receiver, write_file, end_offset, split_offset, dl_handle.clone());
 
         self.chunks.add_range(
             offset,
@@ -154,12 +156,13 @@ impl OpenFile {
                 .await
                 .unwrap();
 
-            
+            let receiver = Receiver::Downloader(downloader);
+
             let split_offset = chunk_start_offset + MAX_CHUNK_SIZE;
 
             let dl_handle = Arc::new(());
 
-            let download_status = DownloadStatus::new(downloader, write_file, end_offset, split_offset, dl_handle.clone());
+            let download_status = DownloadStatus::new(receiver, write_file, end_offset, split_offset, dl_handle.clone());
 
             cache_data.download_status = Arc::new(Mutex::new(Some(download_status)));
 
@@ -173,18 +176,42 @@ impl OpenFile {
     }
 
     /// Use this to copy from soft_cache to hard_cache. Creates a new hard_cache chunk.
-    pub async fn new_copy_chunk(&mut self, file_path: &Path) -> Result<File, CacheHandlerError> {
-        println!("COPY CHUNK");
+    pub async fn start_copy_chunk(&mut self, offset: u64, source_file_path: &Path, source_file_offset: u64, file_path: &Path) -> Result<(File, DownloadHandle), CacheHandlerError> {
+        println!("START COPY");
 
-        // dbg!(file_path.parent());
         let parent = file_path.parent().unwrap();
         if !parent.exists() {
             tokio::fs::create_dir_all(parent).await?;
         }
 
-        let file = File::create(file_path).await?;
+        let write_file = File::create(file_path).await?;
 
-        Ok(file)
+        let mut cache_file = File::open(source_file_path).await?;
+        cache_file.seek(SeekFrom::Start(source_file_offset)).await?;
+
+        let receiver = Receiver::CacheReader(cache_file);
+
+        let end_offset = offset;
+        let split_offset = offset + MAX_CHUNK_SIZE;
+
+        let dl_handle = Arc::new(());
+
+        let download_status = DownloadStatus::new(receiver, write_file, end_offset, split_offset, dl_handle.clone());
+
+        self.chunks.add_range(
+            offset,
+            0,
+            ChunkData {
+                is_hard_cache: true,
+                chunk_start_offset: offset,
+                download_status: Arc::new(Mutex::new(Some(download_status))),
+            },
+        );
+
+        let read_file = File::open(file_path).await?;
+        let download_handle = DownloadHandle { dl_handle };
+
+        Ok((read_file, download_handle))
     }
 
     /// Set a new chunk size as the chunk gets downloaded.
@@ -194,7 +221,7 @@ impl OpenFile {
     }
 
     /// Get the DownloadStatus of a particular chunk.
-    pub fn get_download_status(&self, chunk_start_offset: u64) -> Arc<Mutex<Option<DownloadStatus>>> {
+    pub fn get_receiver_status(&self, chunk_start_offset: u64) -> Arc<Mutex<Option<DownloadStatus>>> {
         let chunk = self.chunks.get_data(chunk_start_offset).unwrap();
         chunk.download_status.clone()
     }
@@ -265,10 +292,15 @@ pub struct ChunkData {
     pub download_status: Arc<Mutex<Option<DownloadStatus>>>,
 }
 
+pub enum Receiver {
+    Downloader(Box<dyn Stream<Item = Result<Bytes, DownloaderError>> + Send + Sync + Unpin>),
+    CacheReader(File)
+}
+
 /// Structure describing the current download status of a chunk.
 pub struct DownloadStatus {
     /// Downloader.
-    pub downloader: Box<dyn Stream<Item = Result<Bytes, DownloaderError>> + Send + Sync + Unpin>,
+    pub receiver: Receiver,
     /// Last received bytes from downloader.
     pub last_bytes: Bytes,
     /// File handle used to write to disk.
@@ -292,10 +324,10 @@ impl fmt::Debug for DownloadStatus {
 }
 
 impl DownloadStatus {
-    pub fn new(downloader: Box<dyn Stream<Item = Result<Bytes, DownloaderError>> + Send + Sync + Unpin>, write_file: File, end_offset: u64, split_offset: u64, dl_handle: Arc<()>) -> DownloadStatus {
+    pub fn new(receiver: Receiver, write_file: File, end_offset: u64, split_offset: u64, dl_handle: Arc<()>) -> DownloadStatus {
         let last_bytes = Bytes::new();
         DownloadStatus { 
-            downloader,
+            receiver,
             last_bytes,
             write_file,
             end_offset,

@@ -68,6 +68,8 @@ enum Reader {
     /// No data could be found, but we're not at EOF, so current chunk needs
     /// to be reset.
     NeedsNewChunk,
+    /// End of file.
+    Eof,
 }
 
 impl FilesystemCacheHandler {
@@ -659,29 +661,16 @@ fn get_file_cache_path(cache_root: &Path, data_id: &DataIdentifier) -> PathBuf {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::cache_handlers::filesystem::FilesystemCacheHandler;
-    use crate::downloaders::gdrive::GDriveClient;
-    use crate::downloaders::DownloaderClient;
+    use crate::{cache_handlers::filesystem::FilesystemCacheHandler, downloaders::timecode::TimecodeDrive};
     use timecode_rs::read_offset;
 
     #[tokio::test]
-    async fn do_2_stuff() {
-        let client_id =
-            "***REMOVED***".to_string();
-        let client_secret = "***REMOVED***".to_string();
-        let refresh_token = "***REMOVED***".to_string();
-        let drive_id = "***REMOVED***".to_string();
+    async fn do_3_stuff() {
+        let d = Arc::new(TimecodeDrive{});
 
-        let c = GDriveClient::new(client_id, client_secret, refresh_token)
-            .await
-            .unwrap();
-
-        let d = c.open_drive(drive_id);
-
-        let file_id = "***REMOVED***".to_string();
-        let data_id =
-            DataIdentifier::GlobalMd5(hex::decode("***REMOVED***").unwrap());
-        let file_size = 1073741824;
+        let file_id = r#"{"bytes_len": 10240}"#;
+        let data_id = DataIdentifier::GlobalMd5(vec![0, 0, 0, 0]);
+        let file_size = 1024u64.pow(3) * 10; // 10 GB
 
         let hard_cache_root = PathBuf::from("/home/main/greed_test/hard_cache");
         let soft_cache_root = PathBuf::from("/home/main/greed_test/soft_cache");
@@ -690,34 +679,44 @@ mod test {
             "main".to_string(),
             &hard_cache_root,
             &soft_cache_root,
-            d.into(),
+            d,
         );
-
-        println!("SOFT CACHE");
 
         let mut offset = 0;
 
         let mut f = fsch
-            .open_file(file_id.clone(), data_id.clone(), file_size, offset, false)
+            .open_file(file_id.to_owned(), data_id.clone(), file_size, offset, false)
             .await
             .unwrap();
 
-        loop {
-            let mut buf = [0u8; 65535];
-            let l = f.read_into(&mut buf).await;
-            if l == 0 {
-                break;
-            }
-            if l < 11 {
-                offset += l as u64;
-                continue;
-            }
-            let off = read_offset(&buf);
-            dbg!(l);
-            dbg!(&off);
-            dbg!(&buf[..11]);
-            assert_eq!(off.unwrap(), offset);
-            offset += l as u64;
-        }
+        let mut buf = [0u8; 65535];
+
+        offset = 0;
+        f.seek_to(offset).await;
+        let l = f.read_into(&mut buf).await;
+        let off = read_offset(&buf);
+        dbg!(l, &off, &buf[..11]);
+        assert_eq!(offset, off.unwrap());
+
+        offset = 500;
+        f.seek_to(offset).await;
+        let l = f.read_into(&mut buf).await;
+        let off = read_offset(&buf);
+        dbg!(l, &off, &buf[..11]);
+        assert_eq!(offset, off.unwrap());
+
+        offset = 999_000;
+        f.seek_to(offset).await;
+        let l = f.read_into(&mut buf).await;
+        let off = read_offset(&buf);
+        dbg!(l, &off, &buf[..11]);
+        assert_eq!(offset, off.unwrap());
+
+        offset = 998_990;
+        f.seek_to(offset).await;
+        let l = f.read_into(&mut buf).await;
+        let off = read_offset(&buf);
+        dbg!(l, &off, &buf[..11]);
+        assert_eq!(offset, off.unwrap());
     }
 }

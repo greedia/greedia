@@ -6,6 +6,8 @@ use std::pin::Pin;
 use thiserror::Error;
 
 pub mod gdrive;
+#[cfg(test)]
+pub mod timecode;
 
 #[derive(Error, Debug)]
 pub enum DownloaderError {

@@ -152,7 +152,7 @@ impl OpenFile {
             // Create a downloader
             let downloader = self
                 .downloader_drive
-                .open_file(self.file_id.clone(), chunk_start_offset, write_hard_cache)
+                .open_file(self.file_id.clone(), end_offset, write_hard_cache)
                 .await
                 .unwrap();
 
@@ -176,8 +176,9 @@ impl OpenFile {
     }
 
     /// Use this to copy from soft_cache to hard_cache. Creates a new hard_cache chunk.
-    pub async fn start_copy_chunk(&mut self, offset: u64, source_file_path: &Path, source_file_offset: u64, file_path: &Path) -> Result<(File, DownloadHandle), CacheHandlerError> {
+    pub async fn start_copy_chunk(&mut self, offset: u64, source_file_path: &Path, source_file_offset: u64, source_file_end_offset: u64, file_path: &Path) -> Result<(File, DownloadHandle), CacheHandlerError> {
         println!("START COPY");
+        dbg!(&file_path);
 
         let parent = file_path.parent().unwrap();
         if !parent.exists() {
@@ -189,7 +190,7 @@ impl OpenFile {
         let mut cache_file = File::open(source_file_path).await?;
         cache_file.seek(SeekFrom::Start(source_file_offset)).await?;
 
-        let receiver = Receiver::CacheReader(cache_file);
+        let receiver = Receiver::CacheReader(cache_file, source_file_end_offset);
 
         let end_offset = offset;
         let split_offset = offset + MAX_CHUNK_SIZE;
@@ -294,7 +295,7 @@ pub struct ChunkData {
 
 pub enum Receiver {
     Downloader(Box<dyn Stream<Item = Result<Bytes, DownloaderError>> + Send + Sync + Unpin>),
-    CacheReader(File)
+    CacheReader(File, u64),
 }
 
 /// Structure describing the current download status of a chunk.

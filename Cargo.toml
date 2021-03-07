@@ -10,6 +10,7 @@ sctest = []
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
 byte-ranger = { path = "byte-ranger" }
+timecode_rs = { path = "timecode_rs" }
 leaky-bucket = "0.7.3"
 anyhow = "1.0.32"
 tokio = { version = "0.2.22", features = [ "rt-core", "rt-threaded", "macros", "blocking", "fs" ] }

@@ -1,0 +1,13 @@
+[package]
+name = "timecode_rs"
+authors = ["k3d3 <k@3d3.ca>"]
+edition = "2018"
+license = "MIT/Apache-2.0"
+version = "0.1.0"
+readme = "README.md"
+repository = "https://github.com/greedia/timecode_rs"
+description = "Tool to test and debug offsets."
+
+[dev-dependencies]
+proptest = "1.0.0"
+rstest = "0.6.4"

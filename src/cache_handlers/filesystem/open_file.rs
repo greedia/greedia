@@ -1,6 +1,12 @@
 use bytes::Bytes;
 use futures::Stream;
-use std::{cmp::min, fmt, io::SeekFrom, path::Path, sync::Arc};
+use std::{
+    cmp::min,
+    fmt,
+    io::SeekFrom,
+    path::Path,
+    sync::{atomic::AtomicU64, Arc},
+};
 use tokio::{
     fs::DirEntry,
     fs::{read_dir, File, OpenOptions},
@@ -85,8 +91,6 @@ impl OpenFile {
         offset: u64,
         cache: Cache,
     ) -> (GetRange<&'a ChunkData>, bool) {
-        dbg!(&self.hc_chunks);
-        dbg!(&self.sc_chunks);
         match cache {
             Cache::Hard => (self.hc_chunks.get_range_at(offset), true),
             Cache::Any => {
@@ -230,9 +234,6 @@ impl OpenFile {
             },
         );
 
-        dbg!(&self.hc_chunks);
-        dbg!(&self.sc_chunks);
-        dbg!(&write_hard_cache);
 
         let read_file = File::open(file_path).await?;
         let download_handle = DownloadHandle { dl_handle };
@@ -257,7 +258,6 @@ impl OpenFile {
         file_path: &Path,
     ) -> Result<(File, DownloadHandle), CacheHandlerError> {
         println!("APPEND DL");
-        dbg!(chunk_start_offset, start_offset);
 
         let next_chunk = self.get_next_chunk(
             start_offset,
@@ -286,10 +286,7 @@ impl OpenFile {
             let mut write_file = OpenOptions::new().append(true).open(file_path).await?;
 
             // Seek to proper offset, relative to chunk's start offset.
-            println!("SEEK C");
             let off1 = write_file.seek(SeekFrom::End(0)).await?;
-
-            dbg!(&off1);
 
             // Create a downloader
             let downloader = self
@@ -315,10 +312,7 @@ impl OpenFile {
 
             let mut read_file = File::open(file_path).await?;
 
-            println!("SEEK D");
             let off2 = read_file.seek(SeekFrom::End(0)).await?;
-
-            dbg!(&off2);
 
             let download_handle = DownloadHandle { dl_handle };
 
@@ -340,13 +334,6 @@ impl OpenFile {
         file_path: &Path,
     ) -> Result<(File, DownloadHandle), CacheHandlerError> {
         println!("START COPY");
-        // dbg!(&file_path);
-        dbg!(
-            offset,
-            source_file_offset,
-            source_file_end_offset,
-            source_file_path
-        );
 
         let next_chunk = self.get_next_chunk(offset, Cache::Hard);
 
@@ -400,7 +387,6 @@ impl OpenFile {
 
     /// Set a new chunk size as the chunk gets downloaded.
     pub fn update_chunk_size(&mut self, hard_cache: bool, start_offset: u64, new_size: u64) {
-        // println!("UPDATE CHUNK {} {}", start_offset, new_size);
         if hard_cache {
             &mut self.hc_chunks
         } else {

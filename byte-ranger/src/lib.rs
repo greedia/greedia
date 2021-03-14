@@ -6,21 +6,29 @@ use std::{cmp::min, collections::btree_map::Entry, collections::BTreeMap, fmt::D
 pub enum GetRange<T> {
     /// Range that contains data.
     Data {
-        // Where the data starts within the byte range.
+        /// Where the data starts within the byte range.
         start_offset: u64,
+        /// Size of this range.
         size: u64,
+        /// Data contained within this range.
         data: T,
     },
     /// Range between two data ranges, or the beginning and a data range.
     Gap {
+        /// Starting offset of the gap (i.e. end of previous range, or beginning).
         start_offset: u64,
+        /// Size of the gap.
         size: u64,
+        /// Previous range, if we're not at the beginning.
         prev_range: Option<PrevRange<T>>,
     },
     /// End of file.
-    FinalRange {
+    PastFinalRange {
+        /// Starting offset of the final range.
         start_offset: u64,
+        /// Size of the final range.
         size: u64,
+        /// Data contained within the final range.
         data: T,
     },
     Empty,
@@ -44,7 +52,6 @@ impl<T> GetRange<T> {
     pub fn gap(
         start_offset: u64,
         size: u64,
-        final_range_start_offset: u64,
         prev_range: Option<PrevRange<T>>,
     ) -> GetRange<T> {
         GetRange::Gap {
@@ -79,7 +86,7 @@ impl<T> GetRange<T> {
     }
 
     pub fn final_range(start_offset: u64, size: u64, data: T) -> GetRange<T> {
-        GetRange::FinalRange {
+        GetRange::PastFinalRange {
             start_offset,
             size,
             data,
@@ -311,7 +318,6 @@ impl<T: Debug> ByteRanger<T> {
             self.byte_ranges.range(..offset + 1).rev().next()
         {
             if offset == *inner_offset {
-                println!("a");
                 // If provided offset is spot-on
                 return GetRange::Data {
                     start_offset: *inner_offset,
@@ -319,7 +325,6 @@ impl<T: Debug> ByteRanger<T> {
                     data: inner_data,
                 };
             } else if offset > *inner_offset && offset < *inner_offset + *inner_size {
-                println!("b");
                 // If provided offset is somewhere within range's offset and size
                 return GetRange::Data {
                     start_offset: *inner_offset,
@@ -327,7 +332,6 @@ impl<T: Debug> ByteRanger<T> {
                     data: inner_data,
                 };
             } else {
-                println!("c");
                 // If provided offset is after scanned range
                 // Record the end offset, as this will be the beginning of the gap
                 last_end_offset = *inner_offset + *inner_size;
@@ -340,19 +344,19 @@ impl<T: Debug> ByteRanger<T> {
 
         // There is no range, or only ranges are after provided offset
         // Check for the end of the gap, if any
-        dbg!(&self.byte_ranges);
-        dbg!(&offset);
-        dbg!(&last_start_offset);
-        dbg!(&last_end_offset);
-        dbg!(&last_size);
-        dbg!(&last_data);
+        // dbg!(&self.byte_ranges);
+        // dbg!(&offset);
+        // dbg!(&last_start_offset);
+        // dbg!(&last_end_offset);
+        // dbg!(&last_size);
+        // dbg!(&last_data);
 
         if let Some((inner_offset, (_inner_size, _inner_data))) =
             self.byte_ranges.range(last_end_offset..).next()
         {
-            dbg!(&inner_offset);
-            dbg!(&_inner_size);
-            dbg!(&_inner_data);
+            // dbg!(&inner_offset);
+            // dbg!(&_inner_size);
+            // dbg!(&_inner_data);
             if let Some(data) = last_data {
                 return GetRange::Gap {
                     start_offset: last_end_offset,
@@ -371,7 +375,7 @@ impl<T: Debug> ByteRanger<T> {
             }
         } else {
             // There is no end of the gap, so we're at EOF
-            return GetRange::FinalRange {
+            return GetRange::PastFinalRange {
                 start_offset: last_start_offset,
                 size: last_size,
                 data: last_data.unwrap(),
@@ -379,10 +383,24 @@ impl<T: Debug> ByteRanger<T> {
         }
     }
 
+    /// Find the range that shows up at or after this offset.
+    pub fn get_next_range<'a>(&'a self, offset: u64) -> Option<GetRange<&'a T>> {
+        if let Some((inner_offset, (inner_size, inner_data))) = 
+            self.byte_ranges.range(offset..).next()
+        {
+            Some(GetRange::Data {
+                start_offset: *inner_offset,
+                size: *inner_size,
+                data: inner_data,
+            })
+        } else {
+            None
+        }
+    }
+
     /// Return ranges within offset and size.
     pub fn scan_range<'a>(&'a self, offset: u64, size: u64) -> Vec<Scan<&'a T>> {
         let mut last_end_offset = offset;
-        let mut last_start_offset = 0;
         let mut out = vec![];
 
         if let Some((inner_offset, (inner_size, inner_data))) =
@@ -402,7 +420,6 @@ impl<T: Debug> ByteRanger<T> {
                     data: inner_data,
                 });
                 last_end_offset = *inner_offset + *inner_size;
-                last_start_offset = *inner_offset;
             }
         }
 

@@ -14,7 +14,11 @@ pub enum CacheHandlerError {
     #[error("Downloader Error")]
     DownloaderError(#[from] DownloaderError),
     #[error("Cache mismatch - write_hard_cache: {write_hard_cache} but is_hard_cache: {is_hard_cache} for start_offset: {start_offset}")]
-    CacheMismatchError { write_hard_cache: bool, is_hard_cache: bool, start_offset: u64 },
+    CacheMismatchError {
+        write_hard_cache: bool,
+        is_hard_cache: bool,
+        start_offset: u64,
+    },
     #[error("AppendChunkError at start_offset: {start_offset}")]
     AppendChunkError { start_offset: u64 },
 }

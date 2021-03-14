@@ -9,12 +9,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use byte_ranger::ByteRanger;
 use smart_cacher::{FileSpec, ScErr, ScOk, ScResult, SmartCacher};
-use std::{
-    cmp::max,
-    collections::HashMap,
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{cmp::max, collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::sync::Mutex;
 
 #[cfg(feature = "sctest")]

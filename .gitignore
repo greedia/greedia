@@ -1,7 +1,8 @@
 /target
 /greed_db
 /greed
+/.vscode
+/*.txt
 config.toml
 settings.json
 byte-ranger/target
-todo.txt

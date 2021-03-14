@@ -22,7 +22,7 @@ use tokio::{
 mod open_file;
 use open_file::OpenFile;
 
-const MAX_CHUNK_SIZE: u64 = 100_000_000;
+const MAX_CHUNK_SIZE: u64 = 100_000;
 
 struct FilesystemCacheHandler {
     drive_id: String,
@@ -176,7 +176,6 @@ impl CacheFileHandler for FilesystemCacheFileHandler {
 
         loop {
             let bytes_read = self.read_into(&mut buf[total_bytes_read..]).await;
-            // dbg!(&bytes_read);
             if bytes_read == 0 {
                 return total_bytes_read;
             } else {
@@ -239,12 +238,10 @@ impl FilesystemCacheFileHandler {
             println!("HANDLE_READ_INTO attempt {}", i);
             match self.handle_chunk(len, &mut buf).await {
                 Reader::Data(data_read) => {
-                    dbg!(&data_read);
                     return data_read;
                 }
                 Reader::LastData(data_read) => {
                     self.current_chunk = None;
-                    dbg!(&data_read);
                     return data_read;
                 }
                 Reader::NeedsNewChunk => {
@@ -265,12 +262,10 @@ impl FilesystemCacheFileHandler {
                         "HC at {}, len {}, end_offset {}",
                         self.offset, len, read_data.end_offset
                     );
-                    dbg!(&read_data);
                     if self.offset < read_data.end_offset {
                         // If we have any data before end_offset, read that first
                         println!("simple_read");
                         let max_read_len = min(len, (read_data.end_offset - self.offset) as usize);
-                        dbg!(&max_read_len);
                         let chunk_offset = self.offset - read_data.chunk_start_offset;
                         let sr_res = Self::simple_read(
                             &mut read_data.file,
@@ -396,8 +391,6 @@ impl FilesystemCacheFileHandler {
                         // We're at the end of the previous chunk and have enough space to write
                         // And the previous chunk matches the cache type
                         // Download and append data to chunk
-                        println!("APPEND B");
-                        // dbg!(&prev_range);
                         let chunk_start_offset = prev_range.data.chunk_start_offset;
                         self.start_append_dl(&mut of, start_offset, chunk_start_offset)
                             .await
@@ -430,6 +423,7 @@ impl FilesystemCacheFileHandler {
                             if self.offset == start_offset {
                                 if let Some(prev_range) = prev_range {
                                     let chunk_start_offset = prev_range.data.chunk_start_offset;
+                                    
                                     return self
                                         .start_append_dl(&mut of, start_offset, chunk_start_offset)
                                         .await;
@@ -456,15 +450,6 @@ impl FilesystemCacheFileHandler {
                     // We're at the end of the previous chunk and have enough space to write
                     // Download and append data to chunk
                     let chunk_start_offset = data.chunk_start_offset;
-                    println!("APPEND C");
-                    dbg!(
-                        chunk_start_offset,
-                        start_offset,
-                        size,
-                        data,
-                        self.write_hard_cache,
-                        is_hard_cache
-                    );
                     self.start_append_dl(&mut of, start_offset + size, chunk_start_offset)
                         .await
                 } else {
@@ -603,7 +588,6 @@ impl FilesystemCacheFileHandler {
         len: usize,
     ) -> usize {
         if let Some(offset) = chunk_offset {
-            println!("SIMPLE_READ SEEK TO {}", offset);
             file.seek(SeekFrom::Start(offset)).await.unwrap();
         }
 
@@ -612,8 +596,6 @@ impl FilesystemCacheFileHandler {
         } else {
             // Since there's no point reading to nothing, just seek instead
             let out_off = file.seek(SeekFrom::Current(len as i64)).await.unwrap();
-            println!("SEEK E: {}", out_off);
-            dbg!(len);
             len
         }
     }
@@ -647,13 +629,11 @@ impl FilesystemCacheFileHandler {
         {
             // Update local end_offset
             // TODO: make sure end_offset and read_data.end_offset are properly handled everywhere
-            dbg!(read_data.end_offset, *end_offset);
             read_data.end_offset = *end_offset;
             if current_offset < read_data.end_offset {
                 // If we're not beyond DlStatus's end_offset, just read from disk.
                 // This happens if a different thread downloaded or read from last_bytes.
                 let max_read_len = min(len, (read_data.end_offset - current_offset) as usize);
-                dbg!(&max_read_len, current_offset, read_data.end_offset);
                 let chunk_offset = current_offset - read_data.chunk_start_offset;
                 let sr_res =
                     Self::simple_read(&mut read_data.file, Some(chunk_offset), buf, max_read_len)
@@ -795,12 +775,17 @@ impl FilesystemCacheFileHandler {
         last_revision: u64,
     ) -> Reader {
         if let Some(so) = of.get_split_offset(read_data.is_hard_cache, *end_offset, last_revision) {
-            *split_offset = so;
+            let chunk_end_offset = read_data.chunk_start_offset + MAX_CHUNK_SIZE;
+            dbg!(chunk_end_offset, *end_offset);
+            *split_offset = min(chunk_end_offset, so);
         }
 
         if *end_offset == *split_offset {
             // TODO: figure out how to move downloader to next chunk
             // Maybe needs a new Reader enum type?
+            if *end_offset == read_data.chunk_start_offset + MAX_CHUNK_SIZE {
+                println!("TODO: PUSH DOWNLOADER TO NEXT CHUNK HERE");
+            }
             return Reader::NeedsNewChunk;
         }
 
@@ -1069,6 +1054,39 @@ mod test {
                 }
             }
         }
+    }
+
+    /// Test cache chunk splitting with download
+    #[tokio::test]
+    async fn test_splitting() {
+        let d = Arc::new(TimecodeDrive {});
+
+        let file_id = r#"{"bytes_len": 65535}"#;
+        let data_id = DataIdentifier::GlobalMd5(vec![0, 0, 0, 0]);
+        let file_size = 1024u64.pow(3) * 10; // 10 GB
+
+        let keep_path = true;
+        let test_path = tempfile::tempdir().unwrap();
+        let (hard_cache_root, soft_cache_root) = if keep_path {
+            let test_path = test_path.into_path();
+            println!("Path: {}", test_path.display());
+            (test_path.join("hard_cache"), test_path.join("soft_cache"))
+        } else {
+            (
+                test_path.path().join("hard_cache"),
+                test_path.path().join("soft_cache"),
+            )
+        };
+
+        let fsch =
+            FilesystemCacheHandler::new("main".to_string(), &hard_cache_root, &soft_cache_root, d);
+
+        let mut f = fsch
+            .open_file(file_id.to_owned(), data_id.clone(), file_size, 0, false)
+            .await
+            .unwrap();
+
+        f.cache_exact(MAX_CHUNK_SIZE as usize * 3).await;
     }
 
     #[tokio::test]

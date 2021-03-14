@@ -222,7 +222,7 @@ impl FilesystemCacheFileHandler {
     /// Handle the read_into and cache_data methods
     async fn handle_read_into(&mut self, len: usize, mut buf: Option<&mut [u8]>) -> usize {
         // EOF short-circuit
-        if self.offset == self.size {
+        if self.offset == self.size || len == 0 {
             return 0;
         }
 
@@ -235,7 +235,8 @@ impl FilesystemCacheFileHandler {
         }
 
         // TODO: limit this and error if too many loops occur
-        loop {
+        for i in 0..3 {
+            println!("HANDLE_READ_INTO attempt {}", i);
             match self.handle_chunk(len, &mut buf).await {
                 Reader::Data(data_read) => {
                     dbg!(&data_read);
@@ -252,6 +253,8 @@ impl FilesystemCacheFileHandler {
                 }
             }
         }
+
+        panic!("HANDLE_INTO loop failed")
     }
 
     async fn handle_chunk(&mut self, len: usize, buf: &mut Option<&mut [u8]>) -> Reader {

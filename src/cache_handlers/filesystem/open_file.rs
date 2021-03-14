@@ -370,7 +370,6 @@ impl OpenFile {
         let receiver = Receiver::CacheReader(cache_file, source_file_end_offset);
 
         let end_offset = offset;
-        let split_offset = offset + MAX_CHUNK_SIZE;
 
         let dl_handle = Arc::new(());
 
@@ -392,6 +391,8 @@ impl OpenFile {
                 download_status: Arc::new(Mutex::new(Some(download_status))),
             },
         );
+
+        dbg!(&self.hc_chunks);
 
         let read_file = File::open(file_path).await?;
         let download_handle = DownloadHandle { dl_handle };

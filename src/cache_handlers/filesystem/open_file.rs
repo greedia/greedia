@@ -234,7 +234,6 @@ impl OpenFile {
             },
         );
 
-
         let read_file = File::open(file_path).await?;
         let download_handle = DownloadHandle { dl_handle };
 

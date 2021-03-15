@@ -704,7 +704,6 @@ impl FilesystemCacheFileHandler {
                 // If we're not beyond DlStatus's end_offset, just read from disk.
                 // This happens if a different thread downloaded or read from last_bytes.
                 let max_read_len = min(len, (read_data.end_offset - current_offset) as usize);
-                let chunk_offset = current_offset - read_data.chunk_start_offset;
                 let sr_res = Self::simple_read(&mut read_data.file, buf, max_read_len).await;
                 if sr_res >= 11 {
                     if let Some(buf) = buf {

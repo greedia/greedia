@@ -692,9 +692,6 @@ impl FilesystemCacheFileHandler {
         buf: &mut Option<&mut [u8]>,
         len: usize,
     ) -> usize {
-        // if let Some(offset) = chunk_offset {
-        //     file.seek(SeekFrom::Start(offset)).await.unwrap();
-        // }
 
         if let Some(buf) = buf {
             file.read(&mut buf[..len]).await.unwrap()

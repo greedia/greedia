@@ -698,7 +698,6 @@ impl FilesystemCacheFileHandler {
         }) = chunk.as_mut()
         {
             // Update local end_offset
-            // TODO: make sure end_offset and read_data.end_offset are properly handled everywhere
             read_data.end_offset = end_offset.load(Ordering::Acquire);
             if current_offset < read_data.end_offset {
                 // If we're not beyond DlStatus's end_offset, just read from disk.
@@ -715,11 +714,6 @@ impl FilesystemCacheFileHandler {
                         }
                     }
                 }
-                // if current_offset + (sr_res as u64) == read_data.end_offset {
-                //     Reader::LastData(sr_res)
-                // } else {
-                //     Reader::Data(sr_res)
-                // }
                 Reader::Data(sr_res)
             } else if !last_bytes.is_empty() {
                 // We're beyond end_offset, so if last_bytes is not empty, read from there.

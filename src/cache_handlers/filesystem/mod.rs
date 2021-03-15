@@ -302,14 +302,8 @@ impl FilesystemCacheFileHandler {
                         // If we have any data before end_offset, read that first
                         println!("simple_read");
                         let max_read_len = min(len, (read_data.end_offset - self.offset) as usize);
-                        let chunk_offset = self.offset - read_data.chunk_start_offset;
-                        let sr_res = Self::simple_read(
-                            &mut read_data.file,
-                            Some(chunk_offset),
-                            buf,
-                            max_read_len,
-                        )
-                        .await;
+                        let sr_res =
+                            Self::simple_read(&mut read_data.file, buf, max_read_len).await;
                         if self.offset + (sr_res as u64) == read_data.end_offset {
                             Reader::LastData(sr_res)
                         } else {
@@ -327,7 +321,7 @@ impl FilesystemCacheFileHandler {
                         // If we have any data before end_offset, read that first
                         let max_read_len = min(len, (read_data.end_offset - self.offset) as usize);
                         let sr_res =
-                            Self::simple_read(&mut read_data.file, None, buf, max_read_len).await;
+                            Self::simple_read(&mut read_data.file, buf, max_read_len).await;
                         if self.offset + (sr_res as u64) == read_data.end_offset {
                             Reader::LastData(sr_res)
                         } else {
@@ -406,11 +400,7 @@ impl FilesystemCacheFileHandler {
                                         let chunk_start_offset = prev_range.data.chunk_start_offset;
                                         if let Some(prev_download_status) = prev_download_status {
                                             return self
-                                                .transfer_dl(
-                                                    &mut of,
-                                                    prev_download_status,
-                                                    chunk_start_offset,
-                                                )
+                                                .transfer_dl(&mut of, prev_download_status)
                                                 .await;
                                         } else {
                                             return self
@@ -428,11 +418,7 @@ impl FilesystemCacheFileHandler {
                                 if self.offset == start_offset + size {
                                     if let Some(prev_download_status) = prev_download_status {
                                         return self
-                                            .transfer_dl(
-                                                &mut of,
-                                                prev_download_status,
-                                                start_offset,
-                                            )
+                                            .transfer_dl(&mut of, prev_download_status)
                                             .await;
                                     } else {
                                         return self.start_append_dl(&mut of, start_offset).await;
@@ -449,9 +435,7 @@ impl FilesystemCacheFileHandler {
                         // Download and append data to chunk
                         let chunk_start_offset = prev_range.data.chunk_start_offset;
                         if let Some(prev_download_status) = prev_download_status {
-                            return self
-                                .transfer_dl(&mut of, prev_download_status, chunk_start_offset)
-                                .await;
+                            return self.transfer_dl(&mut of, prev_download_status).await;
                         } else {
                             self.start_append_dl(&mut of, chunk_start_offset).await
                         }
@@ -487,11 +471,7 @@ impl FilesystemCacheFileHandler {
 
                                     if let Some(prev_download_status) = prev_download_status {
                                         return self
-                                            .transfer_dl(
-                                                &mut of,
-                                                prev_download_status,
-                                                chunk_start_offset,
-                                            )
+                                            .transfer_dl(&mut of, prev_download_status)
                                             .await;
                                     } else {
                                         return self
@@ -508,9 +488,7 @@ impl FilesystemCacheFileHandler {
                         } => {
                             if self.offset == start_offset + size {
                                 if let Some(prev_download_status) = prev_download_status {
-                                    return self
-                                        .transfer_dl(&mut of, prev_download_status, start_offset)
-                                        .await;
+                                    return self.transfer_dl(&mut of, prev_download_status).await;
                                 } else {
                                     return self.start_append_dl(&mut of, start_offset).await;
                                 }
@@ -526,9 +504,7 @@ impl FilesystemCacheFileHandler {
                     // Download and append data to chunk
                     let chunk_start_offset = data.chunk_start_offset;
                     if let Some(prev_download_status) = prev_download_status {
-                        return self
-                            .transfer_dl(&mut of, prev_download_status, chunk_start_offset)
-                            .await;
+                        return self.transfer_dl(&mut of, prev_download_status).await;
                     } else {
                         self.start_append_dl(&mut of, chunk_start_offset).await
                     }
@@ -569,7 +545,6 @@ impl FilesystemCacheFileHandler {
         &self,
         of: &mut OpenFile,
         prev_download_status: DownloadStatus,
-        chunk_start_offset: u64,
     ) -> CurrentChunk {
         let file_path = self.get_file_cache_chunk_path(self.write_hard_cache, self.offset);
 
@@ -686,13 +661,7 @@ impl FilesystemCacheFileHandler {
     }
 
     /// Read data from file, or ignore if we're caching.
-    async fn simple_read(
-        file: &mut File,
-        chunk_offset: Option<u64>,
-        buf: &mut Option<&mut [u8]>,
-        len: usize,
-    ) -> usize {
-
+    async fn simple_read(file: &mut File, buf: &mut Option<&mut [u8]>, len: usize) -> usize {
         if let Some(buf) = buf {
             file.read(&mut buf[..len]).await.unwrap()
         } else {
@@ -736,9 +705,7 @@ impl FilesystemCacheFileHandler {
                 // This happens if a different thread downloaded or read from last_bytes.
                 let max_read_len = min(len, (read_data.end_offset - current_offset) as usize);
                 let chunk_offset = current_offset - read_data.chunk_start_offset;
-                let sr_res =
-                    Self::simple_read(&mut read_data.file, Some(chunk_offset), buf, max_read_len)
-                        .await;
+                let sr_res = Self::simple_read(&mut read_data.file, buf, max_read_len).await;
                 if sr_res >= 11 {
                     if let Some(buf) = buf {
                         if let Some(off) = timecode_rs::read_offset(buf) {

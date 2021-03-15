@@ -50,11 +50,15 @@ impl DownloaderDrive for TimecodeDrive {
             .saturating_sub(offset);
         let bytes_len = params.bytes_len.unwrap_or(1024);
 
-        Ok(Box::new(TimecodeBytesStream {
+        let stream = Box::new(TimecodeBytesStream {
             inner: timecode_file,
             bytes_len,
             data_left,
-        }))
+        });
+
+        println!("TIMECODESTREAM NEW  {:p}", &*stream);
+
+        Ok(stream)
     }
 }
 
@@ -85,5 +89,11 @@ impl Stream for TimecodeBytesStream {
         self.data_left -= r_len as u64;
 
         Poll::Ready(Some(Ok(bytes_mut.freeze())))
+    }
+}
+
+impl Drop for TimecodeBytesStream {
+    fn drop(&mut self) {
+        println!("TIMECODESTREAM DROP {:p}", self);
     }
 }

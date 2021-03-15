@@ -7,7 +7,7 @@ use std::{
     path::Path,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc,
+        Arc, Weak,
     },
 };
 use tokio::{
@@ -94,8 +94,6 @@ impl OpenFile {
         offset: u64,
         cache: Cache,
     ) -> (GetRange<&'a ChunkData>, bool) {
-        dbg!(&self.hc_chunks);
-        dbg!(&self.sc_chunks);
         match cache {
             Cache::Hard => (self.hc_chunks.get_range_at(offset), true),
             Cache::Any => {
@@ -213,16 +211,14 @@ impl OpenFile {
             .unwrap();
 
         let receiver = Receiver::Downloader(downloader);
-        let dl_handle = Arc::new(());
 
         self.revision += 1;
-        let download_status = DownloadStatus::new(
+        let download_status = Arc::new(Mutex::new(Some(DownloadStatus::new(
             receiver,
             write_file,
             split_offset,
             self.revision,
-            dl_handle.clone(),
-        );
+        ))));
 
         if write_hard_cache {
             &mut self.hc_chunks
@@ -235,12 +231,14 @@ impl OpenFile {
             ChunkData {
                 chunk_start_offset: offset,
                 end_offset,
-                download_status: Arc::new(Mutex::new(Some(download_status))),
+                download_status: Arc::downgrade(&download_status),
             },
         );
 
         let read_file = File::open(file_path).await?;
-        let download_handle = DownloadHandle { dl_handle };
+        let download_handle = DownloadHandle {
+            dl_handle: download_status,
+        };
 
         Ok((read_file, download_handle))
     }
@@ -285,17 +283,15 @@ impl OpenFile {
         }
 
         let write_file = File::create(file_path).await?;
-        let dl_handle = Arc::new(());
 
         self.revision += 1;
 
-        let download_status = DownloadStatus::from_prev(
+        let download_status = Arc::new(Mutex::new(Some(DownloadStatus::from_prev(
             prev_download_status,
             write_file,
             split_offset,
             self.revision,
-            dl_handle.clone(),
-        );
+        ))));
 
         if write_hard_cache {
             &mut self.hc_chunks
@@ -308,12 +304,14 @@ impl OpenFile {
             ChunkData {
                 chunk_start_offset: offset,
                 end_offset,
-                download_status: Arc::new(Mutex::new(Some(download_status))),
+                download_status: Arc::downgrade(&download_status),
             },
         );
 
         let read_file = File::open(file_path).await?;
-        let download_handle = DownloadHandle { dl_handle };
+        let download_handle = DownloadHandle {
+            dl_handle: download_status,
+        };
 
         Ok((read_file, download_handle))
     }
@@ -374,25 +372,24 @@ impl OpenFile {
 
             let receiver = Receiver::Downloader(downloader);
 
-            let dl_handle = Arc::new(());
-
-            let download_status = DownloadStatus::new(
+            let download_status = Arc::new(Mutex::new(Some(DownloadStatus::new(
                 receiver,
                 write_file,
                 split_offset,
                 self.revision,
-                dl_handle.clone(),
-            );
+            ))));
 
             // KTODO: remove if confident
             assert_eq!(start_offset, cache_data.end_offset.load(Ordering::Acquire));
-            cache_data.download_status = Arc::new(Mutex::new(Some(download_status)));
+            cache_data.download_status = Arc::downgrade(&download_status);
 
             let mut read_file = File::open(file_path).await?;
 
             read_file.seek(SeekFrom::End(0)).await?;
 
-            let download_handle = DownloadHandle { dl_handle };
+            let download_handle = DownloadHandle {
+                dl_handle: download_status,
+            };
 
             Ok((read_file, download_handle))
         } else {
@@ -436,16 +433,13 @@ impl OpenFile {
 
         let end_offset = Arc::new(AtomicU64::new(offset));
 
-        let dl_handle = Arc::new(());
-
         self.revision += 1;
-        let download_status = DownloadStatus::new(
+        let download_status = Arc::new(Mutex::new(Some(DownloadStatus::new(
             receiver,
             write_file,
             split_offset,
             self.revision,
-            dl_handle.clone(),
-        );
+        ))));
 
         self.hc_chunks.add_range(
             offset,
@@ -453,12 +447,14 @@ impl OpenFile {
             ChunkData {
                 chunk_start_offset: offset,
                 end_offset,
-                download_status: Arc::new(Mutex::new(Some(download_status))),
+                download_status: Arc::downgrade(&download_status),
             },
         );
 
         let read_file = File::open(file_path).await?;
-        let download_handle = DownloadHandle { dl_handle };
+        let download_handle = DownloadHandle {
+            dl_handle: download_status,
+        };
 
         Ok((read_file, download_handle))
     }
@@ -479,7 +475,7 @@ impl OpenFile {
         &self,
         hard_cache: bool,
         chunk_start_offset: u64,
-    ) -> (Arc<AtomicU64>, Arc<Mutex<Option<DownloadStatus>>>) {
+    ) -> (Arc<AtomicU64>, Option<Arc<Mutex<Option<DownloadStatus>>>>) {
         let chunk = if hard_cache {
             &self.hc_chunks
         } else {
@@ -488,7 +484,7 @@ impl OpenFile {
         .get_data(chunk_start_offset)
         .unwrap();
 
-        (chunk.end_offset.clone(), chunk.download_status.clone())
+        (chunk.end_offset.clone(), chunk.download_status.upgrade())
     }
 
     /// Get a new split_offset value, if last_revision does not match OpenFile's revision.
@@ -534,7 +530,7 @@ impl OpenFile {
                         ChunkData {
                             chunk_start_offset: offset,
                             end_offset,
-                            download_status: Arc::new(Mutex::new(None)),
+                            download_status: Weak::new(),
                         },
                     );
                 }
@@ -573,7 +569,7 @@ pub struct ChunkData {
     /// Status, if a chunk is in the middle of downloading.
     // The Mutex is needed here due to DownloadStatus not being clone-able.
     // The Option is inner because we want the same data between byte-ranger range splits.
-    pub download_status: Arc<Mutex<Option<DownloadStatus>>>,
+    pub download_status: Weak<Mutex<Option<DownloadStatus>>>,
 }
 
 pub enum Receiver {
@@ -598,8 +594,6 @@ pub struct DownloadStatus {
     pub split_offset: u64,
     /// Last revision that split_offset has been updated.
     pub last_revision: u64,
-    /// Reference count of how many threads are using this downloader.
-    pub dl_handle: Arc<()>,
 }
 
 impl fmt::Debug for DownloadStatus {
@@ -615,7 +609,6 @@ impl DownloadStatus {
         write_file: File,
         split_offset: u64,
         current_revision: u64,
-        dl_handle: Arc<()>,
     ) -> DownloadStatus {
         let last_bytes = Bytes::new();
         DownloadStatus {
@@ -624,7 +617,6 @@ impl DownloadStatus {
             write_file,
             split_offset,
             last_revision: current_revision,
-            dl_handle,
         }
     }
 
@@ -633,7 +625,6 @@ impl DownloadStatus {
         write_file: File,
         split_offset: u64,
         current_revision: u64,
-        dl_handle: Arc<()>,
     ) -> DownloadStatus {
         DownloadStatus {
             receiver: prev.receiver,
@@ -641,7 +632,6 @@ impl DownloadStatus {
             write_file,
             split_offset,
             last_revision: current_revision,
-            dl_handle,
         }
     }
 }
@@ -649,5 +639,5 @@ impl DownloadStatus {
 /// Handle that holds Arc pointer to nothing.
 /// Used to close downloaders when all threads are finished.
 pub struct DownloadHandle {
-    dl_handle: Arc<()>,
+    pub dl_handle: Arc<Mutex<Option<DownloadStatus>>>,
 }

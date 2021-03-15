@@ -180,8 +180,12 @@ pub fn validate_offset(offset: u64, buf: &[u8]) -> bool {
                     buf_num,
                     buf_num*4,
                 );
-                println!("Before: {:?}", &buf[max(0, buf_offset-12)..buf_offset]);
-                println!("After:  {:?}", &buf[buf_offset+4..min(buf_offset+4+12, buf.len())]);
+                if buf_offset > 12 {
+                    println!("Before: {:?}", &buf[max(0, buf_offset - 12)..buf_offset]);
+                }
+                if buf_offset + 12 < buf.len() {
+                    println!("After:  {:?}", &buf[buf_offset+4..min(buf_offset+4+12, buf.len())]);
+                }
                 return false;
             }
 

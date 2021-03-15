@@ -1,16 +1,26 @@
 // Filesystem cache handler
 
 use std::{
-    cmp::min, collections::HashMap, io::SeekFrom, path::Path, path::PathBuf, sync::Arc, sync::Weak,
+    cmp::min,
+    collections::HashMap,
+    io::SeekFrom,
+    mem,
+    path::Path,
+    path::PathBuf,
+    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Weak,
+    },
 };
 
-use self::open_file::{Cache, DownloadHandle, DownloadStatus, Receiver};
+use self::open_file::{Cache, ChunkData, DownloadHandle, DownloadStatus, Receiver};
 
 use super::{CacheDriveHandler, CacheFileHandler, CacheHandlerError};
 use crate::downloaders::DownloaderDrive;
 use crate::types::DataIdentifier;
 use async_trait::async_trait;
-use byte_ranger::GetRange;
+use byte_ranger::{GetRange, PrevRange};
 use bytes::{Bytes, BytesMut};
 use tokio::{
     fs::File,
@@ -68,6 +78,11 @@ enum Reader {
     Data(usize),
     /// Regular data has been returned, but current chunk needs to be reset.
     LastData(usize),
+    /// DownloadStatus in chunk disappeared but there's some data left,
+    /// so downgrade to a reader until we get to the next chunk.
+    DowngradeToReader,
+    /// Continue downloading a new chunk from one that reached MAX_CHUNK_SIZE.
+    ContinueDownloading(Arc<Mutex<Option<DownloadStatus>>>),
     /// No data could be found, but we're not at EOF, so current chunk needs
     /// to be reset.
     NeedsNewChunk,
@@ -229,14 +244,16 @@ impl FilesystemCacheFileHandler {
 
         if self.current_chunk.is_none() {
             // We're not in the middle of reading a chunk, so get a new one
-            let new_chunk = self.new_current_chunk().await;
+            let new_chunk = self.new_current_chunk(None).await;
             self.current_chunk = Some(new_chunk);
         }
 
         // TODO: limit this and error if too many loops occur
         for i in 0..3 {
             println!("HANDLE_READ_INTO attempt {}", i);
-            match self.handle_chunk(len, &mut buf).await {
+            let handle_chunk_res = self.handle_chunk(len, &mut buf).await;
+            dbg!(&handle_chunk_res);
+            match handle_chunk_res {
                 Reader::Data(data_read) => {
                     return data_read;
                 }
@@ -244,8 +261,26 @@ impl FilesystemCacheFileHandler {
                     self.current_chunk = None;
                     return data_read;
                 }
+                Reader::DowngradeToReader => {
+                    let mut new_chunk = None;
+                    mem::swap(&mut new_chunk, &mut self.current_chunk);
+                    if let Some(CurrentChunk::Downloading { read_data, _dl }) = new_chunk {
+                        self.current_chunk = Some(CurrentChunk::Reading { read_data });
+                    } else {
+                        // We aren't a downloader, so swap back.
+                        mem::swap(&mut new_chunk, &mut self.current_chunk);
+                    };
+                }
                 Reader::NeedsNewChunk => {
-                    let new_chunk = self.new_current_chunk().await;
+                    let new_chunk = self.new_current_chunk(None).await;
+                    self.current_chunk = Some(new_chunk);
+                }
+                Reader::ContinueDownloading(prev_download_status) => {
+                    println!("CONTINUED DOWNLOADING");
+                    let mut dl_status = prev_download_status.lock().await;
+                    let mut new_dl_status = None;
+                    mem::swap(&mut *dl_status, &mut new_dl_status);
+                    let new_chunk = self.new_current_chunk(new_dl_status).await;
                     self.current_chunk = Some(new_chunk);
                 }
             }
@@ -258,6 +293,7 @@ impl FilesystemCacheFileHandler {
         if let Some(ref mut current_chunk) = self.current_chunk {
             let data_read = match current_chunk {
                 CurrentChunk::Downloading { read_data, _dl } => {
+                    //read_data.end_offset = current_chunk.;
                     println!(
                         "HC at {}, len {}, end_offset {}",
                         self.offset, len, read_data.end_offset
@@ -305,9 +341,10 @@ impl FilesystemCacheFileHandler {
             };
 
             if let Reader::Data(data_read) | Reader::LastData(data_read) = data_read {
+                println!("End read {}, {}", self.offset, data_read);
                 self.offset += data_read as u64;
+                println!("self.offset is now {}", self.offset);
             }
-            // dbg!(&data_read);
             data_read
         } else {
             unreachable!("self.current_chunk cannot be None here");
@@ -315,11 +352,16 @@ impl FilesystemCacheFileHandler {
     }
 
     /// Figure out the current chunk based on our offset.
-    async fn new_current_chunk(&mut self) -> CurrentChunk {
+    async fn new_current_chunk(
+        &mut self,
+        prev_download_status: Option<DownloadStatus>,
+    ) -> CurrentChunk {
         let mut of = self.handle.lock().await;
+        // TODO: could probably switch Cache::Any to Cache::Hard when self.write_hard_cache is true
+        // then simplify this function a bunch
         let (chunk, is_hard_cache) = of.get_chunk_at(self.offset, Cache::Any);
 
-        dbg!(&chunk);
+        dbg!(self.offset, prev_download_status.is_some(), &chunk);
 
         // Where are we?
         match chunk {
@@ -362,13 +404,19 @@ impl FilesystemCacheFileHandler {
                                 if self.offset == start_offset {
                                     if let Some(prev_range) = prev_range {
                                         let chunk_start_offset = prev_range.data.chunk_start_offset;
-                                        return self
-                                            .start_append_dl(
-                                                &mut of,
-                                                start_offset,
-                                                chunk_start_offset,
-                                            )
-                                            .await;
+                                        if let Some(prev_download_status) = prev_download_status {
+                                            return self
+                                                .transfer_dl(
+                                                    &mut of,
+                                                    prev_download_status,
+                                                    chunk_start_offset,
+                                                )
+                                                .await;
+                                        } else {
+                                            return self
+                                                .start_append_dl(&mut of, chunk_start_offset)
+                                                .await;
+                                        }
                                     }
                                 }
                             }
@@ -378,9 +426,17 @@ impl FilesystemCacheFileHandler {
                                 data: _,
                             } => {
                                 if self.offset == start_offset + size {
-                                    return self
-                                        .start_append_dl(&mut of, start_offset + size, start_offset)
-                                        .await;
+                                    if let Some(prev_download_status) = prev_download_status {
+                                        return self
+                                            .transfer_dl(
+                                                &mut of,
+                                                prev_download_status,
+                                                start_offset,
+                                            )
+                                            .await;
+                                    } else {
+                                        return self.start_append_dl(&mut of, start_offset).await;
+                                    }
                                 }
                             }
                             _ => {}
@@ -392,8 +448,13 @@ impl FilesystemCacheFileHandler {
                         // And the previous chunk matches the cache type
                         // Download and append data to chunk
                         let chunk_start_offset = prev_range.data.chunk_start_offset;
-                        self.start_append_dl(&mut of, start_offset, chunk_start_offset)
-                            .await
+                        if let Some(prev_download_status) = prev_download_status {
+                            return self
+                                .transfer_dl(&mut of, prev_download_status, chunk_start_offset)
+                                .await;
+                        } else {
+                            self.start_append_dl(&mut of, chunk_start_offset).await
+                        }
                     } else {
                         // We're not at the end of the previous chunk, but have space to write
                         // Start downloading new chunk
@@ -423,10 +484,20 @@ impl FilesystemCacheFileHandler {
                             if self.offset == start_offset {
                                 if let Some(prev_range) = prev_range {
                                     let chunk_start_offset = prev_range.data.chunk_start_offset;
-                                    
-                                    return self
-                                        .start_append_dl(&mut of, start_offset, chunk_start_offset)
-                                        .await;
+
+                                    if let Some(prev_download_status) = prev_download_status {
+                                        return self
+                                            .transfer_dl(
+                                                &mut of,
+                                                prev_download_status,
+                                                chunk_start_offset,
+                                            )
+                                            .await;
+                                    } else {
+                                        return self
+                                            .start_append_dl(&mut of, chunk_start_offset)
+                                            .await;
+                                    }
                                 }
                             }
                         }
@@ -436,9 +507,13 @@ impl FilesystemCacheFileHandler {
                             data: _,
                         } => {
                             if self.offset == start_offset + size {
-                                return self
-                                    .start_append_dl(&mut of, start_offset + size, start_offset)
-                                    .await;
+                                if let Some(prev_download_status) = prev_download_status {
+                                    return self
+                                        .transfer_dl(&mut of, prev_download_status, start_offset)
+                                        .await;
+                                } else {
+                                    return self.start_append_dl(&mut of, start_offset).await;
+                                }
                             }
                         }
                         _ => {}
@@ -447,11 +522,16 @@ impl FilesystemCacheFileHandler {
                 } else if self.offset == start_offset + size
                     && self.write_hard_cache == is_hard_cache
                 {
-                    // We're at the end of the previous chunk and have enough space to write
+                    // We're at the end of the previous chunk
                     // Download and append data to chunk
                     let chunk_start_offset = data.chunk_start_offset;
-                    self.start_append_dl(&mut of, start_offset + size, chunk_start_offset)
-                        .await
+                    if let Some(prev_download_status) = prev_download_status {
+                        return self
+                            .transfer_dl(&mut of, prev_download_status, chunk_start_offset)
+                            .await;
+                    } else {
+                        self.start_append_dl(&mut of, chunk_start_offset).await
+                    }
                 } else {
                     // We're not at the end of the previous chunk, but have space to write
                     // Start downloading new chunk
@@ -483,26 +563,20 @@ impl FilesystemCacheFileHandler {
         CurrentChunk::Downloading { read_data, _dl: dl }
     }
 
-    /// Start a download, appending to an existing chunk.
-    ///
-    /// start_offset: Where to start downloading from (i.e. end of previous chunk)
-    ///
-    /// size: Size of previous chunk
-    ///
-    /// chunk_start_offset: Where the previous chunk starts
-    async fn start_append_dl(
+    /// Create a new chunk from previous download, if possible.
+    /// If previous chunk's DownloadStatus is none, just create a new download.
+    async fn transfer_dl(
         &self,
         of: &mut OpenFile,
-        start_offset: u64,
+        prev_download_status: DownloadStatus,
         chunk_start_offset: u64,
     ) -> CurrentChunk {
-        // println!("start_append_dl");
-        let file_path = self.get_file_cache_chunk_path(self.write_hard_cache, chunk_start_offset);
+        let file_path = self.get_file_cache_chunk_path(self.write_hard_cache, self.offset);
 
         let (file, dl) = of
-            .append_download_chunk(
-                chunk_start_offset,
-                start_offset,
+            .start_transfer_chunk(
+                self.offset,
+                prev_download_status,
                 self.write_hard_cache,
                 &file_path,
             )
@@ -511,7 +585,38 @@ impl FilesystemCacheFileHandler {
 
         let read_data = ReadData {
             file,
-            end_offset: start_offset,
+            end_offset: self.offset,
+            chunk_start_offset: self.offset,
+            is_hard_cache: self.write_hard_cache,
+        };
+
+        CurrentChunk::Downloading { read_data, _dl: dl }
+    }
+
+    /// Start a download, appending to an existing chunk.
+    ///
+    /// start_offset: Where to start downloading from (i.e. end of previous chunk)
+    ///
+    /// size: Size of previous chunk
+    ///
+    /// chunk_start_offset: Where the previous chunk starts
+    async fn start_append_dl(&self, of: &mut OpenFile, chunk_start_offset: u64) -> CurrentChunk {
+        // println!("start_append_dl");
+        let file_path = self.get_file_cache_chunk_path(self.write_hard_cache, chunk_start_offset);
+
+        let (file, dl) = of
+            .append_download_chunk(
+                chunk_start_offset,
+                self.offset,
+                self.write_hard_cache,
+                &file_path,
+            )
+            .await
+            .unwrap();
+
+        let read_data = ReadData {
+            file,
+            end_offset: self.offset,
             chunk_start_offset,
             is_hard_cache: self.write_hard_cache,
         };
@@ -587,15 +692,15 @@ impl FilesystemCacheFileHandler {
         buf: &mut Option<&mut [u8]>,
         len: usize,
     ) -> usize {
-        if let Some(offset) = chunk_offset {
-            file.seek(SeekFrom::Start(offset)).await.unwrap();
-        }
+        // if let Some(offset) = chunk_offset {
+        //     file.seek(SeekFrom::Start(offset)).await.unwrap();
+        // }
 
         if let Some(buf) = buf {
             file.read(&mut buf[..len]).await.unwrap()
         } else {
             // Since there's no point reading to nothing, just seek instead
-            let out_off = file.seek(SeekFrom::Current(len as i64)).await.unwrap();
+            file.seek(SeekFrom::Current(len as i64)).await.unwrap();
             len
         }
     }
@@ -614,14 +719,13 @@ impl FilesystemCacheFileHandler {
         len: usize,
         current_offset: u64,
     ) -> Reader {
-        let chunk_mutex =
+        let (end_offset, chunk_mutex) =
             of.get_download_status(read_data.is_hard_cache, read_data.chunk_start_offset);
         let mut chunk = chunk_mutex.lock().await;
         if let Some(DownloadStatus {
             receiver,
             last_bytes,
             write_file,
-            end_offset,
             split_offset,
             last_revision,
             dl_handle,
@@ -629,7 +733,7 @@ impl FilesystemCacheFileHandler {
         {
             // Update local end_offset
             // TODO: make sure end_offset and read_data.end_offset are properly handled everywhere
-            read_data.end_offset = *end_offset;
+            read_data.end_offset = end_offset.load(Ordering::Acquire);
             if current_offset < read_data.end_offset {
                 // If we're not beyond DlStatus's end_offset, just read from disk.
                 // This happens if a different thread downloaded or read from last_bytes.
@@ -681,7 +785,7 @@ impl FilesystemCacheFileHandler {
                                 Reader::NeedsNewChunk
                             } else {
                                 *last_bytes = next_chunk;
-                                // println!("rflb1");
+                                println!("rflb1");
                                 Self::read_from_last_bytes(
                                     read_data,
                                     of,
@@ -747,9 +851,18 @@ impl FilesystemCacheFileHandler {
         } else {
             // There is no DlStatus in this chunk, which means we're not downloading.
             // This most likely means the chunk was split, and the DlStatus is in the next chunk.
-
-            // We need to get a new chunk.
-            Reader::NeedsNewChunk
+            let cur_end_offset = end_offset.load(Ordering::Acquire);
+            if cur_end_offset > read_data.end_offset {
+                // This chunk has finished downloading, but there's more we can read.
+                let off1 = read_data.file.seek(SeekFrom::Current(0)).await.unwrap();
+                let flen = read_data.file.metadata().await.unwrap().len();
+                dbg!(cur_end_offset, &read_data, current_offset, off1, flen);
+                read_data.end_offset = cur_end_offset;
+                Reader::DowngradeToReader
+            } else {
+                // We need to get a new chunk.
+                Reader::NeedsNewChunk
+            }
         }
     }
 
@@ -768,28 +881,32 @@ impl FilesystemCacheFileHandler {
         // Cache output file.
         write_file: &mut File,
         // The current end offset of the write_file (which gets updated as more gets written).
-        end_offset: &mut u64,
+        end_offset: Arc<AtomicU64>,
         // The offset we're able to write to before we have to split the chunk, either due to
         // MAX_CHUNK_SIZE, or another chunk.
         split_offset: &mut u64,
         last_revision: u64,
     ) -> Reader {
-        if let Some(so) = of.get_split_offset(read_data.is_hard_cache, *end_offset, last_revision) {
+        let cur_end_offset = end_offset.load(Ordering::Acquire);
+        if let Some(so) =
+            of.get_split_offset(read_data.is_hard_cache, cur_end_offset, last_revision)
+        {
             let chunk_end_offset = read_data.chunk_start_offset + MAX_CHUNK_SIZE;
-            dbg!(chunk_end_offset, *end_offset);
             *split_offset = min(chunk_end_offset, so);
         }
 
-        if *end_offset == *split_offset {
-            // TODO: figure out how to move downloader to next chunk
-            // Maybe needs a new Reader enum type?
-            if *end_offset == read_data.chunk_start_offset + MAX_CHUNK_SIZE {
-                println!("TODO: PUSH DOWNLOADER TO NEXT CHUNK HERE");
+        if cur_end_offset == *split_offset {
+            if cur_end_offset == read_data.chunk_start_offset + MAX_CHUNK_SIZE {
+                let (_, prev_download_status) =
+                    of.get_download_status(read_data.is_hard_cache, read_data.chunk_start_offset);
+                println!("CONTINUE DOWNLOADING {}", cur_end_offset);
+                return Reader::ContinueDownloading(prev_download_status);
+            } else {
+                return Reader::NeedsNewChunk;
             }
-            return Reader::NeedsNewChunk;
         }
 
-        let split_read = *split_offset - *end_offset;
+        let split_read = *split_offset - cur_end_offset;
         let split_len = min(split_read as usize, len);
         let bytes_split_len = min(split_len, last_bytes.len());
         let from_last_bytes = last_bytes.split_to(bytes_split_len);
@@ -797,13 +914,22 @@ impl FilesystemCacheFileHandler {
         // Write data to cache file.
         write_file.write_all(&from_last_bytes).await.unwrap();
         write_file.flush().await.unwrap();
+
+        // Update end_offset.
         read_data.end_offset += from_last_bytes.len() as u64;
-        *end_offset = read_data.end_offset;
+        end_offset.store(read_data.end_offset, Ordering::Release);
 
         // If reading and not caching, also write data out to buf.
         if let Some(buf) = buf {
             buf[..from_last_bytes.len()].copy_from_slice(&from_last_bytes);
         }
+
+        // Advance our reader file handle.
+        read_data
+            .file
+            .seek(SeekFrom::Current(from_last_bytes.len() as i64))
+            .await
+            .unwrap();
 
         // Extend byte ranger to new length, so new threads know about
         // the newly-added data.
@@ -984,7 +1110,7 @@ mod test {
         }
 
         for action in actions {
-            println!("ACTION: {:?}", action);
+            println!("\n\n\n\n\n\nACTION: {:?}", action);
             match action {
                 TestAction::ReopenAt {
                     file,

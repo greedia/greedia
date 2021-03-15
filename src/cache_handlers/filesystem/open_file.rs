@@ -5,7 +5,10 @@ use std::{
     fmt,
     io::SeekFrom,
     path::Path,
-    sync::{atomic::AtomicU64, Arc},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
 use tokio::{
     fs::DirEntry,
@@ -83,7 +86,7 @@ impl OpenFile {
 
     /// Get the range or gap at a specific offset.
     ///
-    /// cache: Which cache to get chunk from. If AnyCache, check hard_cache then soft_cache.
+    /// cache: Which cache to get chunk from. If Any, check hard_cache then soft_cache.
     ///
     /// Returns chunk data, as well as a bool that's true if the chunk is in hard_cache, or false if in soft_cache.
     pub fn get_chunk_at<'a>(
@@ -91,6 +94,8 @@ impl OpenFile {
         offset: u64,
         cache: Cache,
     ) -> (GetRange<&'a ChunkData>, bool) {
+        dbg!(&self.hc_chunks);
+        dbg!(&self.sc_chunks);
         match cache {
             Cache::Hard => (self.hc_chunks.get_range_at(offset), true),
             Cache::Any => {
@@ -192,7 +197,7 @@ impl OpenFile {
         } else {
             offset + MAX_CHUNK_SIZE
         };
-        let end_offset = offset;
+        let end_offset = Arc::new(AtomicU64::new(offset));
 
         let parent = file_path.parent().unwrap();
         if !parent.exists() {
@@ -214,7 +219,6 @@ impl OpenFile {
         let download_status = DownloadStatus::new(
             receiver,
             write_file,
-            end_offset,
             split_offset,
             self.revision,
             dl_handle.clone(),
@@ -230,6 +234,80 @@ impl OpenFile {
             0,
             ChunkData {
                 chunk_start_offset: offset,
+                end_offset,
+                download_status: Arc::new(Mutex::new(Some(download_status))),
+            },
+        );
+
+        let read_file = File::open(file_path).await?;
+        let download_handle = DownloadHandle { dl_handle };
+
+        Ok((read_file, download_handle))
+    }
+
+    /// Use this to start a new chunk by stealing the downloader from the previous chunk, if possible.
+    /// If previous chunk is not adjacent or has no downloader, start a new download instead.
+    ///
+    /// offset: Where to start the new download chunk.
+    ///
+    /// write_hard_cache: Whether or not this is writing to the hard cache.
+    ///
+    /// file_path: Path to write file.
+    pub async fn start_transfer_chunk(
+        &mut self,
+        offset: u64,
+        prev_download_status: DownloadStatus,
+        write_hard_cache: bool,
+        file_path: &Path,
+    ) -> Result<(File, DownloadHandle), CacheHandlerError> {
+        println!("TRANSFER DL {}", offset);
+
+        let next_chunk = self.get_next_chunk(
+            offset,
+            if write_hard_cache {
+                Cache::Hard
+            } else {
+                Cache::Any
+            },
+        );
+
+        // Stop downloading at MAX_CHUNK_SIZE or next chunk offset, whichever comes first
+        let split_offset = if let Some(next_chunk) = next_chunk {
+            min(next_chunk, offset + MAX_CHUNK_SIZE)
+        } else {
+            offset + MAX_CHUNK_SIZE
+        };
+        let end_offset = Arc::new(AtomicU64::new(offset));
+
+        let parent = file_path.parent().unwrap();
+        if !parent.exists() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+
+        let write_file = File::create(file_path).await?;
+        let dl_handle = Arc::new(());
+
+        self.revision += 1;
+
+        let download_status = DownloadStatus::from_prev(
+            prev_download_status,
+            write_file,
+            split_offset,
+            self.revision,
+            dl_handle.clone(),
+        );
+
+        if write_hard_cache {
+            &mut self.hc_chunks
+        } else {
+            &mut self.sc_chunks
+        }
+        .add_range(
+            offset,
+            0,
+            ChunkData {
+                chunk_start_offset: offset,
+                end_offset,
                 download_status: Arc::new(Mutex::new(Some(download_status))),
             },
         );
@@ -285,7 +363,7 @@ impl OpenFile {
             let mut write_file = OpenOptions::new().append(true).open(file_path).await?;
 
             // Seek to proper offset, relative to chunk's start offset.
-            let off1 = write_file.seek(SeekFrom::End(0)).await?;
+            write_file.seek(SeekFrom::End(0)).await?;
 
             // Create a downloader
             let downloader = self
@@ -301,17 +379,18 @@ impl OpenFile {
             let download_status = DownloadStatus::new(
                 receiver,
                 write_file,
-                start_offset,
                 split_offset,
                 self.revision,
                 dl_handle.clone(),
             );
 
+            // KTODO: remove if confident
+            assert_eq!(start_offset, cache_data.end_offset.load(Ordering::Acquire));
             cache_data.download_status = Arc::new(Mutex::new(Some(download_status)));
 
             let mut read_file = File::open(file_path).await?;
 
-            let off2 = read_file.seek(SeekFrom::End(0)).await?;
+            read_file.seek(SeekFrom::End(0)).await?;
 
             let download_handle = DownloadHandle { dl_handle };
 
@@ -355,7 +434,7 @@ impl OpenFile {
 
         let receiver = Receiver::CacheReader(cache_file, source_file_end_offset);
 
-        let end_offset = offset;
+        let end_offset = Arc::new(AtomicU64::new(offset));
 
         let dl_handle = Arc::new(());
 
@@ -363,7 +442,6 @@ impl OpenFile {
         let download_status = DownloadStatus::new(
             receiver,
             write_file,
-            end_offset,
             split_offset,
             self.revision,
             dl_handle.clone(),
@@ -374,6 +452,7 @@ impl OpenFile {
             0,
             ChunkData {
                 chunk_start_offset: offset,
+                end_offset,
                 download_status: Arc::new(Mutex::new(Some(download_status))),
             },
         );
@@ -395,12 +474,12 @@ impl OpenFile {
         self.revision += 1;
     }
 
-    /// Get the DownloadStatus of a particular chunk.
+    /// Get the end_offset and DownloadStatus of a particular chunk.
     pub fn get_download_status(
         &self,
         hard_cache: bool,
         chunk_start_offset: u64,
-    ) -> Arc<Mutex<Option<DownloadStatus>>> {
+    ) -> (Arc<AtomicU64>, Arc<Mutex<Option<DownloadStatus>>>) {
         let chunk = if hard_cache {
             &self.hc_chunks
         } else {
@@ -409,7 +488,7 @@ impl OpenFile {
         .get_data(chunk_start_offset)
         .unwrap();
 
-        chunk.download_status.clone()
+        (chunk.end_offset.clone(), chunk.download_status.clone())
     }
 
     /// Get a new split_offset value, if last_revision does not match OpenFile's revision.
@@ -448,11 +527,13 @@ impl OpenFile {
                         // Ignore zero-length chunks
                         continue;
                     }
+                    let end_offset = Arc::new(AtomicU64::new(offset + len));
                     br.add_range(
                         offset,
                         len,
                         ChunkData {
                             chunk_start_offset: offset,
+                            end_offset,
                             download_status: Arc::new(Mutex::new(None)),
                         },
                     );
@@ -487,6 +568,8 @@ pub struct ChunkData {
     ///
     /// This is necessary because byte_ranger can potentially split chunks.
     pub chunk_start_offset: u64,
+    /// How far we've written downloaded bytes to disk.
+    pub end_offset: Arc<AtomicU64>,
     /// Status, if a chunk is in the middle of downloading.
     // The Mutex is needed here due to DownloadStatus not being clone-able.
     // The Option is inner because we want the same data between byte-ranger range splits.
@@ -511,8 +594,6 @@ pub struct DownloadStatus {
     pub last_bytes: Bytes,
     /// File handle used to write to disk.
     pub write_file: File,
-    /// How far we've written downloaded bytes to disk.
-    pub end_offset: u64,
     /// How far we can write before we need to split the chunk file into a new one.
     pub split_offset: u64,
     /// Last revision that split_offset has been updated.
@@ -524,11 +605,7 @@ pub struct DownloadStatus {
 impl fmt::Debug for DownloadStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // TODO: fix to have more info
-        write!(
-            f,
-            "DownloadStatus(end_offset: {}, split_offset: {})",
-            self.end_offset, self.split_offset
-        )
+        write!(f, "DownloadStatus(split_offset: {})", self.split_offset)
     }
 }
 
@@ -536,7 +613,6 @@ impl DownloadStatus {
     pub fn new(
         receiver: Receiver,
         write_file: File,
-        end_offset: u64,
         split_offset: u64,
         current_revision: u64,
         dl_handle: Arc<()>,
@@ -546,7 +622,23 @@ impl DownloadStatus {
             receiver,
             last_bytes,
             write_file,
-            end_offset,
+            split_offset,
+            last_revision: current_revision,
+            dl_handle,
+        }
+    }
+
+    pub fn from_prev(
+        prev: DownloadStatus,
+        write_file: File,
+        split_offset: u64,
+        current_revision: u64,
+        dl_handle: Arc<()>,
+    ) -> DownloadStatus {
+        DownloadStatus {
+            receiver: prev.receiver,
+            last_bytes: prev.last_bytes,
+            write_file,
             split_offset,
             last_revision: current_revision,
             dl_handle,
@@ -559,19 +651,3 @@ impl DownloadStatus {
 pub struct DownloadHandle {
     dl_handle: Arc<()>,
 }
-
-// /// When a download is started, give this handle to the reader.
-// pub struct DownloadHandle {
-//     progress_channel: broadcast::Sender<u64>,
-//     downloader: Box<dyn Stream<Item = Result<Bytes, DownloaderError>> + Send + Unpin>,
-// }
-
-// impl DownloadHandle {
-//     pub async fn get_next_bytes(&mut self) -> Result<Option<Bytes>, CacheHandlerError> {
-//         self.downloader
-//             .next()
-//             .await
-//             .transpose()
-//             .map_err(|e| e.into())
-//     }
-// }

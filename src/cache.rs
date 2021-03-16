@@ -129,9 +129,10 @@ impl Cache {
             generic_cache_sizes,
         });
 
+        let gdrive_cfg = cfg.gdrive.clone().unwrap_or_default();
+
         // Prepare column families to be used in RocksDB
-        let drive_ids: HashSet<String> = cfg
-            .gdrive
+        let drive_ids: HashSet<String> = gdrive_cfg
             .iter()
             .map(|(_, drive)| drive.drive_id.clone())
             .collect();
@@ -157,8 +158,8 @@ impl Cache {
         // Then return a list of DriveAccessors that map to the [drive] sections in the config
         let mut downloaders: HashMap<String, Arc<Downloader>> = HashMap::new();
         let mut drive_caches: HashMap<String, Arc<DriveCache>> = HashMap::new();
-        let mut drive_accessors = Vec::with_capacity(cfg.gdrive.len());
-        for (name, drive) in &cfg.gdrive {
+        let mut drive_accessors = Vec::with_capacity(gdrive_cfg.len());
+        for (name, drive) in &gdrive_cfg {
             let downloader = if let Some(downloader) = downloaders.get(&drive.client_id) {
                 downloader.clone()
             } else {

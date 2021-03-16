@@ -7,6 +7,7 @@ use std::{
     mem,
     path::Path,
     path::PathBuf,
+    pin::Pin,
     sync::Arc,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -16,12 +17,13 @@ use std::{
 
 use self::open_file::{Cache, DownloadHandle, DownloadStatus, Receiver};
 
-use super::{CacheDriveHandler, CacheFileHandler, CacheHandlerError};
-use crate::downloaders::DownloaderDrive;
+use super::{CacheDriveHandler, CacheFileHandler, CacheHandlerError, Page};
+use crate::downloaders::{DownloaderDrive, DownloaderError};
 use crate::types::DataIdentifier;
 use async_trait::async_trait;
 use byte_ranger::GetRange;
 use bytes::{Bytes, BytesMut};
+use futures::Stream;
 use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncWriteExt},
@@ -32,10 +34,12 @@ use tokio::{
 mod open_file;
 use open_file::OpenFile;
 
+pub mod lru;
+
 const MAX_CHUNK_SIZE: u64 = 100_000;
 
-struct FilesystemCacheHandler {
-    drive_id: String,
+pub struct FilesystemCacheHandler {
+    pub drive_id: String,
     hard_cache_root: PathBuf,
     soft_cache_root: PathBuf,
     open_files: Mutex<HashMap<String, Weak<Mutex<OpenFile>>>>,
@@ -89,8 +93,8 @@ enum Reader {
 }
 
 impl FilesystemCacheHandler {
-    fn new(
-        drive_id: String,
+    pub fn new(
+        drive_id: &str,
         hard_cache_root: &Path,
         soft_cache_root: &Path,
         downloader_drive: Arc<dyn DownloaderDrive>,
@@ -99,7 +103,7 @@ impl FilesystemCacheHandler {
         let hard_cache_root = hard_cache_root.to_path_buf();
         let soft_cache_root = soft_cache_root.to_path_buf();
         Box::new(FilesystemCacheHandler {
-            drive_id,
+            drive_id: drive_id.to_owned(),
             hard_cache_root,
             soft_cache_root,
             open_files,
@@ -145,6 +149,17 @@ impl FilesystemCacheHandler {
 
 #[async_trait]
 impl CacheDriveHandler for FilesystemCacheHandler {
+    fn scan_pages(
+        &self,
+        last_page_token: Option<String>,
+        last_modified_date: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Pin<Box<dyn Stream<Item = Result<Page, DownloaderError>>>> {
+        Box::pin(
+            self.downloader_drive
+                .scan_pages(last_page_token, last_modified_date),
+        )
+    }
+
     async fn open_file(
         &self,
         file_id: String,
@@ -946,6 +961,10 @@ fn get_file_cache_path(cache_root: &Path, data_id: &DataIdentifier) -> PathBuf {
     }
 }
 
+fn get_file_cache_chunk_path(cache_root: &Path, data_id: &DataIdentifier, offset: u64) -> PathBuf {
+    get_file_cache_path(cache_root, data_id).join(format!("chunk_{}", offset))
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -960,7 +979,6 @@ mod test {
         prop_oneof, proptest,
         strategy::{Just, Strategy},
     };
-    use timecode_rs::read_offset;
     use tokio::runtime::Runtime;
 
     const MAX_FILE_SIZE: u64 = 1024u64.pow(2); // 1MB
@@ -1072,8 +1090,7 @@ mod test {
             )
         };
 
-        let fsch =
-            FilesystemCacheHandler::new("main".to_string(), &hard_cache_root, &soft_cache_root, d);
+        let fsch = FilesystemCacheHandler::new("main", &hard_cache_root, &soft_cache_root, d);
 
         let mut offsets = init_offsets.to_vec();
         let mut files = vec![];
@@ -1186,8 +1203,7 @@ mod test {
             )
         };
 
-        let fsch =
-            FilesystemCacheHandler::new("main".to_string(), &hard_cache_root, &soft_cache_root, d);
+        let fsch = FilesystemCacheHandler::new("main", &hard_cache_root, &soft_cache_root, d);
 
         let mut f = fsch
             .open_file(file_id.to_owned(), data_id.clone(), file_size, 0, false)
@@ -1218,8 +1234,7 @@ mod test {
             )
         };
 
-        let fsch =
-            FilesystemCacheHandler::new("main".to_string(), &hard_cache_root, &soft_cache_root, d);
+        let fsch = FilesystemCacheHandler::new("main", &hard_cache_root, &soft_cache_root, d);
 
         {
             let mut f = fsch

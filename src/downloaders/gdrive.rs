@@ -32,16 +32,16 @@ pub struct GDriveClient {
 
 impl GDriveClient {
     pub async fn new(
-        client_id: String,
-        client_secret: String,
-        refresh_token: String,
+        client_id: &str,
+        client_secret: &str,
+        refresh_token: &str,
     ) -> Result<GDriveClient> {
         let http_client = reqwest::Client::builder().referer(false).build().unwrap();
         let rate_limiter = Arc::new(PrioLimit::new(1, 10, Duration::from_millis(120)));
 
-        let client_id = ClientId::new(client_id);
-        let client_secret = ClientSecret::new(client_secret);
-        let refresh_token = RefreshToken::new(refresh_token);
+        let client_id = ClientId::new(client_id.to_owned());
+        let client_secret = ClientSecret::new(client_secret.to_owned());
+        let refresh_token = RefreshToken::new(refresh_token.to_owned());
 
         let conn_info = ConnInfo {
             client_id,
@@ -69,13 +69,13 @@ impl GDriveClient {
 }
 
 impl DownloaderClient for GDriveClient {
-    fn open_drive(&self, drive_id: String) -> Box<dyn DownloaderDrive> {
+    fn open_drive(&self, drive_id: &str) -> Box<dyn DownloaderDrive> {
         Box::new(GDriveDrive {
             http_client: self.http_client.clone(),
             rate_limiter: self.rate_limiter.clone(),
             access_token: self.access_token.clone(),
             conn_info: self.conn_info.clone(),
-            drive_id,
+            drive_id: drive_id.to_owned(),
         })
     }
 }
@@ -380,11 +380,10 @@ mod test {
     use futures::StreamExt;
     #[tokio::test]
     async fn do_stuff() {
-        let client_id =
-            "***REMOVED***".to_string();
-        let client_secret = "***REMOVED***".to_string();
-        let refresh_token = "***REMOVED***".to_string();
-        let drive_id = "***REMOVED***".to_string();
+        let client_id = "***REMOVED***";
+        let client_secret = "***REMOVED***";
+        let refresh_token = "***REMOVED***";
+        let drive_id = "***REMOVED***";
 
         let c = GDriveClient::new(client_id, client_secret, refresh_token)
             .await

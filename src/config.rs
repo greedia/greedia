@@ -1,4 +1,4 @@
-use std::{cmp::min, collections::HashMap};
+use std::{cmp::min, collections::HashMap, path::PathBuf};
 
 use serde::Deserialize;
 
@@ -7,12 +7,14 @@ pub struct Config {
     pub caching: CachingConfig,
     pub smart_cachers: HashMap<String, SmartCacherConfig>,
     pub generic_cacher: GenericCache,
-    pub gdrive: HashMap<String, ConfigGoogleDrive>,
+    pub gdrive: Option<HashMap<String, ConfigGoogleDrive>>,
+    pub timecode: Option<HashMap<String, ConfigTimecodeDrive>>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct CachingConfig {
-    pub cache_path: String,
+    pub db_path: PathBuf,
+    pub mount_point: PathBuf,
     pub soft_cache_limit: u64,
     pub min_size: u64,
     pub use_smart_caching: bool,
@@ -63,6 +65,7 @@ impl DownloadAmount {
     }
 }
 
+/// Configuration for a Google Drive.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ConfigGoogleDrive {
     pub client_id: String,
@@ -73,4 +76,15 @@ pub struct ConfigGoogleDrive {
     /// rclone crypt passwords used for encrypting names and files
     pub password: Option<String>,
     pub password2: Option<String>,
+}
+
+/// Configuration for a Timecode drive. This is mostly used for testing, and is hard-coded.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ConfigTimecodeDrive {
+    pub drive_id: String,
+}
+
+pub fn validate_config(cfg: &Config) -> bool {
+    // TODO: make sure no drive names are duplicated
+    true
 }

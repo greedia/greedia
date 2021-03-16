@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use serde::Deserialize;
 
 #[derive(Clone)]
@@ -76,8 +77,8 @@ pub struct FileInfo {
     pub size: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Archive, RkyvSerialize, RkyvDeserialize)]
 pub enum DataIdentifier {
     GlobalMd5(Vec<u8>),
-    // DriveUnique(Vec<u8>)  // probably needed for future S3, etc support
+    DriveUnique(Vec<u8>, Vec<u8>), // probably needed for future S3, etc support
 }

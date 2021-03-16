@@ -6,7 +6,6 @@ use std::pin::Pin;
 use thiserror::Error;
 
 pub mod gdrive;
-#[cfg(test)]
 pub mod timecode;
 
 #[derive(Error, Debug)]
@@ -16,7 +15,7 @@ pub enum DownloaderError {
 }
 
 pub trait DownloaderClient {
-    fn open_drive(&self, drive_id: String) -> Box<dyn DownloaderDrive>;
+    fn open_drive(&self, drive_id: &str) -> Box<dyn DownloaderDrive>;
 }
 
 #[async_trait]

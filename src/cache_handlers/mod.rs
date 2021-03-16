@@ -1,11 +1,15 @@
-mod filesystem;
+pub mod filesystem;
+
+use std::pin::Pin;
 
 use async_trait::async_trait;
-use bytes::Bytes;
+use chrono::{DateTime, Utc};
+use futures::Stream;
 use thiserror::Error;
 use tokio::io;
 
-use crate::{downloaders::DownloaderError, types::DataIdentifier};
+pub use crate::downloaders::{DownloaderError, Page, PageItem};
+use crate::types::DataIdentifier;
 
 #[derive(Error, Debug)]
 pub enum CacheHandlerError {
@@ -13,18 +17,17 @@ pub enum CacheHandlerError {
     IoError(#[from] io::Error),
     #[error("Downloader Error")]
     DownloaderError(#[from] DownloaderError),
-    #[error("Cache mismatch - write_hard_cache: {write_hard_cache} but is_hard_cache: {is_hard_cache} for start_offset: {start_offset}")]
-    CacheMismatchError {
-        write_hard_cache: bool,
-        is_hard_cache: bool,
-        start_offset: u64,
-    },
     #[error("AppendChunkError at start_offset: {start_offset}")]
     AppendChunkError { start_offset: u64 },
 }
 
 #[async_trait]
-trait CacheDriveHandler {
+pub trait CacheDriveHandler {
+    fn scan_pages(
+        &self,
+        last_page_token: Option<String>,
+        last_modified_date: Option<DateTime<Utc>>,
+    ) -> Pin<Box<dyn Stream<Item = Result<Page, DownloaderError>>>>;
     async fn open_file(
         &self,
         file_id: String,
@@ -36,7 +39,7 @@ trait CacheDriveHandler {
 }
 
 #[async_trait]
-trait CacheFileHandler {
+pub trait CacheFileHandler {
     /// Read data into `buf`.
     async fn read_into(&mut self, buf: &mut [u8]) -> usize;
     /// Read data into `buf` which is exactly the size of `len` (unless an EOF occurs).

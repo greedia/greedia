@@ -1,20 +1,18 @@
-#![allow(dead_code, unused_variables)] // TODO: remove this
+#![allow(dead_code)] // TODO: remove this
 
-use rkyv::{
-    archived_value, archived_value_mut,
-    de::deserializers::AllocDeserializer,
-    ser::{serializers::WriteSerializer, Serializer},
-    Archive, Deserialize, Serialize,
-};
-use sled::{Db, Tree};
+use rkyv::de::deserializers::AllocDeserializer;
+use rkyv::{Archive, Deserialize, Serialize};
 use std::{
     convert::TryInto,
+    fs,
+    ops::Neg,
     path::{Path, PathBuf},
-    pin::Pin,
-    time::SystemTime,
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
+use crate::cache_handlers::filesystem::get_file_cache_chunk_path;
+use crate::db::{get_rkyv, get_rkyv_mut, serialize_rkyv, Db, Tree};
 use crate::types::DataIdentifier;
 
 /// Public interface to Lru thread.
@@ -30,14 +28,14 @@ impl Lru {
         let hard_cache_root = db_path.join("hard_cache");
         let soft_cache_root = db_path.join("soft_cache");
         let db = db.clone();
-        let inner = LruInner {
+        let (cmd_sender, recv) = channel(10);
+        tokio::spawn(run_background(
+            db,
+            size_limit,
             hard_cache_root,
             soft_cache_root,
-            size_limit,
-            db,
-        };
-        let (cmd_sender, recv) = channel(10);
-        tokio::spawn(run_background(inner, recv));
+            recv,
+        ));
         Lru { cmd_sender }
     }
 
@@ -56,11 +54,21 @@ impl Lru {
 
     pub async fn update_file_size(
         &self,
-        data_if: DataIdentifier,
+        data_id: DataIdentifier,
         offset: u64,
         hard_cache: bool,
         size: u64,
     ) {
+        self.cmd_sender
+            .clone()
+            .send(LruInnerMsg::UpdateFile {
+                data_id,
+                offset,
+                hard_cache,
+                size: Some(size),
+            })
+            .await
+            .unwrap();
     }
 }
 
@@ -75,18 +83,25 @@ enum LruInnerMsg {
 }
 
 /// Run the main LRU background thread.
-async fn run_background(inner: LruInner, mut recv: Receiver<LruInnerMsg>) {
+async fn run_background(
+    db: Db,
+    size_limit: u64,
+    hard_cache_root: PathBuf,
+    soft_cache_root: PathBuf,
+    mut recv: Receiver<LruInnerMsg>,
+) {
     // Tree for top-level LRU data
-    let lru_tree = inner.db.open_tree(b"lru").unwrap();
+    let lru_tree = db.tree(b"lru");
 
     // Tree where data is stored in timestamp order.
-    let ts_tree = inner.db.open_tree(b"lru_timestamp").unwrap();
+    let ts_tree = db.tree(b"lru_timestamp");
 
     // Tree where data is indexed by data_id, hard_cache, and offset.
-    let data_tree = inner.db.open_tree(b"lru_data").unwrap();
+    let data_tree = db.tree(b"lru_data");
 
     let mut space_usage = get_space_usage(&lru_tree);
     while let Some(msg) = recv.recv().await {
+        let last_space_usage = space_usage;
         match msg {
             LruInnerMsg::UpdateFile {
                 data_id,
@@ -106,55 +121,87 @@ async fn run_background(inner: LruInner, mut recv: Receiver<LruInnerMsg>) {
             }
         }
         handle_cache_cleanup(
-            &lru_tree,
             &ts_tree,
             &data_tree,
-            inner.size_limit,
+            &hard_cache_root,
+            &soft_cache_root,
+            size_limit,
             &mut space_usage,
         );
+        if last_space_usage != space_usage {
+            lru_tree.insert("space_usage", &space_usage.to_be_bytes());
+        }
     }
 }
 
 fn get_space_usage(lru_tree: &Tree) -> u64 {
-    if let Some(space_usage_val) = lru_tree.get("space_usage").unwrap() {
+    if let Some(space_usage_val) = lru_tree.get("space_usage") {
         u64::from_be_bytes(space_usage_val.as_ref().try_into().unwrap())
     } else {
-        lru_tree.insert("space_usage", &0u64.to_be_bytes()).unwrap();
+        lru_tree.insert("space_usage", &0u64.to_be_bytes());
         0
     }
 }
 
 /// Handle cleaning up cache files if we're over the cache size.
 fn handle_cache_cleanup(
-    lru_tree: &Tree,
     ts_tree: &Tree,
     data_tree: &Tree,
+    hard_cache_root: &Path,
+    soft_cache_root: &Path,
     size_limit: u64,
     space_usage: &mut u64,
 ) {
     // TODO: handle space_usage elsewhere too
     while *space_usage > size_limit {
-        let recovered_space = remove_one_file(ts_tree, data_tree);
+        let recovered_space = remove_one_file(ts_tree, data_tree, hard_cache_root, soft_cache_root);
         *space_usage = space_usage.saturating_sub(recovered_space);
     }
 }
 
 /// Remove one file from the cache, returning the space saved.
-fn remove_one_file(ts_tree: &Tree, data_tree: &Tree) -> u64 {
-    if let Some((key, data)) = ts_tree.pop_min().unwrap() {
+fn remove_one_file(
+    ts_tree: &Tree,
+    data_tree: &Tree,
+    hard_cache_root: &Path,
+    soft_cache_root: &Path,
+) -> u64 {
+    if let Some((_, data)) = ts_tree.pop_min() {
         // Get data_key
-        let a_data = unsafe { archived_value::<LruTimestampData>(data.as_ref(), 0) };
-        let data_id = a_data.data_id.deserialize(&mut AllocDeserializer).unwrap();
+        let ts_data = get_rkyv::<LruTimestampData>(&data);
+        let data_id = ts_data.data_id.deserialize(&mut AllocDeserializer).unwrap();
+
+        let cache_root = if ts_data.hard_cache {
+            hard_cache_root
+        } else {
+            soft_cache_root
+        };
+
+        // Delete file
+        let file_path = get_file_cache_chunk_path(cache_root, &data_id, ts_data.offset);
+        if let Err(_) = fs::remove_file(file_path) {
+            // If we can't delete the file, just ignore it.
+        }
+
         let data_key = LruDataKey {
             data_id,
-            offset: a_data.offset,
-            hard_cache: a_data.hard_cache,
+            offset: ts_data.offset,
+            hard_cache: ts_data.hard_cache,
+        }
+        .to_bytes();
+
+        // Get the size out of the lru_data entry.
+        let size = if let Some(data_bytes) = data_tree.get(&data_key) {
+            let data_data = get_rkyv::<LruDataData>(&data_bytes);
+            data_data.size
+        } else {
+            // We failed again. Again, if this happens, just ignore it.
+            0
         };
-        // KTODO:
-        // Delete file
-        // Delete lru_data entry (but get size out of it first)
-        // Delete lru_timestamp entry
-        todo!()
+
+        // Delete the lru_data entry.
+        data_tree.remove(&data_key);
+        size
     } else {
         0
     }
@@ -174,7 +221,15 @@ fn handle_update_file(
     let ts_key = add_new_ts_key(ts_tree, &data_id, offset, hard_cache);
 
     // Update data key, returning the old ts_key if existed
-    let old_ts_key = update_data_key(data_tree, data_id, offset, hard_cache, ts_key, size);
+    let old_ts_key = update_data_key(
+        data_tree,
+        data_id,
+        offset,
+        hard_cache,
+        ts_key,
+        size,
+        space_usage,
+    );
 
     // Delete old_ts_key if existed
     if let Some(old_ts_key) = old_ts_key {
@@ -190,6 +245,7 @@ fn update_data_key(
     hard_cache: bool,
     ts_key: [u8; 9],
     size: Option<u64>,
+    space_usage: &mut u64,
 ) -> Option<[u8; 9]> {
     let data_key = LruDataKey {
         data_id: data_id.clone(),
@@ -198,17 +254,22 @@ fn update_data_key(
     }
     .to_bytes();
 
-    let (old_ts_key, new_data) = if let Some(old_data) = data_tree.get(&data_key).unwrap() {
+    let (old_ts_key, new_data) = if let Some(old_data) = data_tree.get(&data_key) {
         let mut new_data = old_data.to_vec();
         let old_ts_key;
         {
-            let new_data_pin = Pin::new(new_data.as_mut_slice());
-            let mut a_data = unsafe { archived_value_mut::<LruDataData>(new_data_pin, 0) };
+            let mut new_data = get_rkyv_mut::<LruDataData>(&mut new_data);
             // Set timestamp_key and optionally, size
-            old_ts_key = Some(a_data.timestamp_key);
-            a_data.timestamp_key = ts_key;
+            old_ts_key = Some(new_data.timestamp_key);
+            new_data.timestamp_key = ts_key;
             if let Some(size) = size {
-                a_data.size = size;
+                let diff = new_data.size as i64 - size as i64;
+                if diff.is_negative() {
+                    *space_usage = space_usage.saturating_sub(diff.neg() as u64);
+                } else {
+                    *space_usage = space_usage.saturating_add(diff as u64);
+                }
+                new_data.size = size;
             }
         }
         (old_ts_key, new_data)
@@ -238,8 +299,9 @@ fn add_new_ts_key(
     }
     .to_bytes();
 
-    let timestamp = SystemTime::now();
-    let timestamp = 0;
+    let start = SystemTime::now();
+    let since_the_epoch = start.duration_since(UNIX_EPOCH).unwrap();
+    let timestamp = since_the_epoch.as_millis() as u64;
 
     // Try adding with extra_val of 0 to 256
     for extra_val in 0..=u8::MAX {
@@ -249,21 +311,12 @@ fn add_new_ts_key(
         }
         .to_bytes();
 
-        let cas_res =
-            ts_tree.compare_and_swap(&ts_key, None as Option<&[u8]>, Some(data.as_slice()));
-        if let Ok(Ok(())) = cas_res {
+        if ts_tree.compare_and_swap(&ts_key, None as Option<&[u8]>, Some(data.as_slice())) {
             return ts_key;
         }
     }
 
     panic!("Failed to add LRU timestamp extra_val 256 times")
-}
-
-struct LruInner {
-    hard_cache_root: PathBuf,
-    soft_cache_root: PathBuf,
-    size_limit: u64,
-    db: Db,
 }
 
 /// Key used for the LruData database tree.
@@ -277,9 +330,7 @@ struct LruDataKey {
 
 impl LruDataKey {
     fn to_bytes(&self) -> Vec<u8> {
-        let mut key_serializer = WriteSerializer::new(Vec::new());
-        key_serializer.serialize_value(self).unwrap();
-        key_serializer.into_inner()
+        serialize_rkyv(self)
     }
 }
 
@@ -292,9 +343,7 @@ struct LruDataData {
 
 impl LruDataData {
     fn to_bytes(&self) -> Vec<u8> {
-        let mut serializer = WriteSerializer::new(Vec::new());
-        serializer.serialize_value(self).unwrap();
-        serializer.into_inner()
+        serialize_rkyv(self)
     }
 }
 
@@ -326,8 +375,6 @@ struct LruTimestampData {
 
 impl LruTimestampData {
     fn to_bytes(&self) -> Vec<u8> {
-        let mut serializer = WriteSerializer::new(Vec::new());
-        serializer.serialize_value(self).unwrap();
-        serializer.into_inner()
+        serialize_rkyv(self)
     }
 }

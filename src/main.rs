@@ -6,6 +6,7 @@ use cache_handlers::{
     filesystem::{lru::Lru, FilesystemCacheHandler},
     CacheDriveHandler,
 };
+use db::Db;
 use downloaders::{gdrive::GDriveClient, timecode::TimecodeDrive, DownloaderClient};
 //use futures::future::join_all;
 use structopt::StructOpt;
@@ -27,7 +28,7 @@ use structopt::StructOpt;
 // New stuff
 mod cache_handlers;
 mod config;
-//mod db;
+mod db;
 mod downloaders;
 mod prio_limit;
 mod types;
@@ -105,7 +106,7 @@ async fn run(config_path: &Path) -> Result<()> {
     let db_path = &cfg.caching.db_path;
 
     // Initialize DB
-    let db = sled::open(&db_path.join("db_v1"))?;
+    let db = Db::open(&db_path.join("db_v1"))?;
 
     // Initialize LRU
     let lru = Lru::new(&db, &db_path, cfg.caching.soft_cache_limit).await;

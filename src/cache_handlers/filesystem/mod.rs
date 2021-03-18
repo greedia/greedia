@@ -961,7 +961,11 @@ fn get_file_cache_path(cache_root: &Path, data_id: &DataIdentifier) -> PathBuf {
     }
 }
 
-fn get_file_cache_chunk_path(cache_root: &Path, data_id: &DataIdentifier, offset: u64) -> PathBuf {
+pub fn get_file_cache_chunk_path(
+    cache_root: &Path,
+    data_id: &DataIdentifier,
+    offset: u64,
+) -> PathBuf {
     get_file_cache_path(cache_root, data_id).join(format!("chunk_{}", offset))
 }
 

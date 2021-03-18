@@ -10,12 +10,7 @@ use std::{
         Arc, Weak,
     },
 };
-use tokio::{
-    fs::DirEntry,
-    fs::{read_dir, File, OpenOptions},
-    stream::StreamExt,
-    sync::Mutex,
-};
+use tokio::{fs::DirEntry, fs::{read_dir, File, OpenOptions}, io::AsyncSeekExt, sync::Mutex};
 
 use crate::{
     cache_handlers::CacheHandlerError,
@@ -516,8 +511,8 @@ impl OpenFile {
         let cache_path = get_file_cache_path(cache_root, data_id);
         if cache_path.exists() {
             let mut dirs = read_dir(cache_path).await.unwrap();
-            while let Some(dir_entry) = dirs.next().await {
-                if let Some((offset, len)) = Self::direntry_to_namelen(dir_entry.unwrap()).await {
+            while let Some(dir_entry) = dirs.next_entry().await.unwrap() {
+                if let Some((offset, len)) = Self::direntry_to_namelen(dir_entry).await {
                     // println!("add_range {} {}", offset, len);
                     if len == 0 {
                         // Ignore zero-length chunks

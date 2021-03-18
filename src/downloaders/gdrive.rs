@@ -7,7 +7,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{Stream, TryStreamExt};
 use oauth2::{
-    basic::BasicClient, reqwest::async_http_client, AccessToken, AsyncRefreshTokenRequest, AuthUrl,
+    basic::BasicClient, reqwest::async_http_client, AccessToken, AuthUrl,
     ClientId, ClientSecret, RefreshToken, TokenResponse, TokenUrl,
 };
 use reqwest;

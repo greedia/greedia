@@ -116,7 +116,7 @@ mod tests {
             flag: true,
         };
 
-        let ss = serialize_rkyv(s.clone());
+        let ss = serialize_rkyv(&s);
 
         dbg!(&ss);
 
@@ -145,7 +145,7 @@ mod tests {
             flag: true,
         };
 
-        let ss = serialize_rkyv(s.clone());
+        let ss = serialize_rkyv(&s);
 
         dbg!(&ss);
 
@@ -177,7 +177,7 @@ mod tests {
             flag: true,
         };
 
-        let mut ss = serialize_rkyv(s.clone());
+        let mut ss = serialize_rkyv(&s);
 
         dbg!(&ss);
 

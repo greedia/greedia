@@ -22,7 +22,8 @@ pub enum CacheHandlerError {
 }
 
 #[async_trait]
-pub trait CacheDriveHandler {
+pub trait CacheDriveHandler: Send + Sync {
+    fn get_drive_id(&self) -> String;
     fn scan_pages(
         &self,
         last_page_token: Option<String>,

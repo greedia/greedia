@@ -8,6 +8,8 @@ use cache_handlers::{
 };
 use db::Db;
 use downloaders::{gdrive::GDriveClient, timecode::TimecodeDrive, DownloaderClient};
+use futures::future::join_all;
+use scanner2::scan_thread;
 //use futures::future::join_all;
 use structopt::StructOpt;
 
@@ -32,6 +34,7 @@ mod db;
 mod downloaders;
 mod prio_limit;
 mod types;
+mod scanner2;
 
 //#[allow(dead_code, unused_imports)]
 //mod db_generated;
@@ -120,7 +123,18 @@ async fn run(config_path: &Path) -> Result<()> {
         cache_handlers.extend(get_timecode_drives(&cfg.caching.db_path, timecode_drives).await?);
     }
 
+    // Start a scanner for each cache handler
+    let mut join_handles = vec![];
+    for (name, ch) in &cache_handlers {
+        let name = name.clone();
+        let db = db.clone();
+        let ch = ch.clone();
+        join_handles.push(tokio::spawn(scan_thread(name, db, ch)));
+    }
+
     dbg!(&cache_handlers.keys());
+    
+    join_all(join_handles).await;
 
     println!("WOOOO");
 
@@ -130,7 +144,7 @@ async fn run(config_path: &Path) -> Result<()> {
 async fn get_gdrive_drives(
     cache_path: &Path,
     gdrives: HashMap<String, ConfigGoogleDrive>,
-) -> Result<HashMap<String, Box<dyn CacheDriveHandler>>> {
+) -> Result<HashMap<String, Arc<dyn CacheDriveHandler>>> {
     let hard_cache_root = cache_path.join("hard_cache");
     let soft_cache_root = cache_path.join("soft_cache");
 
@@ -155,12 +169,12 @@ async fn get_gdrive_drives(
 
         let drive = client.open_drive(&cfg_drive.drive_id);
 
-        let fs = FilesystemCacheHandler::new(
+        let fs = Arc::from(FilesystemCacheHandler::new(
             &cfg_drive.drive_id,
             &hard_cache_root,
             &soft_cache_root,
             drive.into(),
-        );
+        ));
 
         fs_out.insert(name.clone(), fs);
     }
@@ -171,19 +185,19 @@ async fn get_gdrive_drives(
 async fn get_timecode_drives(
     cache_path: &Path,
     timecode_drives: HashMap<String, ConfigTimecodeDrive>,
-) -> Result<HashMap<String, Box<dyn CacheDriveHandler>>> {
+) -> Result<HashMap<String, Arc<dyn CacheDriveHandler>>> {
     let hard_cache_root = cache_path.join("hard_cache");
     let soft_cache_root = cache_path.join("soft_cache");
 
     let mut fs_out = HashMap::new();
     for (name, cfg_drive) in timecode_drives {
         let drive = Arc::new(TimecodeDrive {});
-        let fs = FilesystemCacheHandler::new(
+        let fs = Arc::from(FilesystemCacheHandler::new(
             &cfg_drive.drive_id,
             &hard_cache_root,
             &soft_cache_root,
             drive,
-        );
+        ));
 
         fs_out.insert(name.clone(), fs);
     }

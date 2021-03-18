@@ -23,11 +23,10 @@ use crate::types::DataIdentifier;
 use async_trait::async_trait;
 use byte_ranger::GetRange;
 use bytes::{Bytes, BytesMut};
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use tokio::{
     fs::File,
-    io::{AsyncReadExt, AsyncWriteExt},
-    stream::StreamExt,
+    io::{AsyncReadExt, AsyncWriteExt, AsyncSeekExt},
     sync::Mutex,
 };
 
@@ -39,7 +38,7 @@ pub mod lru;
 const MAX_CHUNK_SIZE: u64 = 100_000;
 
 pub struct FilesystemCacheHandler {
-    pub drive_id: String,
+    drive_id: String,
     hard_cache_root: PathBuf,
     soft_cache_root: PathBuf,
     open_files: Mutex<HashMap<String, Weak<Mutex<OpenFile>>>>,
@@ -181,6 +180,10 @@ impl CacheDriveHandler for FilesystemCacheHandler {
             soft_cache_file_root,
             current_chunk: None,
         }))
+    }
+
+    fn get_drive_id(&self) -> String {
+        self.drive_id.clone()
     }
 }
 

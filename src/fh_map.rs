@@ -2,16 +2,17 @@ use rustc_hash::FxHashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 
-struct OpenFileMapInner<T> {
+struct FhMapInner<T> {
     map: FxHashMap<u64, Arc<Mutex<T>>>,
     next_fh: u64,
 }
 
-pub struct OpenFileMap<T>(RwLock<OpenFileMapInner<T>>);
+/// Map of open file handles on the FUSE side.
+pub struct FhMap<T>(RwLock<FhMapInner<T>>);
 
-impl<T> OpenFileMap<T> {
-    pub fn new() -> OpenFileMap<T> {
-        OpenFileMap(RwLock::new(OpenFileMapInner {
+impl<T> FhMap<T> {
+    pub fn new() -> FhMap<T> {
+        FhMap(RwLock::new(FhMapInner {
             map: FxHashMap::default(),
             next_fh: 0,
         }))

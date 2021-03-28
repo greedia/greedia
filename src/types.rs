@@ -109,3 +109,12 @@ pub struct DirItem {
     pub inode: u64,
     pub is_dir: bool,
 }
+
+/// Generate an internal lookup key, given a parent inode and name.
+pub fn make_lookup_key(parent: u64, name: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(8 + name.len());
+    let parent_slice = parent.to_le_bytes();
+    out.extend_from_slice(&parent_slice);
+    out.extend_from_slice(name.as_bytes());
+    out
+}

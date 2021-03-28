@@ -166,16 +166,19 @@ async fn get_gdrive_drives(
             drive.into(),
         );
 
+        let root_path = cfg_drive.root_path.map(|x| PathBuf::from(x));
+
         let da =
             if let (Some(password), Some(password2)) = (cfg_drive.password, cfg_drive.password2) {
                 DriveAccess::new(
                     name.clone(),
                     cache_handler,
                     db.clone(),
+                    root_path,
                     Some((password, password2)),
                 )
             } else {
-                DriveAccess::new(name.clone(), cache_handler, db.clone(), None)
+                DriveAccess::new(name.clone(), cache_handler, db.clone(), root_path, None)
             };
 
         da_out.push(Arc::new(da));
@@ -202,7 +205,7 @@ async fn get_timecode_drives(
             drive,
         );
 
-        let da = DriveAccess::new(name.clone(), cache_handler, db.clone(), None);
+        let da = DriveAccess::new(name.clone(), cache_handler, db.clone(), None, None);
 
         da_out.push(Arc::new(da));
     }

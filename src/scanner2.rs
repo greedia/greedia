@@ -1,11 +1,4 @@
-use crate::{
-    drive_access2::DriveAccess,
-    hard_cache::HardCacheMetadata,
-    types::{
-        ArchivedDriveItem, ArchivedDriveItemData, DirItem, DriveItem,
-        DriveItemData,
-    },
-};
+use crate::{drive_access2::DriveAccess, hard_cache::HardCacheMetadata, types::{ArchivedDriveItem, ArchivedDriveItemData, DirItem, DriveItem, DriveItemData, make_lookup_key}};
 use crate::{
     hard_cache::HardCacher,
     types::TreeKeys,
@@ -337,15 +330,6 @@ fn handle_update_parent(trees: &ScanTrees, parent: &str, modified_time: i64) {
                 .insert(existing_inode, new_drive_bytes.as_slice());
         }
     }
-}
-
-/// Generate an internal lookup key, given a parent inode and name.
-fn make_lookup_key(parent: u64, name: &str) -> Vec<u8> {
-    let mut out = Vec::with_capacity(8 + name.len());
-    let parent_slice = parent.to_le_bytes();
-    out.extend_from_slice(&parent_slice);
-    out.extend_from_slice(name.as_bytes());
-    out
 }
 
 /// Merge an existing DriveItem parent into a list of new items.

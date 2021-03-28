@@ -2,6 +2,7 @@ use crate::{
     cache_handlers::CacheFileHandler,
     drive_access2::{DriveAccess, TypeResult},
     fh_map::FhMap,
+    types::ArchivedDriveItemData,
 };
 use anyhow::Result;
 use polyfuse::{
@@ -32,9 +33,7 @@ pub async fn mount_thread(drives: Vec<Arc<DriveAccess>>, mount_point: PathBuf) {
     config.mount_option("ro");
     config.mount_option("allow_other");
 
-    let session = AsyncSession::mount(mount_point, config)
-        .await
-        .unwrap();
+    let session = AsyncSession::mount(mount_point, config).await.unwrap();
 
     let fs = Arc::new(GreediaFS::new(drives));
 
@@ -140,10 +139,24 @@ impl GreediaFS {
 
     fn getattr_item(&self, drive: u16, inode: u64, file_attr: &mut FileAttr) -> Option<Duration> {
         let drive_access = self.drives.get(drive as usize)?;
-        drive_access.getattr_item(inode, file_attr)?;
-
-        let global_inode = self.rev_inode(Inode::Drive(drive, inode));
-        file_attr.ino(global_inode);
+        drive_access.getattr_item(inode, |item| {
+            let global_inode = self.rev_inode(Inode::Drive(drive, inode));
+            file_attr.ino(global_inode);
+            match &item.data {
+                ArchivedDriveItemData::FileItem {
+                    file_name: _,
+                    data_id: _,
+                    size,
+                } => {
+                    file_attr.mode(libc::S_IFREG as u32 | 0o444);
+                    file_attr.size(*size);
+                }
+                ArchivedDriveItemData::Dir { items: _ } => {
+                    file_attr.mode(libc::S_IFDIR as u32 | 0o555);
+                }
+            };
+            todo!()
+        })?;
         Some(TTL_LONG)
     }
 
@@ -170,7 +183,7 @@ impl GreediaFS {
         let drive_access = self.drives.get(drive as usize)?;
 
         drive_access.readdir(inode, offset, size, |off, item| {
-            let name = OsStr::new(&item.name);
+            let name = OsStr::new(item.name.as_str());
             let ino = self.rev_inode(Inode::Drive(drive, item.inode));
             let off = off + 1;
             let typ = if item.is_dir {
@@ -224,23 +237,21 @@ impl GreediaFS {
         Some(entry_out)
     }
 
-    fn lookup_drive(&self, drive: u16, parent_inode: u64, name: &OsStr) -> Option<EntryOut> {
+    fn lookup_drive(&self, drive: u16, inode: u64, name: &OsStr) -> Option<EntryOut> {
         let drive_access = self.drives.get(drive as usize)?;
         let name = name.to_str()?;
 
+        let child_inode =  drive_access.lookup_item(inode, name)?;
+        let global_inode = self.rev_inode(Inode::Drive(drive, child_inode));
+
         let mut reply_entry = EntryOut::default();
         let file_attr = reply_entry.attr();
+        file_attr.ino(global_inode);
+        reply_entry.ino(global_inode);
+        reply_entry.ttl_attr(TTL_LONG);
+        reply_entry.ttl_entry(TTL_LONG);
 
-        if let Some(inode) = drive_access.lookup_item(parent_inode, name, file_attr) {
-            let global_inode = self.rev_inode(Inode::Drive(drive, inode));
-            file_attr.ino(global_inode);
-            reply_entry.ino(global_inode);
-            reply_entry.ttl_attr(TTL_LONG);
-            reply_entry.ttl_entry(TTL_LONG);
-            Some(reply_entry)
-        } else {
-            None
-        }
+        Some(reply_entry)
     }
 
     async fn open_drive(&self, drive: u16, local_inode: u64) -> TypeResult<OpenOut> {

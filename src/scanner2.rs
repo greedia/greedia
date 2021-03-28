@@ -296,6 +296,7 @@ fn handle_add_items(trees: &ScanTrees, parent: &str, items: &Vec<&PageItem>) {
         modified_time: parent_modified_time,
         data: DriveItemData::Dir { items: new_items },
     };
+    inode_bytes.copy_from_slice(&parent_inode.to_le_bytes());
     let parent_drive_item_bytes = serialize_rkyv(&parent_drive_item);
     inode_batch.insert(&inode_bytes, parent_drive_item_bytes.as_slice());
     access_batch.insert(parent.as_bytes(), &inode_bytes);

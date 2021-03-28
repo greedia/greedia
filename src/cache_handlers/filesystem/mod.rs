@@ -7,7 +7,6 @@ use std::{
     mem,
     path::Path,
     path::PathBuf,
-    pin::Pin,
     sync::Arc,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -26,7 +25,7 @@ use bytes::{Bytes, BytesMut};
 use futures::{Stream, StreamExt};
 use tokio::{
     fs::File,
-    io::{AsyncReadExt, AsyncWriteExt, AsyncSeekExt},
+    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
     sync::Mutex,
 };
 
@@ -35,7 +34,7 @@ use open_file::OpenFile;
 
 pub mod lru;
 
-const MAX_CHUNK_SIZE: u64 = 100_000;
+const MAX_CHUNK_SIZE: u64 = 100_000_000;
 
 pub struct FilesystemCacheHandler {
     drive_id: String,
@@ -152,8 +151,8 @@ impl CacheDriveHandler for FilesystemCacheHandler {
         &self,
         last_page_token: Option<String>,
         last_modified_date: Option<chrono::DateTime<chrono::Utc>>,
-    ) -> Pin<Box<dyn Stream<Item = Result<Page, DownloaderError>>>> {
-        Box::pin(
+    ) -> Box<dyn Stream<Item = Result<Page, DownloaderError>> + Send + Sync + Unpin> {
+        Box::new(
             self.downloader_drive
                 .scan_pages(last_page_token, last_modified_date),
         )
@@ -184,6 +183,10 @@ impl CacheDriveHandler for FilesystemCacheHandler {
 
     fn get_drive_id(&self) -> String {
         self.drive_id.clone()
+    }
+
+    fn get_drive_type(&self) -> &'static str {
+        self.downloader_drive.get_drive_type()
     }
 }
 
@@ -389,7 +392,6 @@ impl FilesystemCacheFileHandler {
                         )
                         .await
                     }
-                    // Don't copy, and just read data instead
                 }
             }
             // We're somewhere in between two chunks

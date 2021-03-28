@@ -2,44 +2,44 @@ use chrono::{DateTime, Utc};
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use serde::Deserialize;
 
-#[derive(Clone)]
-pub struct CfKeys {
-    pub access_key: String,
-    pub inode_key: String,
-    pub lookup_key: String,
-    pub raccess_key: String,
-    pub scan_key: String,
+pub struct TreeKeys {
+    // For accessing a file by ID
+    pub access_key: Vec<u8>,
+    // For accessing a file by inode
+    pub inode_key: Vec<u8>,
+    // For accessing a file by a filename within inode
+    pub lookup_key: Vec<u8>,
+    // For finding references to update upon file deletion
+    pub raccess_key: Vec<u8>,
+    // For keeping track of scans
+    pub scan_key: Vec<u8>,
+    // For getting the status of a file's hard cache
+    pub hc_meta_key: Vec<u8>,
 }
 
-impl CfKeys {
-    pub fn new(drive_id: &str) -> CfKeys {
-        CfKeys {
-            // For accessing a file by ID
-            access_key: format!("access:{}", drive_id),
-            // For accessing a file by inode
-            inode_key: format!("inode:{}", drive_id),
-            // For accessing a file by a filename within inode
-            lookup_key: format!("lookup:{}", drive_id),
-            // For finding references to update upon file deletion
-            raccess_key: format!("raccess:{}", drive_id),
-            // For keeping track of scans
-            scan_key: format!("scan:{}", drive_id),
+impl TreeKeys {
+    pub fn new(drive_type: &str, drive_id: &str) -> TreeKeys {
+        let mut trailer = Vec::with_capacity(drive_type.len() + drive_id.len() + 2);
+        trailer.extend_from_slice(b":");
+        trailer.extend_from_slice(drive_type.as_bytes());
+        trailer.extend_from_slice(b":");
+        trailer.extend_from_slice(drive_id.as_bytes());
+
+        TreeKeys {
+            access_key: Self::get_key("access", &trailer),
+            inode_key: Self::get_key("inode", &trailer),
+            lookup_key: Self::get_key("lookup", &trailer),
+            raccess_key: Self::get_key("raccess", &trailer),
+            scan_key: Self::get_key("scan", &trailer),
+            hc_meta_key: Self::get_key("hc_meta", &trailer),
         }
     }
 
-    pub fn as_vec(drive_id: &str) -> Vec<String> {
-        vec![
-            // For accessing a file by ID
-            format!("access:{}", drive_id),
-            // For accessing a file by inode
-            format!("inode:{}", drive_id),
-            // For accessing a file by a filename within inode
-            format!("lookup:{}", drive_id),
-            // For finding references to update upon file deletion
-            format!("raccess:{}", drive_id),
-            // For keeping track of scans
-            format!("scan:{}", drive_id),
-        ]
+    fn get_key(name: &str, trailer: &[u8]) -> Vec<u8> {
+        let mut key = Vec::with_capacity(name.len() + trailer.len());
+        key.extend_from_slice(name.as_bytes());
+        key.extend_from_slice(trailer);
+        key
     }
 }
 
@@ -81,4 +81,31 @@ pub struct FileInfo {
 pub enum DataIdentifier {
     GlobalMd5(Vec<u8>),
     //DriveUnique(Vec<u8>, Vec<u8>), // probably needed for future S3, etc support
+}
+
+#[derive(Debug, PartialEq, Archive, RkyvSerialize, RkyvDeserialize)]
+pub struct DriveItem {
+    pub access_id: String,
+    pub modified_time: i64,
+    pub data: DriveItemData,
+}
+
+#[derive(Debug, Clone, PartialEq, Archive, RkyvSerialize, RkyvDeserialize)]
+pub enum DriveItemData {
+    FileItem {
+        file_name: String,
+        data_id: DataIdentifier,
+        size: u64,
+    },
+    Dir {
+        items: Vec<DirItem>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Archive, RkyvSerialize, RkyvDeserialize)]
+pub struct DirItem {
+    pub name: String,
+    pub access_id: String,
+    pub inode: u64,
+    pub is_dir: bool,
 }

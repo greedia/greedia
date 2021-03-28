@@ -2,46 +2,40 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use std::{fs, path::Path};
 
 use anyhow::{bail, Result};
-use cache_handlers::{
-    filesystem::{lru::Lru, FilesystemCacheHandler},
-    CacheDriveHandler,
-};
+use cache_handlers::filesystem::{lru::Lru, FilesystemCacheHandler};
 use db::Db;
 use downloaders::{gdrive::GDriveClient, timecode::TimecodeDrive, DownloaderClient};
+use drive_access2::DriveAccess;
 use futures::future::join_all;
+use mount::mount_thread;
 use scanner2::scan_thread;
-//use futures::future::join_all;
 use structopt::StructOpt;
 
 // mod cache;
 // mod cache_reader;
-// mod crypt_context;
 // mod downloader;
 // mod downloader_inner;
 // mod drive_access;
 // mod drive_cache;
 // mod encrypted_cache_reader;
-// mod hard_cache;
-// mod mount;
-// mod open_file_map;
 // mod scanner;
 // mod soft_cache_lru;
 
 // New stuff
 mod cache_handlers;
 mod config;
+mod crypt_context;
 mod db;
 mod downloaders;
+mod drive_access2;
+mod fh_map;
+mod hard_cache;
+mod mount;
 mod prio_limit;
-mod types;
 mod scanner2;
+mod types;
 
-//#[allow(dead_code, unused_imports)]
-//mod db_generated;
-
-//use cache::Cache;
 use config::{validate_config, Config, ConfigGoogleDrive, ConfigTimecodeDrive};
-//use hard_cache::HardCacher;
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "greedia", about = "Greedily cache media and serve it up fast.")]
@@ -104,8 +98,6 @@ async fn run(config_path: &Path) -> Result<()> {
         bail!("Config didn't validate.");
     }
 
-    dbg!(&cfg);
-
     let db_path = &cfg.caching.db_path;
 
     // Initialize DB
@@ -115,41 +107,39 @@ async fn run(config_path: &Path) -> Result<()> {
     let lru = Lru::new(&db, &db_path, cfg.caching.soft_cache_limit).await;
 
     // Initialize cache handlers
-    let mut cache_handlers = HashMap::new();
+    let mut drives = Vec::new();
     if let Some(gdrives) = cfg.gdrive {
-        cache_handlers.extend(get_gdrive_drives(&cfg.caching.db_path, gdrives).await?);
+        drives.extend(get_gdrive_drives(&cfg.caching.db_path, db.clone(), gdrives).await?);
     }
     if let Some(timecode_drives) = cfg.timecode {
-        cache_handlers.extend(get_timecode_drives(&cfg.caching.db_path, timecode_drives).await?);
+        drives
+            .extend(get_timecode_drives(&cfg.caching.db_path, db.clone(), timecode_drives).await?);
     }
 
     // Start a scanner for each cache handler
     let mut join_handles = vec![];
-    for (name, ch) in &cache_handlers {
-        let name = name.clone();
-        let db = db.clone();
-        let ch = ch.clone();
-        join_handles.push(tokio::spawn(scan_thread(name, db, ch)));
+    for drive_access in &drives {
+        join_handles.push(tokio::spawn(scan_thread(drive_access.clone())));
     }
 
-    dbg!(&cache_handlers.keys());
-    
-    join_all(join_handles).await;
+    // Start a mount thread
+    join_handles.push(tokio::spawn(mount_thread(drives, cfg.caching.mount_point)));
 
-    println!("WOOOO");
+    join_all(join_handles).await;
 
     Ok(())
 }
 
 async fn get_gdrive_drives(
     cache_path: &Path,
+    db: Db,
     gdrives: HashMap<String, ConfigGoogleDrive>,
-) -> Result<HashMap<String, Arc<dyn CacheDriveHandler>>> {
+) -> Result<Vec<Arc<DriveAccess>>> {
     let hard_cache_root = cache_path.join("hard_cache");
     let soft_cache_root = cache_path.join("soft_cache");
 
     let mut clients: HashMap<String, Arc<GDriveClient>> = HashMap::new();
-    let mut fs_out = HashMap::new();
+    let mut da_out = Vec::new();
 
     for (name, cfg_drive) in gdrives {
         let client = if let Some(client) = clients.get(&cfg_drive.client_id) {
@@ -169,78 +159,56 @@ async fn get_gdrive_drives(
 
         let drive = client.open_drive(&cfg_drive.drive_id);
 
-        let fs = Arc::from(FilesystemCacheHandler::new(
+        let cache_handler = FilesystemCacheHandler::new(
             &cfg_drive.drive_id,
             &hard_cache_root,
             &soft_cache_root,
             drive.into(),
-        ));
+        );
 
-        fs_out.insert(name.clone(), fs);
+        let da =
+            if let (Some(password), Some(password2)) = (cfg_drive.password, cfg_drive.password2) {
+                DriveAccess::new(
+                    name.clone(),
+                    cache_handler,
+                    db.clone(),
+                    Some((password, password2)),
+                )
+            } else {
+                DriveAccess::new(name.clone(), cache_handler, db.clone(), None)
+            };
+
+        da_out.push(Arc::new(da));
     }
 
-    Ok(fs_out)
+    Ok(da_out)
 }
 
 async fn get_timecode_drives(
     cache_path: &Path,
+    db: Db,
     timecode_drives: HashMap<String, ConfigTimecodeDrive>,
-) -> Result<HashMap<String, Arc<dyn CacheDriveHandler>>> {
+) -> Result<Vec<Arc<DriveAccess>>> {
     let hard_cache_root = cache_path.join("hard_cache");
     let soft_cache_root = cache_path.join("soft_cache");
 
-    let mut fs_out = HashMap::new();
+    let mut da_out = Vec::new();
     for (name, cfg_drive) in timecode_drives {
         let drive = Arc::new(TimecodeDrive {});
-        let fs = Arc::from(FilesystemCacheHandler::new(
+        let cache_handler = FilesystemCacheHandler::new(
             &cfg_drive.drive_id,
             &hard_cache_root,
             &soft_cache_root,
             drive,
-        ));
+        );
 
-        fs_out.insert(name.clone(), fs);
+        let da = DriveAccess::new(name.clone(), cache_handler, db.clone(), None);
+
+        da_out.push(Arc::new(da));
     }
 
-    Ok(fs_out)
+    Ok(da_out)
 }
-
-// async fn run(config_path: PathBuf, mount_point: PathBuf) -> Result<()> {
-//     let config_data = fs::read(config_path)?;
-//     let cfg: Config = toml::from_slice(&config_data)?;
-
-//     let mount_point = mount_point;
-
-//     // Validate password and password2 for each drive
-//     if let Some(gdrive) = &cfg.gdrive {
-//         for (name, drive) in gdrive {
-//             if (drive.password.is_some() && drive.password2.is_none())
-//                 || (drive.password.is_none() && drive.password2.is_some())
-//             {
-//                 bail!(
-//                     "Drive '{}' error: both passwords must be set to use encryption.",
-//                     name
-//                 );
-//             }
-//         }
-//     };
-
-//     let (drive_caches, drive_accessors) = Cache::new(&cfg).await?;
-//     let mut join_handles = Vec::with_capacity(1 + drive_caches.len());
-
-//     for drive in drive_caches {
-//         join_handles.push(tokio::spawn(scanner::scan_thread_eh(drive)));
-//     }
-
-//     join_handles.push(tokio::spawn(mount::mount_thread_eh(
-//         drive_accessors,
-//         mount_point,
-//     )));
-
-//     join_all(join_handles).await;
-
-//     Ok(())
-// }
 
 #[cfg(feature = "sctest")]
 async fn sctest(

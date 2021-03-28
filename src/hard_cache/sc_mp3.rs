@@ -1,10 +1,11 @@
+use std::convert::TryInto;
+
 use super::{
     smart_cacher::{FileSpec, ScErr::*, ScOk::*, ScResult, SmartCacher, SmartCacherSpec},
     HardCacheDownloader,
 };
 use crate::config::SmartCacherConfig;
 use async_trait::async_trait;
-use byteorder::{BigEndian, ByteOrder};
 
 // Related resources:
 // - https://www.codeproject.com/Articles/8295/MPEG-Audio-Frame-Header
@@ -29,14 +30,14 @@ impl SmartCacher for ScMp3 {
 
     async fn cache(
         &self,
-        header_data: &[u8],
         config: &SmartCacherConfig,
         file_spec: &FileSpec,
         action: &mut HardCacheDownloader,
     ) -> ScResult {
+        let header_data = action.read_data(0, 256).await;
         // First, look for a starting ID3v2 tag and skip over it if necessary.
         let header_scan_offset =
-            if let Some(id3_len) = read_id3_len(header_data.get(..10).ok_or(Cancel)?) {
+            if let Some(id3_len) = read_id3_len(&header_data) {
                 id3_len as u64 + 10
             } else {
                 0
@@ -45,17 +46,13 @@ impl SmartCacher for ScMp3 {
         // Next, try to scan for the MP3 header.
 
         // Get a decently-sized buffer for scanning.
-        let header_scan_buffer = if header_scan_offset == 0 {
-            header_data.to_vec()
-        } else {
-            action
-                .read_data_bridged(header_scan_offset, 65536, None)
-                .await
-        };
+        let header_scan_buffer = action.read_data_bridged(header_scan_offset, 65536, None)
+                .await;
 
         // Now, look for the actual MP3 header.
         let (mp3_header_offset, mp3_header_data) =
             find_mp3_header(&header_scan_buffer).ok_or(Cancel)?;
+
         let mp3_header_offset = mp3_header_offset + header_scan_offset;
 
         // Get the bitrate out of the header.
@@ -66,10 +63,10 @@ impl SmartCacher for ScMp3 {
         let data_length = mp3_header.bitrate * config.seconds;
 
         // Download up to that offset.
-        action.cache_data_to(mp3_header_offset + data_length);
+        action.cache_data_to(mp3_header_offset + data_length).await;
 
         // Cache the ID3v1 tag location, just in case it exists.
-        action.cache_data(file_spec.size - 128, 128);
+        action.cache_data(file_spec.size - 128, 128).await;
         Ok(Finalize)
     }
 }
@@ -77,7 +74,7 @@ impl SmartCacher for ScMp3 {
 /// Read the length of the ID3 header, to figure out where to scan
 fn read_id3_len(data: &[u8]) -> Option<u32> {
     if data.get(..3)? == b"ID3" {
-        let len_data = BigEndian::read_u32(data.get(6..10)?);
+        let len_data = u32::from_be_bytes(data.get(6..10)?.try_into().unwrap());
         // Verify that none of the MSBs are set
         if len_data & 0x80808080 != 0 {
             return None;

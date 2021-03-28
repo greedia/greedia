@@ -1,19 +1,24 @@
 use crate::{
-    cache_reader::CacheRead,
-    drive_access::{DriveAccess, ReadItem},
-    open_file_map::OpenFileMap,
+    cache_handlers::CacheFileHandler,
+    drive_access2::{DriveAccess, TypeResult},
+    fh_map::FhMap,
 };
 use anyhow::Result;
 use polyfuse::{
-    io::{Reader, Writer},
     op,
-    reply::{ReplyAttr, ReplyEntry, ReplyOpen},
-    Context, DirEntry, FileAttr, Filesystem, Operation,
+    reply::{AttrOut, EntryOut, FileAttr, OpenOut, ReaddirOut},
+    KernelConfig, Operation, Request, Session,
 };
+use tokio::{
+    io::{unix::AsyncFd, Interest},
+    task::{self, JoinHandle},
+};
+
 use std::{
     ffi::OsStr,
     io,
     path::PathBuf,
+    sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -22,31 +27,74 @@ const ITEM_BITS: usize = 48;
 const DRIVE_OFFSET: u64 = 1 << ITEM_BITS;
 const ITEM_MASK: u64 = DRIVE_OFFSET - 1;
 
+pub async fn mount_thread(drives: Vec<Arc<DriveAccess>>, mount_point: PathBuf) {
+    let mut config = KernelConfig::default();
+    config.mount_option("ro");
+    config.mount_option("allow_other");
+
+    let session = AsyncSession::mount(mount_point, config)
+        .await
+        .unwrap();
+
+    let fs = Arc::new(GreediaFS::new(drives));
+
+    while let Some(req) = session.next_request().await.unwrap() {
+        println!("Got request");
+        let fs = fs.clone();
+
+        let _: JoinHandle<Result<()>> = tokio::spawn(async move {
+            let operation = req.operation();
+            dbg!(&operation);
+            match operation? {
+                Operation::Lookup(op) => fs.do_lookup(&req, op).await?,
+                Operation::Getattr(op) => fs.do_getattr(&req, op).await?,
+                Operation::Readdir(op) => fs.do_readdir(&req, op).await?,
+                Operation::Open(op) => fs.do_open(&req, op).await?,
+                Operation::Opendir(op) => fs.do_opendir(&req, op).await?,
+                Operation::Read(op) => fs.do_read(&req, op).await?,
+                Operation::Release(op) => fs.do_release(op).await?,
+                _ => req.reply_error(libc::ENOSYS)?,
+            }
+
+            Ok(())
+        });
+
+        task::yield_now().await;
+    }
+}
+
 enum Inode {
     Root,
     Unknown,
     Drive(u16, u64),
 }
 
+struct FileHandle {
+    offset: u64,
+    reader: Box<dyn CacheFileHandler>,
+    buffer: Vec<u8>,
+}
+
 struct GreediaFS {
-    drives: Vec<DriveAccess>,
-    start_time: SystemTime,
-    open_files: OpenFileMap<Box<dyn CacheRead + 'static + Send>>,
+    drives: Vec<Arc<DriveAccess>>,
+    start_time: Duration,
+    file_handles: FhMap<FileHandle>,
 }
 
 impl GreediaFS {
-    pub fn new(drives: Vec<DriveAccess>) -> GreediaFS {
-        let start_time = SystemTime::now();
-        let open_files = OpenFileMap::new();
+    pub fn new(drives: Vec<Arc<DriveAccess>>) -> GreediaFS {
+        let start = SystemTime::now();
+        let start_time = start.duration_since(UNIX_EPOCH).unwrap();
+        let open_files = FhMap::new();
         GreediaFS {
             drives,
             start_time,
-            open_files,
+            file_handles: open_files,
         }
     }
 
     fn map_inode(&self, inode: u64) -> Inode {
-        // The first 16 bytes if an inode are the drive_id, and the last 48 bytes are the item_id.
+        // The first 16 bytes in an inode are the drive_id, and the last 48 bytes are the item_id.
         // drive_id 0 is reserved, so drives start at drive_id 1.
         // Within drive_id 0, item_id 1 is the mount root, and item_id 2 is an "unknown" entry that always returns ENOENT.
 
@@ -68,53 +116,47 @@ impl GreediaFS {
         }
     }
 
-    fn getattr_root(&self) -> (FileAttr, Duration) {
-        let mut file_attr = FileAttr::default();
-        file_attr.set_mode(libc::S_IFDIR as u32 | 0o555);
-        file_attr.set_ino(1);
-        file_attr.set_nlink(self.drives.len() as u32);
-        file_attr.set_size(self.drives.len() as u64);
-        file_attr.set_ctime(self.start_time);
-        file_attr.set_mtime(self.start_time);
-        (file_attr, TTL_LONG)
+    fn getattr_root(&self, file_attr: &mut FileAttr) -> Duration {
+        file_attr.mode(libc::S_IFDIR as u32 | 0o555);
+        file_attr.ino(1);
+        file_attr.nlink(self.drives.len() as u32);
+        file_attr.size(self.drives.len() as u64);
+        file_attr.ctime(self.start_time);
+        file_attr.mtime(self.start_time);
+        TTL_LONG
     }
 
-    fn getattr_drive(&self, drive: u16) -> Option<(FileAttr, Duration)> {
+    fn getattr_drive(&self, drive: u16, file_attr: &mut FileAttr) -> Option<Duration> {
         if self.drives.len() <= drive as usize {
             None
         } else {
-            let mut file_attr = FileAttr::default();
-            file_attr.set_mode(libc::S_IFDIR as u32 | 0o555);
-            file_attr.set_ino(self.rev_inode(Inode::Drive(drive, 0)));
-            file_attr.set_ctime(self.start_time);
-            file_attr.set_mtime(self.start_time);
-            Some((file_attr, TTL_LONG))
+            file_attr.mode(libc::S_IFDIR as u32 | 0o555);
+            file_attr.ino(self.rev_inode(Inode::Drive(drive, 0)));
+            file_attr.ctime(self.start_time);
+            file_attr.mtime(self.start_time);
+            Some(TTL_LONG)
         }
     }
 
-    fn getattr_item(&self, drive: u16, inode: u64) -> Option<(FileAttr, Duration)> {
+    fn getattr_item(&self, drive: u16, inode: u64, file_attr: &mut FileAttr) -> Option<Duration> {
         let drive_access = self.drives.get(drive as usize)?;
+        drive_access.getattr_item(inode, file_attr)?;
+
         let global_inode = self.rev_inode(Inode::Drive(drive, inode));
-        let mut file_attr = drive_access
-            .read_item(inode, readitem_to_fileattr)
-            .unwrap()?;
-        file_attr.set_ino(global_inode);
-        Some((file_attr, TTL_LONG))
+        file_attr.ino(global_inode);
+        Some(TTL_LONG)
     }
 
-    fn readdir_root(&self, offset: u64) -> Vec<DirEntry> {
-        self.drives
-            .iter()
-            .skip(offset as usize)
-            .enumerate()
-            .map(|(num, drive)| {
-                DirEntry::dir(
-                    &drive.name,
-                    self.rev_inode(Inode::Drive(num as u16, 0)),
-                    num as u64 + 1,
-                )
-            })
-            .collect()
+    fn readdir_root(&self, offset: u64, readdir_out: &mut ReaddirOut) {
+        for (num, drive) in self.drives.iter().skip(offset as usize).enumerate() {
+            let name = OsStr::new(&drive.name);
+            let ino = self.rev_inode(Inode::Drive(num as u16, 0));
+            let typ = libc::DT_DIR as u32;
+            let off = num as u64 + 1;
+            if readdir_out.entry(name, ino, typ, off) {
+                break;
+            }
+        }
     }
 
     async fn readdir_drive(
@@ -123,66 +165,76 @@ impl GreediaFS {
         inode: u64,
         offset: u64,
         size: u32,
-    ) -> Option<Vec<DirEntry>> {
+        readdir_out: &mut ReaddirOut,
+    ) -> Option<()> {
         let drive_access = self.drives.get(drive as usize)?;
-        let mut cur_size = 0;
-        let out = drive_access
-            .read_dir(inode, offset, |item| {
-                let ino = self.rev_inode(Inode::Drive(drive, item.inode));
-                let off = item.off + 1;
-                let dir_entry = if item.is_dir {
-                    DirEntry::dir(item.name, ino, off)
-                } else {
-                    DirEntry::file(item.name, ino, off)
-                };
-                cur_size += dir_entry.as_ref().len();
 
-                if cur_size < size as usize {
-                    Some(dir_entry)
-                } else {
-                    None
-                }
-            })
-            .unwrap();
-        out
+        drive_access.readdir(inode, offset, size, |off, item| {
+            let name = OsStr::new(&item.name);
+            let ino = self.rev_inode(Inode::Drive(drive, item.inode));
+            let off = off + 1;
+            let typ = if item.is_dir {
+                libc::DT_DIR as u32
+            } else {
+                libc::DT_REG as u32
+            };
+
+            readdir_out.entry(name, ino, typ, off)
+        })
+
+        // let out = drive_access
+        //     .read_dir(inode, offset, |item| {
+        //         let ino = self.rev_inode(Inode::Drive(drive, item.inode));
+        //         let off = item.off + 1;
+        //         let dir_entry = if item.is_dir {
+        //             DirEntry::dir(item.name, ino, off)
+        //         } else {
+        //             DirEntry::file(item.name, ino, off)
+        //         };
+        //         cur_size += dir_entry.as_ref().len();
+
+        //         if cur_size < size as usize {
+        //             Some(dir_entry)
+        //         } else {
+        //             None
+        //         }
+        //     })
+        //     .unwrap();
+        // out
     }
 
-    fn lookup_root(&self, name: &OsStr) -> Option<ReplyEntry> {
+    fn lookup_root(&self, name: &OsStr) -> Option<EntryOut> {
         let name = name.to_str()?;
         let drive_num = self
             .drives
             .iter()
-            .position(|drive_cache| drive_cache.name == name)?;
+            .position(|drive_access| drive_access.name == name)?;
 
-        let mut file_attr = FileAttr::default();
-        file_attr.set_mode(libc::S_IFDIR as u32 | 0o555);
-        file_attr.set_ino(self.rev_inode(Inode::Drive(drive_num as u16, 0)));
-        file_attr.set_ctime(self.start_time);
-        file_attr.set_mtime(self.start_time);
+        let mut entry_out = EntryOut::default();
+        entry_out.ino(self.rev_inode(Inode::Drive(drive_num as u16, 0)));
+        entry_out.ttl_attr(TTL_LONG);
+        entry_out.ttl_entry(TTL_LONG);
 
-        let mut reply_entry = ReplyEntry::default();
-        reply_entry.ino(self.rev_inode(Inode::Drive(drive_num as u16, 0)));
-        reply_entry.attr(file_attr);
-        reply_entry.ttl_attr(TTL_LONG);
-        reply_entry.ttl_entry(TTL_LONG);
-        Some(reply_entry)
+        let file_attr = entry_out.attr();
+        file_attr.mode(libc::S_IFDIR as u32 | 0o555);
+        file_attr.ino(self.rev_inode(Inode::Drive(drive_num as u16, 0)));
+        file_attr.ctime(self.start_time);
+        file_attr.mtime(self.start_time);
+
+        Some(entry_out)
     }
 
-    fn lookup_drive(&self, drive: u16, parent_inode: u64, name: &OsStr) -> Option<ReplyEntry> {
+    fn lookup_drive(&self, drive: u16, parent_inode: u64, name: &OsStr) -> Option<EntryOut> {
         let drive_access = self.drives.get(drive as usize)?;
         let name = name.to_str()?;
 
-        if let Some((inode, mut file_attr)) = drive_access
-            .lookup_item(parent_inode, name, readitem_to_fileattr)
-            .unwrap()
-        {
-            let global_inode = self.rev_inode(Inode::Drive(drive, inode));
-            file_attr.set_ino(global_inode);
-            //println!("lookup_drive ({}) {}:{} -> {}", drive, parent_inode, name, inode);
+        let mut reply_entry = EntryOut::default();
+        let file_attr = reply_entry.attr();
 
-            let mut reply_entry = ReplyEntry::default();
+        if let Some(inode) = drive_access.lookup_item(parent_inode, name, file_attr) {
+            let global_inode = self.rev_inode(Inode::Drive(drive, inode));
+            file_attr.ino(global_inode);
             reply_entry.ino(global_inode);
-            reply_entry.attr(file_attr);
             reply_entry.ttl_attr(TTL_LONG);
             reply_entry.ttl_entry(TTL_LONG);
             Some(reply_entry)
@@ -191,91 +243,104 @@ impl GreediaFS {
         }
     }
 
-    async fn open_drive(&self, drive: u16, local_inode: u64) -> Option<ReplyOpen> {
-        let drive_access = self.drives.get(drive as usize)?;
-        let file = drive_access.open_file(local_inode).await?;
-        let fh = self.open_files.open(file).await;
+    async fn open_drive(&self, drive: u16, local_inode: u64) -> TypeResult<OpenOut> {
+        if let Some(drive_access) = self.drives.get(drive as usize) {
+            match drive_access.open_file(local_inode, 0).await {
+                TypeResult::IsType(reader) => {
+                    let fh = self
+                        .file_handles
+                        .open(FileHandle {
+                            offset: 0,
+                            reader,
+                            buffer: vec![0u8; 65536],
+                        })
+                        .await;
 
-        Some(ReplyOpen::new(fh))
-    }
+                    let mut open_out = OpenOut::default();
+                    open_out.fh(fh);
 
-    async fn opendir_root(&self) -> ReplyOpen {
-        let mut reply_open = ReplyOpen::new(0);
-        reply_open.cache_dir(true);
-        reply_open
-    }
-
-    async fn opendir_drive(&self, drive: u16, local_inode: u64) -> Option<ReplyOpen> {
-        let drive_access = self.drives.get(drive as usize)?;
-        let (is_dir, scanning) = drive_access.check_dir(local_inode);
-        let is_dir = is_dir?;
-        if !is_dir {
-            // TODO: handle results in mount to be able to pass "not a directory" error
+                    TypeResult::IsType(open_out)
+                }
+                TypeResult::IsNotType => TypeResult::IsNotType,
+                TypeResult::DoesNotExist => TypeResult::DoesNotExist,
+            }
+        } else {
+            TypeResult::DoesNotExist
         }
-        let mut reply_open = ReplyOpen::new(0);
-        reply_open.keep_cache(!scanning);
-        reply_open.cache_dir(!scanning);
-        Some(reply_open)
     }
 
-    async fn do_getattr<T: ?Sized>(
-        &self,
-        cx: &mut Context<'_, T>,
-        op: op::Getattr<'_>,
-    ) -> io::Result<()>
-    where
-        T: Writer + Unpin,
-    {
-        let attr = match self.map_inode(op.ino()) {
-            Inode::Root => Some(self.getattr_root()),
+    async fn opendir_root(&self) -> OpenOut {
+        let mut open_out = OpenOut::default();
+        open_out.fh(0);
+        open_out.cache_dir(true);
+        open_out
+    }
+
+    async fn opendir_drive(&self, drive: u16, local_inode: u64) -> TypeResult<OpenOut> {
+        if let Some(drive_access) = self.drives.get(drive as usize) {
+            match drive_access.check_dir(local_inode) {
+                TypeResult::IsType(scanning) => {
+                    let mut open_out = OpenOut::default();
+                    open_out.fh(0);
+                    open_out.keep_cache(!scanning);
+                    open_out.cache_dir(!scanning);
+                    TypeResult::IsType(open_out)
+                }
+                TypeResult::IsNotType => TypeResult::IsNotType,
+                TypeResult::DoesNotExist => TypeResult::DoesNotExist,
+            }
+        } else {
+            TypeResult::DoesNotExist
+        }
+    }
+
+    async fn do_getattr(&self, req: &Request, op: op::Getattr<'_>) -> io::Result<()> {
+        let mut attr_out = AttrOut::default();
+        let file_attr = attr_out.attr();
+        let ttl = match self.map_inode(op.ino()) {
+            Inode::Root => Some(self.getattr_root(file_attr)),
             Inode::Unknown => None,
-            Inode::Drive(drive, local_inode) if local_inode == 0 => self.getattr_drive(drive),
-            Inode::Drive(drive, local_inode) => self.getattr_item(drive, local_inode),
+            Inode::Drive(drive, local_inode) if local_inode == 0 => {
+                self.getattr_drive(drive, file_attr)
+            }
+            Inode::Drive(drive, local_inode) => self.getattr_item(drive, local_inode, file_attr),
         };
 
-        match attr {
-            Some((attr, ttl)) => cx.reply(ReplyAttr::new(attr).ttl_attr(ttl)).await?,
-            None => cx.reply_err(libc::ENOENT).await?,
+        match ttl {
+            Some(ttl) => {
+                attr_out.ttl(ttl);
+                req.reply(attr_out)?
+            }
+            None => req.reply_error(libc::ENOENT)?,
         }
 
         Ok(())
     }
 
-    async fn do_readdir<T: ?Sized>(
-        &self,
-        cx: &mut Context<'_, T>,
-        op: op::Readdir<'_>,
-    ) -> io::Result<()>
-    where
-        T: Writer + Unpin,
-    {
+    async fn do_readdir(&self, req: &Request, op: op::Readdir<'_>) -> io::Result<()> {
         let offset = op.offset();
         let size = op.size();
 
+        let mut readdir_out = ReaddirOut::new(size as usize);
+
         let dir = match self.map_inode(op.ino()) {
-            Inode::Root => Some(self.readdir_root(offset)),
+            Inode::Root => Some(self.readdir_root(offset, &mut readdir_out)),
             Inode::Unknown => None,
             Inode::Drive(drive, local_inode) => {
-                self.readdir_drive(drive, local_inode, offset, size).await
+                self.readdir_drive(drive, local_inode, offset, size, &mut readdir_out)
+                    .await
             }
         };
 
         match dir {
-            Some(dir) => cx.reply(dir).await?,
-            None => cx.reply_err(libc::ENOENT).await?,
+            Some(_) => req.reply(readdir_out)?,
+            None => req.reply_error(libc::ENOENT)?,
         }
 
         Ok(())
     }
 
-    async fn do_lookup<T: ?Sized>(
-        &self,
-        cx: &mut Context<'_, T>,
-        op: op::Lookup<'_>,
-    ) -> io::Result<()>
-    where
-        T: Writer + Unpin,
-    {
+    async fn do_lookup(&self, req: &Request, op: op::Lookup<'_>) -> io::Result<()> {
         let inode = op.parent();
         let name = op.name();
         let lookup = match self.map_inode(inode) {
@@ -285,134 +350,125 @@ impl GreediaFS {
         };
 
         match lookup {
-            Some(lookup) => cx.reply(lookup).await?,
-            None => cx.reply_err(libc::ENOENT).await?,
+            Some(lookup) => req.reply(lookup)?,
+            None => req.reply_error(libc::ENOENT)?,
         }
 
         Ok(())
     }
 
-    async fn do_open<T: ?Sized>(&self, cx: &mut Context<'_, T>, op: op::Open<'_>) -> io::Result<()>
-    where
-        T: Writer + Unpin,
-    {
+    async fn do_open(&self, req: &Request, op: op::Open<'_>) -> io::Result<()> {
         let inode = op.ino();
         let open = match self.map_inode(inode) {
             Inode::Drive(drive, local_inode) => self.open_drive(drive, local_inode).await,
-            _ => None,
+            _ => TypeResult::DoesNotExist,
         };
 
         match open {
-            Some(open) => cx.reply(open).await?,
-            None => cx.reply_err(libc::ENOENT).await?,
+            TypeResult::IsType(open_out) => req.reply(open_out)?,
+            TypeResult::IsNotType => req.reply_error(libc::EISDIR)?,
+            TypeResult::DoesNotExist => req.reply_error(libc::ENOENT)?,
         }
 
         Ok(())
     }
 
-    async fn do_opendir<T: ?Sized>(
-        &self,
-        cx: &mut Context<'_, T>,
-        op: op::Opendir<'_>,
-    ) -> io::Result<()>
-    where
-        T: Writer + Unpin,
-    {
+    async fn do_opendir(&self, req: &Request, op: op::Opendir<'_>) -> io::Result<()> {
         let inode = op.ino();
         let opendir = match self.map_inode(inode) {
-            Inode::Root => Some(self.opendir_root().await),
+            Inode::Root => TypeResult::IsType(self.opendir_root().await),
             Inode::Drive(drive, local_inode) => self.opendir_drive(drive, local_inode).await,
-            _ => None,
+            _ => TypeResult::DoesNotExist,
         };
 
         match opendir {
-            Some(opendir) => cx.reply(opendir).await?,
-            None => cx.reply_err(libc::ENOENT).await?,
+            TypeResult::IsType(open_out) => req.reply(open_out)?,
+            TypeResult::IsNotType => req.reply_error(libc::ENOTDIR)?,
+            TypeResult::DoesNotExist => req.reply_error(libc::ENOENT)?,
         }
 
         Ok(())
     }
 
-    async fn do_read<T: ?Sized>(&self, cx: &mut Context<'_, T>, op: op::Read<'_>) -> io::Result<()>
-    where
-        T: Writer + Unpin,
-    {
+    /// Perform a FUSE read() operation.
+    async fn do_read(&self, req: &Request, op: op::Read<'_>) -> io::Result<()> {
         let fh = op.fh();
         let offset = op.offset();
-        let size = op.size();
-        if let Some(file) = self.open_files.get(fh).await {
-            let mut reader = file.lock().await;
-            let read_data = reader.read(offset, size).await.unwrap();
-            cx.reply(&read_data).await?;
+        let size = op.size() as usize;
+        if let Some(file) = self.file_handles.get(fh).await {
+            let mut f = file.lock().await;
+
+            // Destructuring like this allows us to access multiple fields mutably.
+            let FileHandle {
+                offset: f_offset,
+                reader,
+                buffer,
+            } = &mut *f;
+
+            // FUSE passes us explicit offsets, so if our offset isn't where we expected
+            // the reader probably made a seek.
+            if *f_offset != offset {
+                reader.seek_to(*f_offset).await;
+            }
+
+            // FUSE requires us to give an exact size, so make sure the buffer is large
+            // enough to accommodate the read. We only give a smaller size on EOF.
+            if size > buffer.len() {
+                buffer.resize_with(size, Default::default);
+            }
+
+            // Read, and push our expected offset forward.
+            let read_len = reader.read_exact(&mut buffer[..size]).await;
+            *f_offset = offset + read_len as u64;
+
+            req.reply(&buffer[..read_len])?;
         } else {
-            cx.reply_err(libc::ENOENT).await?
+            req.reply_error(libc::ENOENT)?
         }
 
         Ok(())
     }
 
-    async fn do_release<T: ?Sized>(
-        &self,
-        _cx: &mut Context<'_, T>,
-        op: op::Release<'_>,
-    ) -> io::Result<()>
-    where
-        T: Writer + Unpin,
-    {
+    async fn do_release(&self, op: op::Release<'_>) -> io::Result<()> {
         let fh = op.fh();
-        self.open_files.close(fh).await;
+        self.file_handles.close(fh).await;
 
         Ok(())
     }
 }
 
-#[polyfuse::async_trait]
-impl Filesystem for GreediaFS {
-    async fn call<'a, 'cx, T: ?Sized>(
-        &'a self,
-        cx: &'a mut Context<'cx, T>,
-        op: Operation<'cx>,
-    ) -> io::Result<()>
-    where
-        T: Reader + Writer + Unpin + Send,
-    {
-        match op {
-            Operation::Lookup(op) => self.do_lookup(cx, op).await,
-            Operation::Getattr(op) => self.do_getattr(cx, op).await,
-            Operation::Readdir(op) => self.do_readdir(cx, op).await,
-            Operation::Open(op) => self.do_open(cx, op).await,
-            Operation::Opendir(op) => self.do_opendir(cx, op).await,
-            Operation::Read(op) => self.do_read(cx, op).await,
-            Operation::Release(op) => self.do_release(cx, op).await,
-            _ => Ok(()),
-        }
-    }
+struct AsyncSession {
+    inner: AsyncFd<Session>,
 }
 
-fn readitem_to_fileattr(read_item: ReadItem) -> FileAttr {
-    let mut file_attr = FileAttr::default();
-    file_attr.set_mtime(UNIX_EPOCH + Duration::from_secs(read_item.modified_time));
-
-    if let Some(file_data) = read_item.file_data {
-        file_attr.set_mode(libc::S_IFREG as u32 | 0o444);
-        file_attr.set_size(file_data.size);
-    } else {
-        file_attr.set_mode(libc::S_IFDIR as u32 | 0o555);
+impl AsyncSession {
+    async fn mount(mountpoint: PathBuf, config: KernelConfig) -> io::Result<Self> {
+        tokio::task::spawn_blocking(move || {
+            let session = Session::mount(mountpoint, config)?;
+            Ok(Self {
+                inner: AsyncFd::with_interest(session, Interest::READABLE)?,
+            })
+        })
+        .await
+        .expect("join error")
     }
 
-    file_attr
-}
+    async fn next_request(&self) -> io::Result<Option<Request>> {
+        use futures::{future::poll_fn, ready, task::Poll};
 
-/// Mount thread, with error handling
-pub async fn mount_thread_eh(drive_accessors: Vec<DriveAccess>, mount_point: PathBuf) {
-    mount_thread(drive_accessors, mount_point).await.unwrap();
-}
-
-/// Thread that handles all FUSE requests
-pub async fn mount_thread(drive_accessors: Vec<DriveAccess>, mount_point: PathBuf) -> Result<()> {
-    let fuse_args: Vec<&OsStr> = vec![
-        &OsStr::new("-o"),
-        &OsStr::new("auto_unmount,ro,allow_other"),
-    ];
-    Ok(polyfuse_tokio::mount(GreediaFS::new(drive_accessors), mount_point, &fuse_args).await?)
+        poll_fn(|cx| {
+            let mut guard = ready!(self.inner.poll_read_ready(cx))?;
+            match self.inner.get_ref().next_request() {
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                    guard.clear_ready();
+                    Poll::Pending
+                }
+                res => {
+                    guard.retain_ready();
+                    Poll::Ready(res)
+                }
+            }
+        })
+        .await
+    }
 }

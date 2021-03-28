@@ -84,7 +84,7 @@ pub struct ConfigTimecodeDrive {
     pub drive_id: String,
 }
 
-pub fn validate_config(cfg: &Config) -> bool {
+pub fn validate_config(_cfg: &Config) -> bool {
     // TODO: make sure no drive names are duplicated
     true
 }

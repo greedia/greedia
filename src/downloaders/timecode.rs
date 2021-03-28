@@ -22,10 +22,10 @@ impl DownloaderDrive for TimecodeDrive {
         &self,
         _last_page_token: Option<String>,
         _last_modified_date: Option<chrono::DateTime<chrono::Utc>>,
-    ) -> Pin<Box<dyn Stream<Item = Result<Page, DownloaderError>>>> {
+    ) -> Box<dyn Stream<Item = Result<Page, DownloaderError>> + Send + Sync + Unpin> {
         // Should we use this to list out timecode files of different sizes?
         // Perhaps the file_id should encode the file size in it. Use JSON?
-        Box::pin(stream::empty())
+        Box::new(stream::empty())
     }
 
     async fn open_file(
@@ -59,6 +59,10 @@ impl DownloaderDrive for TimecodeDrive {
         println!("TIMECODESTREAM NEW  {:p}", &*stream);
 
         Ok(stream)
+    }
+
+    fn get_drive_type(&self) -> &'static str {
+        "timecode"
     }
 }
 

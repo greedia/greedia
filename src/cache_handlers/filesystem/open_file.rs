@@ -10,7 +10,12 @@ use std::{
         Arc, Weak,
     },
 };
-use tokio::{fs::DirEntry, fs::{read_dir, File, OpenOptions}, io::AsyncSeekExt, sync::Mutex};
+use tokio::{
+    fs::DirEntry,
+    fs::{read_dir, File, OpenOptions},
+    io::AsyncSeekExt,
+    sync::Mutex,
+};
 
 use crate::{
     cache_handlers::CacheHandlerError,

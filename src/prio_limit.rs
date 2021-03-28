@@ -134,12 +134,16 @@ impl PrioLimit {
                 .await
                 .expect("Could not acquire rate-limiting token");
 
-            next_req
-                .unwrap()
-                .responder
-                .send_async(())
-                .await
-                .expect("Could not wake up rate-limited future");
+            if let Ok(next_req) = next_req {
+                next_req
+                    .responder
+                    .send_async(())
+                    .await
+                    .expect("Could not wake up rate-limited future");
+            } else {
+                // PrioLimit has shut down
+                break;
+            }
         }
     }
 }

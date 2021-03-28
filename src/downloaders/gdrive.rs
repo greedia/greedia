@@ -1,19 +1,22 @@
 use super::{DownloaderClient, DownloaderDrive, DownloaderError, FileInfo, Page, PageItem};
-use crate::prio_limit::PrioLimit;
+use crate::{prio_limit::PrioLimit, types::DataIdentifier};
 use anyhow::{format_err, Result};
-use async_stream::try_stream;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{Stream, TryStreamExt};
 use oauth2::{
-    basic::BasicClient, reqwest::async_http_client, AccessToken, AuthUrl,
-    ClientId, ClientSecret, RefreshToken, TokenResponse, TokenUrl,
+    basic::BasicClient, reqwest::async_http_client, AccessToken, AuthUrl, ClientId, ClientSecret,
+    RefreshToken, TokenResponse, TokenUrl,
 };
-use reqwest;
+use reqwest::{self, Client};
 use serde::Deserialize;
-use std::{pin::Pin, sync::Arc, time::Duration};
-use tokio::sync::Mutex;
+use std::{sync::Arc, time::Duration};
+use tokio::sync::{
+    mpsc::{self, Sender},
+    Mutex,
+};
+use tokio_stream::wrappers::ReceiverStream;
 
 #[derive(Clone, Debug)]
 struct ConnInfo {
@@ -88,110 +91,149 @@ pub struct GDriveDrive {
     drive_id: String,
 }
 
+pub struct GDriveStreamState {
+    access_token_mutex: Arc<Mutex<AccessToken>>,
+    root_query: Vec<(&'static str, String)>,
+    rate_limiter: Arc<PrioLimit>,
+    http_client: Client,
+    conn_info: ConnInfo,
+    access_token: Option<AccessToken>,
+    last_page_token: Option<String>,
+}
+
+/// Background task for sending new pages to a scan_pages Stream.
+/// This is necessary because hyper Response objects do not implement Sync.
+/// Therefore we need to use a channel, rather than async_stream or Stream::unfold.
+async fn scanner_bg_thread(
+    mut state: GDriveStreamState,
+    sender: Sender<Result<Page, DownloaderError>>,
+) {
+    if state.access_token.is_none() {
+        state.access_token = Some(state.access_token_mutex.lock().await.clone());
+    }
+
+    let mut access_token = state.access_token.unwrap();
+
+    let mut query = state.root_query.clone();
+
+    if let Some(page_token) = &state.last_page_token {
+        query.push(("pageToken", page_token.to_string()));
+    }
+
+    state.rate_limiter.bg_wait().await;
+
+    loop {
+        let res = state
+            .http_client
+            .get("https://www.googleapis.com/drive/v3/files")
+            .bearer_auth(access_token.secret())
+            .query(&query)
+            .send()
+            .await;
+
+        match res {
+            Ok(r) => {
+                match r.status().as_u16() {
+                    // Everything's good
+                    200 => (),
+                    // Bad access token, refresh it and retry request
+                    401 => {
+                        access_token = refresh_access_token(
+                            &state.access_token_mutex,
+                            &state.rate_limiter,
+                            &state.conn_info,
+                            access_token,
+                        )
+                        .await;
+                        continue;
+                    }
+                    // Rate limit or server error, retry request
+                    _ => continue,
+                }
+
+                let page = r.json::<GPage>().await.unwrap();
+                state.last_page_token = page.next_page_token;
+                if let Some(files) = page.files {
+                    let items = files
+                        .into_iter()
+                        .filter(|x| accepted_document_type(x))
+                        .map(|x| to_page_item(x))
+                        .collect();
+
+                    let _ = sender
+                        .send(Ok(Page {
+                            items,
+                            next_page_token: state.last_page_token.clone(),
+                        }))
+                        .await;
+                }
+
+                if state.last_page_token.is_none() {
+                    // This is the final page.
+                    break;
+                }
+            }
+            Err(_) => {
+                // Something bad happened, but continue anyways.
+                continue;
+            }
+        }
+    }
+}
+
 #[async_trait]
 impl DownloaderDrive for GDriveDrive {
     fn scan_pages(
         &self,
         last_page_token: Option<String>,
         last_modified_date: Option<DateTime<Utc>>,
-    ) -> Pin<Box<dyn Stream<Item = Result<Page, DownloaderError>>>> {
+    ) -> Box<dyn Stream<Item = Result<Page, DownloaderError>> + Send + Sync + Unpin> {
         let drive_id = self.drive_id.to_string();
         let access_token_mutex = self.access_token.clone();
         let rate_limiter = self.rate_limiter.clone();
         let http_client = self.http_client.clone();
         let conn_info = self.conn_info.clone();
 
-        Box::pin(try_stream! {
-            let mut query = "trashed = false".to_string();
+        let mut query = "trashed = false".to_string();
 
-            if last_page_token.is_none() {
-                if let Some(last_modified_date) = last_modified_date {
-                    query.push_str(&format!(
-                        " and modifiedTime > '{}'",
-                        last_modified_date.to_rfc3339()
-                    ));
-                }
+        if last_page_token.is_none() {
+            if let Some(last_modified_date) = last_modified_date {
+                query.push_str(&format!(
+                    " and modifiedTime > '{}'",
+                    last_modified_date.to_rfc3339()
+                ));
             }
+        }
 
-            let mut query = vec![
-                ("alt", "json".to_string()),
-                ("includeItemsFromAllDrives", "true".to_string()),
-                ("prettyPrint", "false".to_string()),
-                ("supportsAllDrives", "true".to_string()),
-                ("pageSize", "1000".to_string()),
-                ("driveId", drive_id.to_string()),
-                ("corpora", "drive".to_string()),
-                ("q", query.to_string()),
-                (
-                    "fields",
-                    "files(id,name,parents,modifiedTime,md5Checksum,size,mimeType),nextPageToken"
-                        .to_string(),
-                ),
-            ];
+        let root_query = vec![
+            ("alt", "json".to_string()),
+            ("includeItemsFromAllDrives", "true".to_string()),
+            ("prettyPrint", "false".to_string()),
+            ("supportsAllDrives", "true".to_string()),
+            ("pageSize", "1000".to_string()),
+            ("driveId", drive_id.to_string()),
+            ("corpora", "drive".to_string()),
+            ("q", query.to_string()),
+            (
+                "fields",
+                "files(id,name,parents,modifiedTime,md5Checksum,size,mimeType),nextPageToken"
+                    .to_string(),
+            ),
+        ];
 
-            let mut access_token = access_token_mutex.lock().await.clone();
-            let mut page_token = last_page_token.clone();
+        let state = GDriveStreamState {
+            access_token_mutex,
+            root_query,
+            rate_limiter,
+            http_client,
+            conn_info,
+            access_token: None,
+            last_page_token: last_page_token.clone(),
+        };
 
-            loop {
-                let mut query = query.clone();
-
-                if let Some(page_token) = &page_token {
-                    query.push(("pageToken", page_token.to_string()));
-                }
-
-                rate_limiter.bg_wait().await;
-
-                let res = http_client
-                    .get("https://www.googleapis.com/drive/v3/files")
-                    .bearer_auth(access_token.secret())
-                    .query(&query)
-                    .send()
-                    .await;
-
-                match res {
-                    Ok(r) => {
-                        match r.status().as_u16() {
-                            // Everything's good
-                            200 => (),
-                            // Bad access token, refresh it and retry request
-                            401 => {
-                                access_token = refresh_access_token(
-                                    &access_token_mutex,
-                                    &rate_limiter,
-                                    &conn_info,
-                                    access_token).await;
-                                continue;
-                            }
-                            // Rate limit or server error, retry request
-                            _ => continue,
-                        }
-
-                        let page = r.json::<GPage>().await.unwrap();
-                        page_token = page.next_page_token;
-                        if let Some(files) = page.files {
-                            let items = files
-                                .into_iter()
-                                .filter(|x| accepted_document_type(x))
-                                .map(|x| to_page_item(x))
-                                .collect();
-
-                            yield Page {
-                                items,
-                                next_page_token: page_token.clone(),
-                            };
-                        }
-
-                        if page_token.is_none() {
-                            break;
-                        }
-                    }
-                    Err(_) => {
-                        // Something bad happened, but continue anyways.
-                        continue;
-                    }
-                }
-            }
-        })
+        let (sender, recv) = mpsc::channel(1);
+        tokio::spawn(scanner_bg_thread(state, sender));
+        Box::new(ReceiverStream::new(recv))
     }
 
     async fn open_file(
@@ -216,6 +258,10 @@ impl DownloaderDrive for GDriveDrive {
 
         let stream = res.bytes_stream().map_err(|e| e.into());
         Ok(Box::new(stream))
+    }
+
+    fn get_drive_type(&self) -> &'static str {
+        "gdrive"
     }
 }
 
@@ -346,8 +392,9 @@ fn to_page_item(file: GPageItem) -> PageItem {
         file_info: if file.mime_type.as_deref() == Some("application/vnd.google-apps.folder") {
             None
         } else {
+            let md5 = hex::decode(file.md5_checksum.unwrap()).unwrap();
             Some(FileInfo {
-                md5: file.md5_checksum.unwrap(),
+                data_id: DataIdentifier::GlobalMd5(md5),
                 size: file.size.unwrap().parse().unwrap(),
             })
         },

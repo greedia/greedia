@@ -1,7 +1,5 @@
 pub mod filesystem;
 
-use std::pin::Pin;
-
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::Stream;
@@ -23,12 +21,13 @@ pub enum CacheHandlerError {
 
 #[async_trait]
 pub trait CacheDriveHandler: Send + Sync {
+    fn get_drive_type(&self) -> &'static str;
     fn get_drive_id(&self) -> String;
     fn scan_pages(
         &self,
         last_page_token: Option<String>,
         last_modified_date: Option<DateTime<Utc>>,
-    ) -> Pin<Box<dyn Stream<Item = Result<Page, DownloaderError>>>>;
+    ) -> Box<dyn Stream<Item = Result<Page, DownloaderError>> + Send + Sync + Unpin>;
     async fn open_file(
         &self,
         file_id: String,
@@ -40,7 +39,7 @@ pub trait CacheDriveHandler: Send + Sync {
 }
 
 #[async_trait]
-pub trait CacheFileHandler {
+pub trait CacheFileHandler: Send + Sync {
     /// Read data into `buf`.
     async fn read_into(&mut self, buf: &mut [u8]) -> usize;
     /// Read data into `buf` which is exactly the size of `len` (unless an EOF occurs).

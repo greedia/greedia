@@ -2,8 +2,9 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::Stream;
-use std::pin::Pin;
 use thiserror::Error;
+
+use crate::types::DataIdentifier;
 
 pub mod gdrive;
 pub mod timecode;
@@ -20,11 +21,12 @@ pub trait DownloaderClient {
 
 #[async_trait]
 pub trait DownloaderDrive: Sync + Send + 'static {
+    fn get_drive_type(&self) -> &'static str;
     fn scan_pages(
         &self,
         last_page_token: Option<String>,
         last_modified_date: Option<DateTime<Utc>>,
-    ) -> Pin<Box<dyn Stream<Item = Result<Page, DownloaderError>>>>;
+    ) -> Box<dyn Stream<Item = Result<Page, DownloaderError>> + Send + Sync + Unpin>;
 
     async fn open_file(
         &self,
@@ -39,8 +41,8 @@ pub trait DownloaderDrive: Sync + Send + 'static {
 
 #[derive(Debug)]
 pub struct Page {
-    items: Vec<PageItem>,
-    next_page_token: Option<String>,
+    pub items: Vec<PageItem>,
+    pub next_page_token: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +56,6 @@ pub struct PageItem {
 
 #[derive(Debug, Clone)]
 pub struct FileInfo {
-    pub md5: String,
+    pub data_id: DataIdentifier,
     pub size: u64,
 }

@@ -25,7 +25,6 @@ impl SmartCacher for ScFlac {
 
     async fn cache(
         &self,
-        header_data: &[u8],
         config: &SmartCacherConfig,
         file_spec: &FileSpec,
         action: &mut HardCacheDownloader,

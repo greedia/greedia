@@ -5,7 +5,7 @@ use rkyv::{
     ser::{serializers::WriteSerializer, Serializer},
     Archive, Serialize,
 };
-use sled::IVec;
+use sled::{Batch, IVec, Iter};
 
 #[derive(Clone)]
 pub struct Db {
@@ -27,6 +27,7 @@ impl Db {
     }
 }
 
+#[derive(Clone)]
 pub struct Tree {
     tree: sled::Tree,
 }
@@ -64,6 +65,14 @@ impl Tree {
         NV: Into<IVec>,
     {
         Ok(Ok(())) == self.tree.compare_and_swap(key, old, new)
+    }
+
+    pub fn write_batch(&self, batch: Batch) {
+        self.tree.apply_batch(batch).unwrap();
+    }
+
+    pub fn iter(&self) -> Iter {
+        self.tree.iter()
     }
 }
 

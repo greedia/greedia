@@ -31,7 +31,6 @@ pub trait SmartCacher: Sync + Send {
     /// If successful, return new instance of this SmartCacher.
     async fn cache(
         &self,
-        header_data: &[u8],
         config: &SmartCacherConfig,
         file_specs: &FileSpec,
         action: &mut HardCacheDownloader,
@@ -50,12 +49,6 @@ pub enum ScErr {
     /// Consider file download to be unsuccessful, but keep downloaded data.
     /// The cacher will then attempt to download using a different SmartCacher.
     Cancel,
-    /// Consider file download to be unsuccessful, but move downloaded data to the soft cache.
-    /// The cacher will then attempt to download using a different SmartCacher.
-    CancelWithMove,
-    /// Consider file download to be unsuccessful, and delete all downloaded data.
-    /// The cacher will then attempt to download using a different SmartCacher.
-    Trash,
 }
 
 #[cfg(test)]

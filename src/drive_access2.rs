@@ -87,23 +87,28 @@ impl DriveAccess {
         }
     }
 
-    pub fn lookup_item(
+    pub fn lookup_item<T>(
         &self,
         inode: u64,
         file_name: &str,
-    ) -> Option<u64> {
+        mut to_t: impl FnOnce(u64, &ArchivedDriveItem) -> T,
+    ) -> Option<T> {
         let inode = if inode == 0 {
             self.root_inode().unwrap_or(0)
         } else {
             inode
         };
 
-        if let Some(ref cc) = self.crypt {
+        let inode = if let Some(ref cc) = self.crypt {
             let file_name = cc.cipher.encrypt_segment(file_name).ok().unwrap_or_else(|| file_name.to_string());
             self.lookup_inode(inode, &file_name)
         } else {
             self.lookup_inode(inode, file_name)
-        }
+        }?;
+
+        let drive_item_bytes = self.inode_tree.get(inode.to_le_bytes())?;
+        let drive_item = get_rkyv::<DriveItem>(&&drive_item_bytes);
+        Some(to_t(inode, drive_item))
     }
 
     pub fn getattr_item<T>(
@@ -175,8 +180,8 @@ impl DriveAccess {
     }
 
     /// Try to find the inode from a name, given a parent.
-    fn lookup_inode(&self, inode: u64, file_name: &str) -> Option<u64> {
-        let lookup_bytes = make_lookup_key(inode, file_name);
+    fn lookup_inode(&self, parent_inode: u64, file_name: &str) -> Option<u64> {
+        let lookup_bytes = make_lookup_key(parent_inode, file_name);
         let inode_bytes = self.lookup_tree.get(lookup_bytes.as_slice())?;
         Some(u64::from_le_bytes(inode_bytes.as_ref().try_into().unwrap()))
     }

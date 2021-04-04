@@ -1,14 +1,13 @@
-use anyhow::Result;
 use async_trait::async_trait;
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::SeekFrom,
     path::PathBuf,
 };
-use tokio::fs::File;
+use tokio::{fs::File, io::AsyncSeekExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use super::{HardCacheItem, HardCacheMetadata, HcCacher, HcCacherItem};
+use super::{HardCacheItem, HcCacher, HcCacherItem};
 use crate::config::DownloadAmount;
 pub struct HcTestCacher {
     pub input: PathBuf,
@@ -21,11 +20,8 @@ pub struct HcTestCacher {
 #[async_trait]
 impl HcCacher for HcTestCacher {
     async fn get_item(&self, item: HardCacheItem) -> Box<dyn HcCacherItem + Send + Sync> {
-        if !item.id.is_empty() {
-            panic!("BUG: sctest id is not empty.");
-        }
-        if !item.md5.is_empty() {
-            panic!("BUG: sctest md5 is not empty.");
+        if !item.access_id.is_empty() {
+            panic!("BUG: sctest access_id is not empty.");
         }
 
         let input = File::open(&self.input).await.unwrap();
@@ -100,11 +96,11 @@ impl HcCacherItem for HcTestCacherItem {
 
         self.read_data(offset, size).await
     }
-    fn cache_data(&mut self, offset: u64, size: u64) {
+    async fn cache_data(&mut self, offset: u64, size: u64) {
         println!("cache_data {} {}", offset, size);
         self.ranges_to_cache.insert(offset, size);
     }
-    fn cache_data_bridged(&mut self, offset: u64, size: u64, max_bridge_len: Option<u64>) {
+    async fn cache_data_bridged(&mut self, offset: u64, size: u64, max_bridge_len: Option<u64>) {
         println!(
             "cache_data_bridged {} {} {:?}",
             offset, size, max_bridge_len
@@ -126,31 +122,14 @@ impl HcCacherItem for HcTestCacherItem {
                 .insert(last_bridge_point, offset - last_bridge_point + size);
         }
     }
-    fn cache_data_to(&mut self, offset: u64) {
+    async fn cache_data_to(&mut self, offset: u64) {
         println!("cache_data_to {}", offset);
         self.ranges_to_cache.insert(0, offset);
     }
 
-    fn cache_data_fully(&mut self) {
+    async fn cache_data_fully(&mut self) {
         println!("cache_data_fully");
         self.ranges_to_cache.insert(0, self.input_size);
-    }
-
-    async fn set_metadata(&mut self, meta: HardCacheMetadata) -> Result<()> {
-        println!("set_metadata {:?}", meta);
-        Ok(())
-    }
-    async fn cancel_with_move(&mut self) -> Result<()> {
-        println!("cancel_with_move");
-        Ok(())
-    }
-    async fn trash(&mut self) -> Result<()> {
-        println!("trash");
-        Ok(())
-    }
-
-    async fn close(&mut self) {
-        println!("close");
     }
 
     async fn save(&mut self) {
@@ -164,6 +143,6 @@ impl HcCacherItem for HcTestCacherItem {
             self.output.seek(SeekFrom::Start(*offset)).await.unwrap();
             self.output.write_all(&buf).await.unwrap();
         }
-        self.output.flush();
+        self.output.flush().await.unwrap();
     }
 }

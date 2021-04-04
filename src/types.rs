@@ -79,6 +79,8 @@ pub struct FileInfo {
 
 #[derive(Debug, Clone, PartialEq, Archive, RkyvSerialize, RkyvDeserialize)]
 pub enum DataIdentifier {
+    #[cfg(feature = "sctest")]
+    None,
     GlobalMd5(Vec<u8>),
     //DriveUnique(Vec<u8>, Vec<u8>), // probably needed for future S3, etc support
 }

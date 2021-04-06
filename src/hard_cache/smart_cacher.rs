@@ -2,6 +2,10 @@ use super::HardCacheDownloader;
 use crate::config::SmartCacherConfig;
 use async_trait::async_trait;
 
+/// Global smart cacher version. Increment this any time a release is made with
+/// a new or updated smart cacher.
+pub static SMART_CACHER_VERSION: u64 = 0;
+
 /// General information about the file that could assist in scanning.
 pub struct FileSpec {
     /// File name.
@@ -14,13 +18,8 @@ pub struct FileSpec {
 pub struct SmartCacherSpec {
     /// Name of this SmartCacher.
     pub name: &'static str,
-    /// Version of this SmartCacher (to allow rescanning on upgrades).
-    pub version: u64,
     /// File extensions that are generally supported by this SmartCacher.
     pub exts: &'static [&'static str],
-    /// How many starting bytes are needed to detect if this SmartCacher should process the file.
-    /// If set to None, don't try to detect at all.
-    pub header_bytes: u64,
 }
 
 #[async_trait]

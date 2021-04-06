@@ -14,9 +14,7 @@ use async_trait::async_trait;
 
 static SPEC: SmartCacherSpec = SmartCacherSpec {
     name: "mp3_testing",
-    version: 0,
     exts: &["mp3"],
-    header_bytes: 65536,
 };
 
 /// Smart cacher for MP3 files.

@@ -10,9 +10,7 @@ use async_trait::async_trait;
 
 static SPEC: SmartCacherSpec = SmartCacherSpec {
     name: "flac_alpha",
-    version: 0,
     exts: &["flac"],
-    header_bytes: 65536,
 };
 
 pub struct ScFlac;

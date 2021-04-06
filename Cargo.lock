@@ -145,7 +145,6 @@ checksum = "cf1de2fe8c75bc145a2f577add951f8134889b4795d47466a54a5c846d691693"
 [[package]]
 name = "bitstream-io"
 version = "1.0.0"
-source = "git+https://github.com/k3d3/bitstream-io#8339476ba4eb0bd335d8360e3f8ca1cdcf0ff61b"
 dependencies = [
  "async-trait",
  "tokio 1.4.0",

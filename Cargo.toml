@@ -38,7 +38,7 @@ bytes = "1.0"
 rkyv = "0.5"
 sled = "0.34"
 tokio-stream = "0.1.5"
-bitstream-io = {git = "https://github.com/k3d3/bitstream-io" }
+bitstream-io = { path = "../bitstream-io" }
 phf = { version = "0.8.0", features = ["macros"] }
 
 [dev-dependencies]

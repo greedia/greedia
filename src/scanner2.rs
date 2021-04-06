@@ -90,7 +90,7 @@ pub async fn scan_thread(drive_access: Arc<DriveAccess>) {
 
     perform_caching(&trees, drive_access).await;
 
-    println!("Finished scanning {} ({}:{}).", name, drive_type, drive_id);
+    println!("Finished caching {} ({}:{}).", name, drive_type, drive_id);
 }
 
 /// Scan the drive for new files.
@@ -145,10 +145,9 @@ async fn perform_caching(trees: &ScanTrees, drive_access: Arc<DriveAccess>) {
         {
             let data_id = data_id.deserialize(&mut AllocDeserializer).unwrap();
             let data_id_key = serialize_rkyv(&data_id);
-            let hc_meta = trees.hc_meta_tree.get(data_id_key.as_slice()).map(|m| {
-                get_rkyv::<HardCacheMetadata>(&m)
-                    .deserialize(&mut AllocDeserializer)
-                    .unwrap()
+            let hc_bytes = trees.hc_meta_tree.get(data_id_key.as_slice());
+            let hc_meta = hc_bytes.as_deref().map(|m| {
+                get_rkyv::<HardCacheMetadata>(m)
             });
             // println!("Processing {}, size {}", file_name, size);
             if let Some(meta) = hard_cacher
@@ -248,6 +247,7 @@ fn handle_add_items(trees: &ScanTrees, parent: &str, items: &Vec<&PageItem>) {
         let drive_item_bytes = serialize_rkyv(&drive_item);
 
         inode_bytes.copy_from_slice(&next_inode.to_le_bytes());
+        item_inodes.insert(item.id.clone(), next_inode);
 
         // Add the inode key, which stores the actual drive item.
         inode_batch.insert(&inode_bytes, drive_item_bytes.as_slice());
@@ -258,6 +258,9 @@ fn handle_add_items(trees: &ScanTrees, parent: &str, items: &Vec<&PageItem>) {
 
         next_inode += 1;
     }
+
+    println!("items had {} len", items.len());
+    println!("item_inodes had {} len", item_inodes.len());
 
     // Merge items into parent
     let items = items
@@ -270,6 +273,8 @@ fn handle_add_items(trees: &ScanTrees, parent: &str, items: &Vec<&PageItem>) {
             is_dir: x.file_info.is_none(),
         })
         .collect::<Vec<_>>();
+
+    println!("items has {} len", items.len());
 
     // Add existing items to new_items, if parent already exists
     inode_bytes.copy_from_slice(&next_inode.to_le_bytes());

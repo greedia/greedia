@@ -1,4 +1,5 @@
 pub mod filesystem;
+pub mod crypt_passthrough;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -43,11 +44,40 @@ pub trait CacheFileHandler: Send + Sync {
     /// Read data into `buf`.
     async fn read_into(&mut self, buf: &mut [u8]) -> usize;
     /// Read data into `buf` which is exactly the size of `len` (unless an EOF occurs).
-    async fn read_exact(&mut self, buf: &mut [u8]) -> usize;
+    async fn read_exact(&mut self, buf: &mut [u8]) -> usize {
+        // Call read_into repeatedly until correct length, or EOF
+        let mut total_bytes_read = 0;
+
+        loop {
+            let bytes_read = self.read_into(&mut buf[total_bytes_read..]).await;
+            if bytes_read == 0 {
+                return total_bytes_read;
+            } else {
+                total_bytes_read += bytes_read;
+                if total_bytes_read == buf.len() {
+                    return total_bytes_read;
+                }
+            }
+        }
+    }
     /// Cache data to file without reading it.
     async fn cache_data(&mut self, len: usize) -> usize;
     /// Cache data to file without reading it, to exactly the size of `len` (unless an EOF occurs).
-    async fn cache_exact(&mut self, len: usize) -> usize;
+    async fn cache_exact(&mut self, len: usize) -> usize {
+        let mut total_bytes_read = 0;
+
+        loop {
+            let bytes_read = self.cache_data(len - total_bytes_read).await;
+            if bytes_read == 0 {
+                return total_bytes_read;
+            } else {
+                total_bytes_read += bytes_read;
+                if total_bytes_read == len {
+                    return total_bytes_read;
+                }
+            }
+        }
+    }
     /// Seek stream to `offset`.
     async fn seek_to(&mut self, offset: u64);
 }

@@ -11,6 +11,9 @@ use mount::mount_thread;
 use scanner2::scan_thread;
 use structopt::StructOpt;
 
+#[cfg(feature = "sctest")]
+use hard_cache::HardCacher;
+
 // mod cache;
 // mod cache_reader;
 // mod downloader;
@@ -50,11 +53,11 @@ enum Greedia {
     /// Test a smart cacher by copying the cached portions of a file.
     Sctest {
         /// Full file for this smart cacher to cache/copy.
-        #[structopt(short, long)]
+        #[structopt()]
         input: PathBuf,
 
         /// Output file that only contains the cached portions.
-        #[structopt(short, long)]
+        #[structopt()]
         output: PathBuf,
 
         /// Number of seconds to cache (default 10).
@@ -221,8 +224,6 @@ async fn sctest(
     fill_byte: Option<String>,
     fill_random: bool,
 ) -> Result<()> {
-    dbg!(&input, &output, &seconds, &fill_byte, &fill_random);
-
     let meta = input.metadata().unwrap();
     let file_name = input.file_name().unwrap().to_str().unwrap().to_string();
     let size = meta.len();

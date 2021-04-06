@@ -4,6 +4,9 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+use rkyv::de::deserializers::AllocDeserializer;
+use rkyv::Deserialize;
+
 use crate::db::get_rkyv;
 use crate::{
     cache_handlers::{CacheDriveHandler, CacheFileHandler},
@@ -64,25 +67,33 @@ impl DriveAccess {
         inode: u64,
         offset: u64,
     ) -> TypeResult<Box<dyn CacheFileHandler>> {
-        todo!()
+        if let Some(drive_item_bytes) = self.inode_tree.get(inode.to_le_bytes()) {
+            let drive_item = get_rkyv::<DriveItem>(&drive_item_bytes);
+            if let ArchivedDriveItemData::FileItem { file_name: _, data_id, size } = &drive_item.data {
+                let access_id = drive_item.access_id.to_string();
+                let data_id = data_id.deserialize(&mut AllocDeserializer).unwrap();
+                let file = self.cache_handler.open_file(access_id, data_id, *size, offset, false).await.unwrap();
+                TypeResult::IsType(file)
+            } else {
+                TypeResult::IsNotType
+            }
+        } else {
+            TypeResult::DoesNotExist
+        }
     }
 
     /// Check if a directory exists and is a directory.
     /// If it is, return bool that states if scanning is in progress.
     pub fn check_dir(&self, inode: u64) -> TypeResult<bool> {
         let scanning = true; // TODO: not hardcode scanning
-        println!("inode {}", inode);
         if let Some(inode_data) = self.inode_tree.get(inode.to_le_bytes()) {
             let item = get_rkyv::<DriveItem>(&inode_data);
             if let ArchivedDriveItemData::Dir { items: _ } = item.data {
-                println!("good");
                 TypeResult::IsType(scanning)
             } else {
-                println!("bad");
                 TypeResult::IsNotType
             }
         } else {
-            println!("not there");
             TypeResult::DoesNotExist
         }
     }
@@ -91,7 +102,7 @@ impl DriveAccess {
         &self,
         inode: u64,
         file_name: &str,
-        mut to_t: impl FnOnce(u64, &ArchivedDriveItem) -> T,
+        to_t: impl FnOnce(u64, &ArchivedDriveItem) -> T,
     ) -> Option<T> {
         let inode = if inode == 0 {
             self.root_inode().unwrap_or(0)
@@ -113,8 +124,8 @@ impl DriveAccess {
 
     pub fn getattr_item<T>(
         &self,
-        inode: u64,
-        mut to_t: impl FnOnce(&ArchivedDriveItem) -> T,
+        _inode: u64,
+        mut _to_t: impl FnOnce(&ArchivedDriveItem) -> T,
     ) -> Option<T> {
         todo!()
     }
@@ -123,7 +134,6 @@ impl DriveAccess {
         &self,
         inode: u64,
         offset: u64,
-        size: u32,
         mut for_each: impl FnMut(u64, &ArchivedDirItem) -> bool,
     ) -> Option<()> {
         let inode = if inode == 0 {
@@ -140,7 +150,7 @@ impl DriveAccess {
         let dir = get_rkyv::<DriveItem>(&dir_bytes);
 
         if let ArchivedDriveItemData::Dir { items } = &dir.data {
-            for (off, item) in items.iter().skip(offset as usize).enumerate() {
+            for (off, item) in items.iter().enumerate().skip(offset as usize) {
                 if for_each(off as u64, item) {
                     // The FUSE entry is full, so stop iterating
                     break;

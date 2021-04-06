@@ -38,12 +38,10 @@ pub async fn mount_thread(drives: Vec<Arc<DriveAccess>>, mount_point: PathBuf) {
     let fs = Arc::new(GreediaFS::new(drives));
 
     while let Some(req) = session.next_request().await.unwrap() {
-        println!("Got request");
         let fs = fs.clone();
 
         let _: JoinHandle<Result<()>> = tokio::spawn(async move {
             let operation = req.operation();
-            dbg!(&operation);
             match operation? {
                 Operation::Lookup(op) => fs.do_lookup(&req, op).await?,
                 Operation::Getattr(op) => fs.do_getattr(&req, op).await?,
@@ -177,12 +175,11 @@ impl GreediaFS {
         drive: u16,
         inode: u64,
         offset: u64,
-        size: u32,
         readdir_out: &mut ReaddirOut,
     ) -> Option<()> {
         let drive_access = self.drives.get(drive as usize)?;
 
-        drive_access.readdir(inode, offset, size, |off, item| {
+        drive_access.readdir(inode, offset, |off, item| {
             let name = OsStr::new(item.name.as_str());
             let ino = self.rev_inode(Inode::Drive(drive, item.inode));
             let off = off + 1;
@@ -192,29 +189,8 @@ impl GreediaFS {
                 libc::DT_REG as u32
             };
 
-            dbg!(name, item.inode, ino, off, typ);
             readdir_out.entry(name, ino, typ, off)
         })
-
-        // let out = drive_access
-        //     .read_dir(inode, offset, |item| {
-        //         let ino = self.rev_inode(Inode::Drive(drive, item.inode));
-        //         let off = item.off + 1;
-        //         let dir_entry = if item.is_dir {
-        //             DirEntry::dir(item.name, ino, off)
-        //         } else {
-        //             DirEntry::file(item.name, ino, off)
-        //         };
-        //         cur_size += dir_entry.as_ref().len();
-
-        //         if cur_size < size as usize {
-        //             Some(dir_entry)
-        //         } else {
-        //             None
-        //         }
-        //     })
-        //     .unwrap();
-        // out
     }
 
     fn lookup_root(&self, name: &OsStr) -> Option<EntryOut> {
@@ -351,7 +327,7 @@ impl GreediaFS {
             Inode::Root => Some(self.readdir_root(offset, &mut readdir_out)),
             Inode::Unknown => None,
             Inode::Drive(drive, local_inode) => {
-                self.readdir_drive(drive, local_inode, offset, size, &mut readdir_out)
+                self.readdir_drive(drive, local_inode, offset, &mut readdir_out)
                     .await
             }
         };

@@ -963,6 +963,10 @@ fn get_file_cache_path(cache_root: &Path, data_id: &DataIdentifier) -> PathBuf {
             let dir_2 = hex_md5.get(2..4).unwrap();
             cache_root.join(dir_1).join(dir_2).join(hex_md5)
         }
+        #[cfg(feature = "sctest")]
+        DataIdentifier::None => {
+            PathBuf::new()
+        }
     }
 }
 

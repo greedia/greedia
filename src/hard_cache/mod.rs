@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use futures::{Future, FutureExt};
+use futures::{Future, FutureExt, ready};
 use smart_cacher::{FileSpec, ScErr, ScOk, ScResult, SmartCacher};
 use tokio::io::{AsyncRead, ReadBuf};
 use std::{collections::{BTreeMap, HashMap}, ffi::OsStr, marker::PhantomData, path::Path, pin::Pin, sync::Arc, task::{Context, Poll}};
@@ -566,9 +566,6 @@ pub struct HardCacheReader<'a> {
     _phantom: PhantomData<&'a mut HardCacheDownloader>,
 }
 
-unsafe impl<'a> Send for HardCacheReader<'a> {}
-unsafe impl<'a> Sync for HardCacheReader<'a> {}
-
 impl<'a> AsyncRead for HardCacheReader<'a> {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -581,17 +578,13 @@ impl<'a> AsyncRead for HardCacheReader<'a> {
             // SAFETY: As long as last_fut is not leaked outside of HardCacheReader, this should be safe.
             unsafe { &mut *dl }.read_data(offset, buf.remaining() as u64).boxed()
         });
-        match last_fut.poll_unpin(cx) {
-            Poll::Ready(x) => {
-                buf.put_slice(x.as_slice());
-                self.last_fut = None;
-                self.offset += x.len() as u64;
-                Poll::Ready(Ok(()))
-            }
-            Poll::Pending => {
-                Poll::Pending
-            },
-        }
+
+        // Get the ready value of the Poll, otherwise return Pending
+        let x = ready!(last_fut.poll_unpin(cx));
+        buf.put_slice(x.as_slice());
+        self.last_fut = None;
+        self.offset += x.len() as u64;
+        Poll::Ready(Ok(()))
     }
 }
 

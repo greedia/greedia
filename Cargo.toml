@@ -35,13 +35,11 @@ async-trait = "0.1"
 access-queue = "1.1"
 flume = "0.10"
 bytes = "1.0"
-rkyv = "0.4"
+rkyv = "0.5"
 sled = "0.34"
 tokio-stream = "0.1.5"
 bitstream-io = {git = "https://github.com/k3d3/bitstream-io" }
 phf = { version = "0.8.0", features = ["macros"] }
-async-recursion = "0.3.2"
-owning_ref = "0.4.1"
 
 [dev-dependencies]
 tempfile = "3.2"

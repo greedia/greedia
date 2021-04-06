@@ -14,6 +14,7 @@ use super::{HardCacheDownloader, smart_cacher::{FileSpec, ScErr::*, ScResult, Sm
 use async_trait::async_trait;
 
 mod ebml;
+mod ids;
 
 static SPEC: SmartCacherSpec = SmartCacherSpec {
     name: "mkv_testing",
@@ -35,7 +36,7 @@ impl SmartCacher for ScMkv {
         action: &mut HardCacheDownloader,
     ) -> ScResult {
         let (mut id_0, mut size_0, _) = ebml::read_element_id_size(&mut action.reader(0)).await.or(Err(Cancel))?;
-        dbg!(&id_0, &size_0);
+        dbg!(&id_0, &size_0, ids::HEADER);
         Err(Cancel)
     }
 }

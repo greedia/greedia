@@ -9,6 +9,9 @@
 // This file may be out of date. The original file can be found at
 // https://github.com/tuffy/matroska/blob/master/src/ids.rs
 
+#![allow(dead_code)]
+
+pub const HEADER: u32 = 0x1A45_DFA3;
 pub const SEGMENT: u32 = 0x1853_8067;
 pub const SEEKHEAD: u32 = 0x114D_9B74;
 pub const SEEK: u32 = 0x4DBB;

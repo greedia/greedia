@@ -4,7 +4,6 @@
 // MKV files don't appear to have bitrates in their metadata. Instead, they just have seek tables, which should
 // be enough to figure out approximately how far to download.
 //
-// Since making an EBML implementation solely to get the first X seconds of a file is a bit absurd, so
 // I have (somewhat shamefully) stolen and modified ebml.rs from the rust `matroska` library
 // (https://github.com/tuffy/matroska/blob/master/src/ebml.rs).
 

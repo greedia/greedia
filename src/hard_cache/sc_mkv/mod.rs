@@ -9,15 +9,18 @@
 
 use crate::config::SmartCacherConfig;
 
-use super::{HardCacheDownloader, smart_cacher::{FileSpec, ScErr::*, ScResult, SmartCacher, SmartCacherSpec}};
+use super::{HardCacheDownloader, smart_cacher::{FileSpec, ScOk::*, ScErr::*, ScResult, SmartCacher, SmartCacherSpec}};
 use async_trait::async_trait;
+use ebml::{Element, ElementType};
+use ids::EBML_DOC_TYPE;
 
+mod mkv;
 mod ebml;
 mod ids;
 
 static SPEC: SmartCacherSpec = SmartCacherSpec {
     name: "mkv_testing",
-    exts: &["mkv"],
+    exts: &["mkv", "webm"],
 };
 
 pub struct ScMkv;
@@ -30,12 +33,45 @@ impl SmartCacher for ScMkv {
 
     async fn cache(
         &self,
-        config: &SmartCacherConfig,
-        file_specs: &FileSpec,
+        _config: &SmartCacherConfig,
+        _file_specs: &FileSpec,
         action: &mut HardCacheDownloader,
     ) -> ScResult {
-        let (mut id_0, mut size_0, _) = ebml::read_element_id_size(&mut action.reader(0)).await.or(Err(Cancel))?;
-        dbg!(&id_0, &size_0, ids::HEADER);
-        Err(Cancel)
+        // Attempt to read header
+        let mut r = action.reader(0);
+        let (id_0, size_0, _) = ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
+        if id_0 != ids::EBML_HEADER {
+            return Err(Cancel);
+        }
+
+        // Verify that the doctype is matroska
+        let m = Element::parse_master(&mut r, size_0).await.unwrap();
+        for e in m {
+            if e.id == EBML_DOC_TYPE {
+                if let ElementType::String(val) = e.val {
+                    if val != "matroska" && val != "webm" {
+                        return Err(Cancel)
+                    }
+                    println!("We have file type {}", val);
+                }
+            }
+        }
+
+        // Find other elements
+        let (mut id_0, mut size_0, _) = ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
+        println!("id: 0x{:X} size: {}", id_0, size_0);
+
+        if id_0 != ids::SEGMENT {
+            return Err(Cancel); // TODO: loop through to find SEGMENT
+        }
+
+        let segment_start = r.offset;
+        let (id_1, size_1, len) = ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
+        println!("id: 0x{:X} size: {} len: {}", id_1, size_1, len);
+
+        
+        
+
+        Ok(Finalize)
     }
 }

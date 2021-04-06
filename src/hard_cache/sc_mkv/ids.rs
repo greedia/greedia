@@ -11,7 +11,15 @@
 
 #![allow(dead_code)]
 
-pub const HEADER: u32 = 0x1A45_DFA3;
+pub const EBML_HEADER: u32 = 0x1A45_DFA3;
+pub const EBML_VERSION: u32 = 0x4286;
+pub const EBML_READ_VERSION: u32 = 0x42F7;
+pub const EBML_MAX_ID_LENGTH: u32 = 0x42F2;
+pub const EBML_MAX_SIZE_LENGTH: u32 = 0x42F3;
+pub const EBML_DOC_TYPE: u32 = 0x4282;
+pub const EBML_DOC_TYPE_VERSION: u32 = 0x4287;
+pub const EBML_DOC_TYPE_READ_VERSION: u32 = 0x4285;
+
 pub const SEGMENT: u32 = 0x1853_8067;
 pub const SEEKHEAD: u32 = 0x114D_9B74;
 pub const SEEK: u32 = 0x4DBB;

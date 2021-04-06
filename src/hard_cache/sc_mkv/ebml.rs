@@ -30,7 +30,7 @@ type BitReader<'a> = bitstream_io::AsyncBitReader<&'a mut dyn io::Read, bitstrea
 pub struct Element {
     pub id: u32,
     pub size: u64, /*total size of element, including header*/
-    pub val: Box<ElementType>,
+    pub val: ElementType,
 }
 
 static IDS_MASTER: Set<u32> = phf_set! {
@@ -108,7 +108,7 @@ impl Element {
     pub fn parse<'a, R: AsyncRead + Send + Sync + Unpin>(r: &'a mut R) -> BoxFuture<'a, MResult<Element>> {
         async move {
             let (id, size, header_len) = read_element_id_size(r).await?;
-            let val = Box::new(Element::parse_body(r, id, size).await?);
+            let val = Element::parse_body(r, id, size).await?;
             Ok(Element {
                 id,
                 size: header_len + size,

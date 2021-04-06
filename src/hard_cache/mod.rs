@@ -1,25 +1,38 @@
 use async_trait::async_trait;
-use futures::{Future, FutureExt, ready};
+use futures::{ready, Future, FutureExt};
 use smart_cacher::{FileSpec, ScErr, ScOk, ScResult, SmartCacher};
+use std::{
+    collections::{BTreeMap, HashMap},
+    ffi::OsStr,
+    marker::PhantomData,
+    path::Path,
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+};
 use tokio::io::{AsyncRead, ReadBuf};
-use std::{collections::{BTreeMap, HashMap}, ffi::OsStr, marker::PhantomData, path::Path, pin::Pin, sync::Arc, task::{Context, Poll}};
 
-#[cfg(feature="sctest")]
+#[cfg(feature = "sctest")]
 use std::path::PathBuf;
 
-use rkyv::{Archive, Deserialize, Serialize, de::deserializers::AllocDeserializer};
+use rkyv::{de::deserializers::AllocDeserializer, Archive, Deserialize, Serialize};
 
-use crate::{cache_handlers::{CacheFileHandler, crypt_passthrough::CryptPassthrough}, config::{DownloadAmount, SmartCacherConfig}, drive_access2::DriveAccess, types::DataIdentifier};
 use self::smart_cacher::SMART_CACHER_VERSION;
+use crate::{
+    cache_handlers::{crypt_passthrough::CryptPassthrough, CacheFileHandler},
+    config::{DownloadAmount, SmartCacherConfig},
+    drive_access2::DriveAccess,
+    types::DataIdentifier,
+};
 
 #[cfg(feature = "sctest")]
 mod sctest;
 mod smart_cacher;
 
 mod sc_flac;
+mod sc_mkv;
 mod sc_mp3;
 mod sc_ogg;
-mod sc_mkv;
 
 /*
 HARD_CACHE RULES
@@ -111,7 +124,7 @@ impl HardCacher {
         meta: Option<&ArchivedHardCacheMetadata>,
     ) -> Option<HardCacheMetadata> {
         // KTODO: try filename decryption here
-        
+
         let item = HardCacheItem {
             access_id: access_id.to_string(),
             file_name: file_name.to_string(),
@@ -146,15 +159,16 @@ impl HardCacher {
         // Short-circuit if finalized with latest version of smart_cacher
         if let Some(ref meta) = meta {
             if self.is_latest(meta) {
-                return Some(meta
-                    .deserialize(&mut AllocDeserializer)
-                    .unwrap());
+                return Some(meta.deserialize(&mut AllocDeserializer).unwrap());
             }
         }
         let file_spec = hard_cache_item_to_file_spec(&item);
         let item_size = item.size;
 
-        let preferred_cacher = Path::new(&item.file_name).extension().and_then(OsStr::to_str).and_then(|ext| self.cachers_by_ext.get(ext));
+        let preferred_cacher = Path::new(&item.file_name)
+            .extension()
+            .and_then(OsStr::to_str)
+            .and_then(|ext| self.cachers_by_ext.get(ext));
 
         let cache_item = self.cacher.get_item(item).await;
         let mut hcd = HardCacheDownloader::new(cache_item).await;
@@ -179,13 +193,7 @@ impl HardCacher {
         if let Some(pc) = preferred_cacher {
             let spec = pc.spec();
             println!("Trying preferred cacher {}", spec.name);
-            let res: ScResult = pc
-                .cache(
-                    &smart_cacher_config,
-                    &file_spec,
-                    &mut hcd,
-                )
-                .await;
+            let res: ScResult = pc.cache(&smart_cacher_config, &file_spec, &mut hcd).await;
 
             match res {
                 Ok(ScOk::Finalize) => {
@@ -199,7 +207,6 @@ impl HardCacher {
                 }
                 Err(ScErr::Cancel) => {
                     // println!("Smart cacher {} failed, trying next...", spec.name);
-                    hcd.save().await;
                 }
             }
         }
@@ -214,11 +221,7 @@ impl HardCacher {
             }
             println!("Trying smart cacher {}", spec.name);
             let res: ScResult = cacher
-                .cache(
-                    &smart_cacher_config,
-                    &file_spec,
-                    &mut hcd,
-                )
+                .cache(&smart_cacher_config, &file_spec, &mut hcd)
                 .await;
 
             match res {
@@ -233,8 +236,6 @@ impl HardCacher {
                 }
                 Err(ScErr::Cancel) => {
                     // println!("Smart cacher {} failed, trying next...", spec.name);
-                    hcd.save().await;
-                    continue;
                 }
             }
         }
@@ -329,19 +330,13 @@ struct HcDownloadCacherItem {
 }
 
 impl HcDownloadCacherItem {
-    async fn new(
-        drive_access: Arc<DriveAccess>,
-        mut item: HardCacheItem,
-    ) -> HcDownloadCacherItem {
+    async fn new(drive_access: Arc<DriveAccess>, mut item: HardCacheItem) -> HcDownloadCacherItem {
         let mut crypt = false;
         if let Some(ref cc) = drive_access.crypt {
-            if let Some(file_name) = cc
-                .cipher
-                .decrypt_segment(&item.file_name)
-                .ok() {
-                    crypt = true;
-                    item.file_name = file_name;
-                }
+            if let Some(file_name) = cc.cipher.decrypt_segment(&item.file_name).ok() {
+                crypt = true;
+                item.file_name = file_name;
+            }
         }
 
         HcDownloadCacherItem {
@@ -359,20 +354,31 @@ impl HcDownloadCacherItem {
                 let reader = self
                     .drive_access
                     .cache_handler
-                    .open_file(self.item.access_id.clone(), self.item.data_id.clone(), self.item.size, offset, true)
+                    .open_file(
+                        self.item.access_id.clone(),
+                        self.item.data_id.clone(),
+                        self.item.size,
+                        offset,
+                        true,
+                    )
                     .await
                     .unwrap();
 
                 if let Some(reader) = CryptPassthrough::new(crypt_context, reader).await {
-                    return Box::new(reader)
+                    return Box::new(reader);
                 }
             }
         }
 
-        self
-            .drive_access
+        self.drive_access
             .cache_handler
-            .open_file(self.item.access_id.clone(), self.item.data_id.clone(), self.item.size, offset, true)
+            .open_file(
+                self.item.access_id.clone(),
+                self.item.data_id.clone(),
+                self.item.size,
+                offset,
+                true,
+            )
             .await
             .unwrap()
     }
@@ -386,11 +392,11 @@ impl HcCacherItem for HcDownloadCacherItem {
         let mut buf = vec![0u8; size as usize];
         if let Some(mut reader) = self.readers.remove(&offset) {
             reader.read_exact(&mut buf).await;
-            self.readers.insert(offset+size, reader);
+            self.readers.insert(offset + size, reader);
         } else {
             let mut reader = self.open_reader(offset).await;
             reader.read_exact(&mut buf).await;
-            self.readers.insert(offset+size, reader);
+            self.readers.insert(offset + size, reader);
         }
 
         buf
@@ -402,7 +408,12 @@ impl HcCacherItem for HcDownloadCacherItem {
         size: u64,
         max_bridge_len: Option<u64>,
     ) -> Vec<u8> {
-        let prev_offset = self.readers.range_mut(..=offset).rev().next().map(|(prev_offset, _)| *prev_offset);
+        let prev_offset = self
+            .readers
+            .range_mut(..=offset)
+            .rev()
+            .next()
+            .map(|(prev_offset, _)| *prev_offset);
         if let Some(prev_offset) = prev_offset {
             let bridge_len = offset.saturating_sub(prev_offset);
             if let Some(max_bridge_len) = max_bridge_len {
@@ -412,7 +423,7 @@ impl HcCacherItem for HcDownloadCacherItem {
                         reader.cache_exact(bridge_len as usize).await;
                         let mut buf = vec![0u8; size as usize];
                         reader.read_exact(&mut buf).await;
-                        self.readers.insert(offset+size, reader);
+                        self.readers.insert(offset + size, reader);
                         return buf;
                     }
                 }
@@ -421,7 +432,7 @@ impl HcCacherItem for HcDownloadCacherItem {
                     reader.cache_exact(bridge_len as usize).await;
                     let mut buf = vec![0u8; size as usize];
                     reader.read_exact(&mut buf).await;
-                    self.readers.insert(offset+size, reader);
+                    self.readers.insert(offset + size, reader);
                     return buf;
                 }
             }
@@ -436,18 +447,24 @@ impl HcCacherItem for HcDownloadCacherItem {
         if let Some(mut reader) = self.readers.remove(&offset) {
             reader.cache_exact(size as usize).await;
 
-            self.readers.insert(offset+size, reader);
+            self.readers.insert(offset + size, reader);
         } else {
             let mut reader = self
                 .drive_access
                 .cache_handler
-                .open_file(self.item.access_id.clone(), self.item.data_id.clone(), size, offset, true)
+                .open_file(
+                    self.item.access_id.clone(),
+                    self.item.data_id.clone(),
+                    size,
+                    offset,
+                    true,
+                )
                 .await
                 .unwrap();
 
             reader.cache_exact(size as usize).await;
 
-            self.readers.insert(offset+size, reader);
+            self.readers.insert(offset + size, reader);
         }
     }
 
@@ -455,18 +472,23 @@ impl HcCacherItem for HcDownloadCacherItem {
         todo!()
     }
 
-
     async fn cache_data_to(&mut self, offset: u64) {
         // println!("cache_data_to {}", offset);
         // Ignore any other readers - make a new one, and go from start to offset
         let mut reader = self
             .drive_access
             .cache_handler
-            .open_file(self.item.access_id.clone(), self.item.data_id.clone(), offset, 0, true)
+            .open_file(
+                self.item.access_id.clone(),
+                self.item.data_id.clone(),
+                offset,
+                0,
+                true,
+            )
             .await
             .unwrap();
         reader.cache_exact(offset as usize).await;
-        
+
         // Throw into readers, just in case we read from that section later
         if !self.readers.contains_key(&offset) {
             self.readers.insert(offset, reader);
@@ -477,8 +499,7 @@ impl HcCacherItem for HcDownloadCacherItem {
         todo!()
     }
 
-    async fn save(&mut self) {
-    }
+    async fn save(&mut self) {}
 }
 
 pub struct HardCacheDownloader {
@@ -561,7 +582,7 @@ impl HardCacheDownloader {
 
 pub struct HardCacheReader<'a> {
     dl: *mut HardCacheDownloader,
-    offset: u64,
+    pub offset: u64,
     last_fut: Option<Pin<Box<dyn Future<Output = Vec<u8>> + Send + 'static>>>, // references HardCacheDownloader, must not escape
     _phantom: PhantomData<&'a mut HardCacheDownloader>,
 }
@@ -579,7 +600,9 @@ impl<'a> AsyncRead for HardCacheReader<'a> {
         let offset = self.offset;
         let last_fut = self.last_fut.get_or_insert_with(|| {
             // SAFETY: As long as last_fut is not leaked outside of HardCacheReader, this should be safe.
-            unsafe { &mut *dl }.read_data(offset, buf.remaining() as u64).boxed()
+            unsafe { &mut *dl }
+                .read_data(offset, buf.remaining() as u64)
+                .boxed()
         });
 
         // Get the ready value of the Poll, otherwise return Pending

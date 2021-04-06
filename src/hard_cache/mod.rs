@@ -562,9 +562,12 @@ impl HardCacheDownloader {
 pub struct HardCacheReader<'a> {
     dl: *mut HardCacheDownloader,
     offset: u64,
-    last_fut: Option<Pin<Box<dyn Future<Output = Vec<u8>> + 'static>>>, // references HardCacheDownloader, must not escape
+    last_fut: Option<Pin<Box<dyn Future<Output = Vec<u8>> + Send + 'static>>>, // references HardCacheDownloader, must not escape
     _phantom: PhantomData<&'a mut HardCacheDownloader>,
 }
+
+unsafe impl<'a> Send for HardCacheReader<'a> {}
+unsafe impl<'a> Sync for HardCacheReader<'a> {}
 
 impl<'a> AsyncRead for HardCacheReader<'a> {
     fn poll_read(

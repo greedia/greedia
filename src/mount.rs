@@ -408,7 +408,7 @@ impl GreediaFS {
             // FUSE passes us explicit offsets, so if our offset isn't where we expected
             // the reader probably made a seek.
             if *f_offset != offset {
-                reader.seek_to(*f_offset).await;
+                reader.seek_to(offset).await;
             }
 
             // FUSE requires us to give an exact size, so make sure the buffer is large

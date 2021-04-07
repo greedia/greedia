@@ -135,6 +135,7 @@ impl SmartCacher for ScMkv {
 
                     let cluster_start = Duration::from_nanos(timecode_scale * timecode).as_secs();
                     if cluster_start > config.seconds {
+                        big_element_offset = Some(after_eid_offset + size_1);
                         break;
                     } else {
                         r.cache_bytes_to(after_eid_offset + size_1).await;
@@ -146,7 +147,6 @@ impl SmartCacher for ScMkv {
                         // It's a small enough element, so just cache it.
                         r.cache_bytes(size_1).await;
                     } else {
-                        println!("whoa, too big");
                         // TODO: handle downloading clusters if not downloaded at this point.
                         big_element_offset = Some(start_offset);
                         break;
@@ -163,7 +163,17 @@ impl SmartCacher for ScMkv {
                 seek_table.seek.range(..)
             };
 
+            // ffmpeg grabs a bunch of bytes before the tail, so lets get 10kb just in case.
+            let pre_tail_cache = 10_000;
+            let mut pre_tail_cached = false;
+
             for (item_off, item_id) in seek_items {
+                if !pre_tail_cached {
+                    r.seek(segment_start + item_off - pre_tail_cache);
+                    r.cache_bytes(pre_tail_cache).await;
+                    pre_tail_cached = true;
+                }
+
                 match *item_id {
                     ids::INFO => {
                         if got_info {
@@ -233,7 +243,6 @@ impl SmartCacher for ScMkv {
                         }
                     },
                     _item_id => {
-                        //println!("SEEK UNKNOWN ID {:X} at {}", item_id, item_off);
                     }
                 }
             }

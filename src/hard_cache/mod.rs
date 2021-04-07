@@ -650,7 +650,7 @@ impl<'a> HardCacheReader<'a> {
 
     fn seek(&mut self, offset: u64) {
         println!("Seeking from {} to {}", self.offset, offset);
-        self.offset = offset
+        self.offset = min(offset, self.size);
     }
 
     fn tell(&self) -> u64 {

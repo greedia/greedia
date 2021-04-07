@@ -1,16 +1,8 @@
 use async_trait::async_trait;
 use futures::{ready, Future, FutureExt};
 use smart_cacher::{FileSpec, ScErr, ScOk, ScResult, SmartCacher};
-use std::{
-    collections::{BTreeMap, HashMap},
-    ffi::OsStr,
-    marker::PhantomData,
-    path::Path,
-    pin::Pin,
-    sync::Arc,
-    task::{Context, Poll},
-};
-use tokio::io::{AsyncRead, ReadBuf};
+use std::{cmp::min, collections::{BTreeMap, HashMap}, ffi::OsStr, io::SeekFrom, path::Path, pin::Pin, sync::Arc, task::{Context, Poll}};
+use tokio::io::{AsyncRead, AsyncSeek, ReadBuf};
 
 #[cfg(feature = "sctest")]
 use std::path::PathBuf;
@@ -170,8 +162,9 @@ impl HardCacher {
             .and_then(OsStr::to_str)
             .and_then(|ext| self.cachers_by_ext.get(ext));
 
+        let file_item = item.clone();
         let cache_item = self.cacher.get_item(item).await;
-        let mut hcd = HardCacheDownloader::new(cache_item).await;
+        let mut hcd = HardCacheDownloader::new(cache_item, file_item).await;
 
         // If below min_size, call min_size cacher
         if item_size <= self.min_size {
@@ -504,11 +497,12 @@ impl HcCacherItem for HcDownloadCacherItem {
 
 pub struct HardCacheDownloader {
     item: Box<dyn HcCacherItem + Send + Sync>,
+    file_item: HardCacheItem
 }
 
 impl HardCacheDownloader {
-    async fn new(item: Box<dyn HcCacherItem + Send + Sync>) -> HardCacheDownloader {
-        HardCacheDownloader { item }
+    async fn new(item: Box<dyn HcCacherItem + Send + Sync>, file_item: HardCacheItem) -> HardCacheDownloader {
+        HardCacheDownloader { item, file_item }
     }
 
     /// Download `size` bytes of data from `offset` and return it here.
@@ -571,20 +565,23 @@ impl HardCacheDownloader {
     }
 
     pub fn reader<'a>(&'a mut self, offset: u64) -> HardCacheReader<'a> {
+        let size = self.file_item.size;
         HardCacheReader {
+            dl_ptr: self,
             dl: self,
             offset,
+            size,
             last_fut: None,
-            _phantom: PhantomData,
         }
     }
 }
 
 pub struct HardCacheReader<'a> {
-    dl: *mut HardCacheDownloader,
-    pub offset: u64,
+    dl_ptr: *mut HardCacheDownloader,
+    dl: &'a mut HardCacheDownloader,
+    size: u64,
+    offset: u64,
     last_fut: Option<Pin<Box<dyn Future<Output = Vec<u8>> + Send + 'static>>>, // references HardCacheDownloader, must not escape
-    _phantom: PhantomData<&'a mut HardCacheDownloader>,
 }
 
 unsafe impl<'a> Send for HardCacheReader<'a> {}
@@ -596,7 +593,7 @@ impl<'a> AsyncRead for HardCacheReader<'a> {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<tokio::io::Result<()>> {
-        let dl = self.dl;
+        let dl = self.dl_ptr;
         let offset = self.offset;
         let last_fut = self.last_fut.get_or_insert_with(|| {
             // SAFETY: As long as last_fut is not leaked outside of HardCacheReader, this should be safe.
@@ -611,6 +608,53 @@ impl<'a> AsyncRead for HardCacheReader<'a> {
         self.last_fut = None;
         self.offset += x.len() as u64;
         Poll::Ready(Ok(()))
+    }
+}
+
+impl<'a> AsyncSeek for HardCacheReader<'a> {
+    fn start_seek(mut self: Pin<&mut Self>, position: SeekFrom) -> std::io::Result<()> {
+        println!("Seek performed to {:?}", position);
+        match position {
+            SeekFrom::Start(val) => {
+                self.offset = min(val, self.size);
+            }
+            SeekFrom::End(val) => {
+                let res_offset = (self.size as i64).saturating_sub(val) as u64;
+                self.offset = min(res_offset, self.size);
+            }
+            SeekFrom::Current(val) => {
+                let res_offset = (self.offset as i64).saturating_add(val) as u64;
+                self.offset = min(res_offset, self.size);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn poll_complete(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<u64>> {
+        Poll::Ready(Ok(self.offset))
+    }
+}
+
+impl<'a> HardCacheReader<'a> {
+    async fn cache_bytes(&mut self, size: u64) {
+        self.dl.cache_data(self.offset, size).await;
+        self.offset += size;
+    }
+
+    async fn cache_bytes_to(&mut self, offset: u64) {
+        let size = offset - self.offset;
+        self.dl.cache_data(self.offset, size).await;
+        self.offset += size;
+    }
+
+    fn seek(&mut self, offset: u64) {
+        println!("Seeking from {} to {}", self.offset, offset);
+        self.offset = offset
+    }
+
+    fn tell(&self) -> u64 {
+        self.offset
     }
 }
 

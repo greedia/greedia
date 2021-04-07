@@ -32,6 +32,7 @@ impl HcCacher for HcTestCacher {
             output,
             bridge_points: BTreeSet::new(),
             ranges_to_cache: BTreeMap::new(),
+            bytes_downloaded: 0,
         })
     }
     fn generic_cache_sizes(&self) -> (DownloadAmount, DownloadAmount) {
@@ -55,6 +56,7 @@ struct HcTestCacherItem {
     output: File,
     bridge_points: BTreeSet<u64>,
     ranges_to_cache: BTreeMap<u64, u64>,
+    bytes_downloaded: u64,
 }
 
 #[cfg(feature = "sctest")]
@@ -65,9 +67,23 @@ impl HcCacherItem for HcTestCacherItem {
         self.bridge_points.insert(offset + size);
         self.input.seek(SeekFrom::Start(offset)).await.unwrap();
         let mut buf = vec![0u8; size as usize];
-        self.input.read_exact(&mut buf).await.unwrap();
+        let mut buf_off = 0;
+        
+        // read_exact errors if a non-exact number of bytes is read, so we can't use it.
+        loop {
+            let bytes_read = self.input.read(&mut buf[buf_off..]).await.unwrap();
+            if bytes_read == 0 {
+                break;
+            } else {
+                buf_off += bytes_read;
+            }
+        }
+
+        buf.truncate(buf_off);
+
         self.output.seek(SeekFrom::Start(offset)).await.unwrap();
         self.output.write_all(&buf).await.unwrap();
+        self.bytes_downloaded += buf.len() as u64;
         buf
     }
     async fn read_data_bridged(
@@ -98,6 +114,7 @@ impl HcCacherItem for HcTestCacherItem {
     }
     async fn cache_data(&mut self, offset: u64, size: u64) {
         //println!("cache_data {} {}", offset, size);
+        self.bytes_downloaded += size;
         self.ranges_to_cache.insert(offset, size);
     }
     async fn cache_data_bridged(&mut self, offset: u64, size: u64, max_bridge_len: Option<u64>) {
@@ -143,6 +160,12 @@ impl HcCacherItem for HcTestCacherItem {
             self.output.seek(SeekFrom::Start(*offset)).await.unwrap();
             self.output.write_all(&buf).await.unwrap();
         }
+        // Make sure file is full length
+        self.output.seek(SeekFrom::Start(self.input_size - 1)).await.unwrap();
+        self.output.write_all(&[0]).await.unwrap();
+
         self.output.flush().await.unwrap();
+
+        println!("Downloaded size is {}", self.bytes_downloaded);
     }
 }

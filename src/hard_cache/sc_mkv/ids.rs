@@ -19,6 +19,8 @@ pub const EBML_MAX_SIZE_LENGTH: u32 = 0x42F3;
 pub const EBML_DOC_TYPE: u32 = 0x4282;
 pub const EBML_DOC_TYPE_VERSION: u32 = 0x4287;
 pub const EBML_DOC_TYPE_READ_VERSION: u32 = 0x4285;
+pub const EBML_CRC32: u32 = 0xBF;
+pub const EBML_VOID: u32 = 0xEC;
 
 pub const SEGMENT: u32 = 0x1853_8067;
 pub const SEEKHEAD: u32 = 0x114D_9B74;
@@ -74,3 +76,6 @@ pub const CHAPTERFLAGENABLED: u32 = 0x4598;
 pub const CHAPTERDISPLAY: u32 = 0x80;
 pub const CHAPSTRING: u32 = 0x85;
 pub const CHAPLANGUAGE: u32 = 0x437C;
+pub const CLUSTER: u32 = 0x1F43_B675;
+pub const CUES: u32 = 0x1C53_BB6B;
+pub const TAGS: u32 = 0x1254_C367;

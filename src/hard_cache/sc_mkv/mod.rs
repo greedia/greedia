@@ -7,12 +7,19 @@
 // I have (somewhat shamefully) stolen and modified ebml.rs from the rust `matroska` library
 // (https://github.com/tuffy/matroska/blob/master/src/ebml.rs).
 
+use core::time::Duration;
+use std::collections::BTreeMap;
+
 use crate::config::SmartCacherConfig;
+
+use self::{ebml::MResult, mkv::Seek};
 
 use super::{HardCacheDownloader, smart_cacher::{FileSpec, ScOk::*, ScErr::*, ScResult, SmartCacher, SmartCacherSpec}};
 use async_trait::async_trait;
-use ebml::{Element, ElementType};
+use ebml::{Element, ElementType, read_uint};
 use ids::EBML_DOC_TYPE;
+use mkv::Info;
+use tokio::io::AsyncRead;
 
 mod mkv;
 mod ebml;
@@ -33,18 +40,19 @@ impl SmartCacher for ScMkv {
 
     async fn cache(
         &self,
-        _config: &SmartCacherConfig,
+        config: &SmartCacherConfig,
         _file_specs: &FileSpec,
         action: &mut HardCacheDownloader,
     ) -> ScResult {
         // Attempt to read header
         let mut r = action.reader(0);
+        
         let (id_0, size_0, _) = ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
         if id_0 != ids::EBML_HEADER {
             return Err(Cancel);
         }
 
-        // Verify that the doctype is matroska
+        // Verify that the doctype is matroska or webm
         let m = Element::parse_master(&mut r, size_0).await.unwrap();
         for e in m {
             if e.id == EBML_DOC_TYPE {
@@ -52,26 +60,215 @@ impl SmartCacher for ScMkv {
                     if val != "matroska" && val != "webm" {
                         return Err(Cancel)
                     }
-                    println!("We have file type {}", val);
                 }
             }
         }
 
         // Find other elements
-        let (mut id_0, mut size_0, _) = ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
-        println!("id: 0x{:X} size: {}", id_0, size_0);
+        let (id_0, _, _) = ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
 
         if id_0 != ids::SEGMENT {
-            return Err(Cancel); // TODO: loop through to find SEGMENT
+            // Root element should be a SEGMENT
+            return Err(Cancel);
         }
 
-        let segment_start = r.offset;
-        let (id_1, size_1, len) = ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
-        println!("id: 0x{:X} size: {} len: {}", id_1, size_1, len);
+        let segment_start = r.tell();
 
-        
-        
+        let mut seek_table = None;
+        let mut big_element_offset = None;
+        let mut info: Option<Info> = None;
+
+        let mut got_info = false;
+        let mut got_attachments = false;
+        let mut got_chapters = false;
+        let mut got_tracks = false;
+        let mut got_cues = false;
+        let mut got_tags = false;
+        //let mut got_clusters = false;
+
+        // Loop to get the sequential headers
+        loop {
+            let start_offset = r.tell();
+            let (id_1, size_1, _) = ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
+            let after_eid_offset = r.tell();
+
+            match id_1 {
+                ids::SEEKHEAD => {
+                    let st = OrderedSeektable::parse(&mut r, size_1).await.or(Err(Cancel))?;
+                    seek_table = Some(st);
+                }
+                ids::INFO => {
+                    got_info = true;
+                    info = Some(Info::parse(&mut r, size_1).await.or(Err(Cancel))?);
+                }
+                ids::ATTACHMENTS => {
+                    got_attachments = true;
+                    r.cache_bytes(size_1).await;
+                }
+                ids::CHAPTERS => {
+                    got_chapters = true;
+                    r.cache_bytes(size_1).await;
+                }
+                ids::TRACKS => {
+                    got_tracks = true;
+                    r.cache_bytes(size_1).await;
+                }
+                ids::CUES => {
+                    got_cues = true;
+                    r.cache_bytes(size_1).await;
+                }
+                ids::TAGS => {
+                    got_tags = true;
+                    r.cache_bytes(size_1).await;
+                }
+                ids::EBML_VOID => {
+                    r.cache_bytes(size_1).await;
+                }
+                ids::CLUSTER => {
+                    let timecode_scale = info.as_ref().ok_or(Cancel)?.timecode_scale.ok_or(Cancel)?;                    
+                    //got_clusters = true; // TODO: find clusters afterwards if they weren't found after header
+
+                    // Get the starting timecode of this cluster
+                    let (_, size_2, _) = ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
+                    let timecode = read_uint(&mut r, size_2).await.or(Err(Cancel))?;
+
+
+                    let cluster_start = Duration::from_nanos(timecode_scale * timecode).as_secs();
+                    if cluster_start > config.seconds {
+                        break;
+                    } else {
+                        r.cache_bytes_to(after_eid_offset + size_1).await;
+                    }
+                }
+                _ => {
+                    // Unknown ID
+                    if size_1 < 100_000 {
+                        // It's a small enough element, so just cache it.
+                        r.cache_bytes(size_1).await;
+                    } else {
+                        println!("whoa, too big");
+                        // TODO: handle downloading clusters if not downloaded at this point.
+                        big_element_offset = Some(start_offset);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // If any sections were missed in the headers and seek_table entries exist for them, grab them now.
+        if let Some(seek_table) = seek_table {
+            let seek_items = if let Some(big_element_offset) = big_element_offset {
+                seek_table.seek.range(big_element_offset..)
+            } else {
+                seek_table.seek.range(..)
+            };
+
+            for (item_off, item_id) in seek_items {
+                match *item_id {
+                    ids::INFO => {
+                        if got_info {
+                            continue;
+                        }
+                        r.seek(segment_start + item_off);
+
+                        let (id_1, size_1, _) = ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
+                        if id_1 == ids::INFO {
+                            r.cache_bytes(size_1).await;
+                        }
+
+                    }
+                    ids::TRACKS => {
+                        if got_tracks {
+                            continue;
+                        }
+                        r.seek(segment_start + item_off);
+                        
+                        let (id_1, size_1, _) = ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
+                        if id_1 == ids::TRACKS {
+                            r.cache_bytes(size_1).await;
+                        }
+                    }
+                    ids::CHAPTERS => {
+                        if got_chapters {
+                            continue;
+                        }
+                        r.seek(segment_start + item_off);
+                        
+                        let (id_1, size_1, _) = ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
+                        if id_1 == ids::CHAPTERS {
+                            r.cache_bytes(size_1).await;
+                        }
+                    }
+                    ids::CUES => {
+                        if got_cues {
+                            continue;
+                        }
+                        r.seek(segment_start + item_off);
+                        
+                        let (id_1, size_1, _) = ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
+                        if id_1 == ids::CUES {
+                            r.cache_bytes(size_1).await;
+                        }
+                    }
+                    ids::ATTACHMENTS => {
+                        if got_attachments {
+                            continue;
+                        }
+                        r.seek(segment_start + item_off);
+                        
+                        let (id_1, size_1, _) = ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
+                        if id_1 == ids::ATTACHMENTS {
+                            r.cache_bytes(size_1).await;
+                        }
+                    }
+                    ids::TAGS => {
+                        if got_tags {
+                            continue;
+                        }
+                        r.seek(segment_start + item_off);
+                        
+                        let (id_1, size_1, _) = ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
+                        if id_1 == ids::TAGS {
+                            r.cache_bytes(size_1).await;
+                        }
+                    },
+                    _item_id => {
+                        //println!("SEEK UNKNOWN ID {:X} at {}", item_id, item_off);
+                    }
+                }
+            }
+        }
 
         Ok(Finalize)
+    }
+}
+
+/// Seek table that keys the offsets rather than the IDs.
+#[derive(Debug)]
+struct OrderedSeektable {
+    pub seek: BTreeMap<u64, u32>
+}
+
+impl OrderedSeektable {
+    fn new() -> OrderedSeektable {
+        OrderedSeektable {
+            seek: BTreeMap::new(),
+        }
+    }
+
+    async fn parse<R: AsyncRead + Send + Sync + Unpin>(r: &mut R, size: u64) -> MResult<OrderedSeektable> {
+        let mut seektable = OrderedSeektable::new();
+        for e in Element::parse_master(r, size).await? {
+            if let Element {
+                id: ids::SEEK,
+                val: ElementType::Master(sub_elements),
+                ..
+            } = e
+            {
+                let seek = Seek::build(sub_elements);
+                seektable.seek.insert(seek.position, seek.id());
+            }
+        }
+        Ok(seektable)
     }
 }

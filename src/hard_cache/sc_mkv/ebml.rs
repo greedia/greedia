@@ -168,6 +168,8 @@ pub enum MatroskaError {
     Io(io::Error),
     /// An error decoding a UTF-8 string
     UTF8(FromUtf8Error),
+    /// Not Matroska format
+    NotMatroska,
     /// An invalid element ID
     InvalidID,
     /// An invalid element size
@@ -190,6 +192,7 @@ impl fmt::Display for MatroskaError {
             MatroskaError::InvalidUint => write!(f, "invalid unsigned integer"),
             MatroskaError::InvalidFloat => write!(f, "invalid float"),
             MatroskaError::InvalidDate => write!(f, "invalid date"),
+            MatroskaError::NotMatroska => write!(f, "not a matroska file"),
         }
     }
 }

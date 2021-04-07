@@ -994,9 +994,9 @@ mod test {
     };
     use tokio::runtime::Runtime;
 
-    const MAX_FILE_SIZE: u64 = 1024u64.pow(2); // 1MB
+    const MAX_FILE_SIZE: u64 = 1024u64.pow(2) * 100; // 100MB
     const MAX_OFFSET: u64 = MAX_FILE_SIZE - 11;
-    const NUM_ACTIONS: usize = 10; // Number of actions to run per test
+    const NUM_ACTIONS: usize = 10000; // Number of actions to run per test
     const MAX_READ_LEN: u64 = 65535;
     const MAX_READ_EXACT_LEN: u64 = 65535;
     const MAX_CACHE_LEN: u64 = 65535;

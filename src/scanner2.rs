@@ -13,7 +13,6 @@ use chrono::{Duration, TimeZone, Utc};
 use futures::{Stream, TryStreamExt};
 use itertools::Itertools;
 use rkyv::{de::deserializers::AllocDeserializer, Archive, Deserialize, Serialize};
-use sled::Batch;
 
 use crate::{
     cache_handlers::{DownloaderError, Page, PageItem},
@@ -194,8 +193,8 @@ fn handle_add_items(trees: &ScanTrees, parent: &str, items: &Vec<&PageItem>) {
 
     // Keep a byte buffer for the next inode value
     // TODO: get rid of this and just use to_le_bytes directly everywhere
-    let mut inode_bytes = [0u8; 8];
-    inode_bytes.copy_from_slice(&next_inode.to_le_bytes());
+    // let mut inode_bytes = [0u8; 8];
+    // inode_bytes.copy_from_slice(&next_inode.to_le_bytes());
 
     // Figure out the inode for this parent.
     let parent_inode = if parent == trees.drive_id {
@@ -211,11 +210,6 @@ fn handle_add_items(trees: &ScanTrees, parent: &str, items: &Vec<&PageItem>) {
         parent_inode
     };
 
-    // For more efficient writes, use batches
-    let mut access_batch = Batch::default();
-    let mut inode_batch = Batch::default();
-    let mut lookup_batch = Batch::default();
-
     // Keep a hashmap if ID -> inode, to map items in the parent
     let mut item_inodes: HashMap<String, u64> = HashMap::new();
 
@@ -226,7 +220,7 @@ fn handle_add_items(trees: &ScanTrees, parent: &str, items: &Vec<&PageItem>) {
             // Make sure the lookup key still exists though
             let inode = u64::from_le_bytes(inode_bytes.as_ref().try_into().unwrap());
             item_inodes.insert(item.id.clone(), inode);
-            lookup_batch.insert(lookup_key.as_slice(), inode_bytes.as_ref());
+            trees.lookup_tree.insert(lookup_key.as_slice(), inode_bytes.as_ref());
             continue;
         }
 
@@ -244,19 +238,19 @@ fn handle_add_items(trees: &ScanTrees, parent: &str, items: &Vec<&PageItem>) {
                 DriveItemData::Dir { items: vec![] }
             },
         };
+
+        dbg!(&drive_item, item);
+
         let drive_item_bytes = serialize_rkyv(&drive_item);
 
-        inode_bytes.copy_from_slice(&next_inode.to_le_bytes());
         item_inodes.insert(item.id.clone(), next_inode);
 
         // Add the inode key, which stores the actual drive item.
-        inode_batch.insert(&inode_bytes, drive_item_bytes.as_slice());
+        trees.inode_tree.insert(&next_inode.to_le_bytes(), drive_item_bytes.as_slice());
 
         // Add the access and lookup keys, which reference the inode.
-        access_batch.insert(item.id.as_bytes(), &inode_bytes);
-        lookup_batch.insert(lookup_key.as_slice(), &inode_bytes);
-
-        next_inode += 1;
+        trees.access_tree.insert(item.id.as_bytes(), &next_inode.to_le_bytes());
+        trees.lookup_tree.insert(lookup_key.as_slice(), &next_inode.to_le_bytes());
     }
 
     println!("items had {} len", items.len());
@@ -277,9 +271,8 @@ fn handle_add_items(trees: &ScanTrees, parent: &str, items: &Vec<&PageItem>) {
     println!("items has {} len", items.len());
 
     // Add existing items to new_items, if parent already exists
-    inode_bytes.copy_from_slice(&next_inode.to_le_bytes());
     let (parent_modified_time, new_items) =
-        if let Some(existing_parent) = trees.inode_tree.get(&inode_bytes) {
+        if let Some(existing_parent) = trees.inode_tree.get(&parent_inode.to_le_bytes()) {
             let existing_parent = get_rkyv::<DriveItem>(&existing_parent);
             let mut new_items = items.clone();
             let parent_modified_time = merge_parent(existing_parent, &mut new_items);
@@ -294,20 +287,15 @@ fn handle_add_items(trees: &ScanTrees, parent: &str, items: &Vec<&PageItem>) {
         modified_time: parent_modified_time,
         data: DriveItemData::Dir { items: new_items },
     };
-    inode_bytes.copy_from_slice(&parent_inode.to_le_bytes());
+
+    dbg!(&parent_drive_item);
     let parent_drive_item_bytes = serialize_rkyv(&parent_drive_item);
-    inode_batch.insert(&inode_bytes, parent_drive_item_bytes.as_slice());
-    access_batch.insert(parent.as_bytes(), &inode_bytes);
+    trees.inode_tree.insert(&parent_inode.to_le_bytes(), parent_drive_item_bytes.as_slice());
+    trees.access_tree.insert(parent.as_bytes(), &next_inode.to_le_bytes());
 
     // Update next_inode value
-    //LittleEndian::write_u48(&mut inode_bytes, next_inode);
-    inode_bytes.copy_from_slice(&next_inode.to_le_bytes());
-    trees.scan_tree.insert(b"next_inode", &inode_bytes);
-
-    // Push batches
-    trees.access_tree.write_batch(access_batch);
-    trees.inode_tree.write_batch(inode_batch);
-    trees.lookup_tree.write_batch(lookup_batch);
+    next_inode += 1;
+    trees.scan_tree.insert(b"next_inode", &next_inode.to_le_bytes());
 }
 
 fn handle_update_parent(trees: &ScanTrees, parent: &str, modified_time: i64) {

@@ -75,7 +75,7 @@ impl SmartCacher for ScMkv {
         let segment_start = r.tell();
 
         let mut seek_table = None;
-        let mut big_element_offset = None;
+        let big_element_offset;
         let mut info: Option<Info> = None;
 
         let mut got_info = false;

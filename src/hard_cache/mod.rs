@@ -10,12 +10,7 @@ use std::path::PathBuf;
 use rkyv::{de::deserializers::AllocDeserializer, Archive, Deserialize, Serialize};
 
 use self::smart_cacher::SMART_CACHER_VERSION;
-use crate::{
-    cache_handlers::{crypt_passthrough::CryptPassthrough, CacheFileHandler},
-    config::{DownloadAmount, SmartCacherConfig},
-    drive_access2::DriveAccess,
-    types::DataIdentifier,
-};
+use crate::{cache_handlers::{crypt_passthrough::CryptPassthrough, CacheFileHandler}, config::{DownloadAmount, SmartCacherConfig}, drive_access2::DriveAccess, types::DataIdentifier};
 
 #[cfg(feature = "sctest")]
 mod sctest;
@@ -42,6 +37,7 @@ static SMART_CACHERS: &[&dyn SmartCacher] = &[&sc_mp3::ScMp3, &sc_mkv::ScMkv];
 pub struct HardCacheItem {
     access_id: String,
     file_name: String,
+    crypt_file_name: bool,
     data_id: DataIdentifier,
     size: u64,
 }
@@ -56,6 +52,7 @@ pub struct HardCacheMetadata {
 }
 
 pub struct HardCacher {
+    drive_access: Option<Arc<DriveAccess>>,
     cacher: Arc<dyn HcCacher + Send + Sync>,
     cachers_by_ext: HashMap<&'static str, &'static dyn SmartCacher>,
     min_size: u64,
@@ -64,9 +61,9 @@ pub struct HardCacher {
 impl HardCacher {
     /// Create a new HardCacher for production use.
     pub fn new(drive_access: Arc<DriveAccess>, min_size: u64) -> HardCacher {
-        let cacher = Arc::new(HcDownloadCacher { drive_access });
+        let cacher = Arc::new(HcDownloadCacher { drive_access: drive_access.clone() });
 
-        Self::new_inner(cacher, min_size)
+        Self::new_inner(cacher, min_size, Some(drive_access))
     }
 
     /// Create a new HardCacher for sctest use.
@@ -86,10 +83,10 @@ impl HardCacher {
             fill_random,
         });
 
-        Self::new_inner(cacher, 0)
+        Self::new_inner(cacher, 0, None)
     }
 
-    fn new_inner(cacher: Arc<dyn HcCacher + Send + Sync>, min_size: u64) -> HardCacher {
+    fn new_inner(cacher: Arc<dyn HcCacher + Send + Sync>, min_size: u64, drive_access: Option<Arc<DriveAccess>>) -> HardCacher {
         let mut cachers_by_ext = HashMap::new();
 
         for sc in SMART_CACHERS {
@@ -100,6 +97,7 @@ impl HardCacher {
         }
 
         HardCacher {
+            drive_access,
             cacher,
             cachers_by_ext,
             min_size,
@@ -115,11 +113,19 @@ impl HardCacher {
         size: u64,
         meta: Option<&ArchivedHardCacheMetadata>,
     ) -> Option<HardCacheMetadata> {
-        // KTODO: try filename decryption here
+
+        let (crypt_file_name, file_name) = if let Some(file_name) = self.drive_access.as_ref()
+            .and_then(|da| da.crypt.as_ref())
+            .and_then(|cc| cc.cipher.decrypt_segment(file_name).ok()) {
+                (true, file_name)
+            } else {
+                (false, file_name.to_string())
+            };
 
         let item = HardCacheItem {
             access_id: access_id.to_string(),
-            file_name: file_name.to_string(),
+            file_name,
+            crypt_file_name,
             data_id: data_id.clone(),
             size,
         };
@@ -136,6 +142,7 @@ impl HardCacher {
         let item = HardCacheItem {
             access_id: String::new(),
             file_name,
+            crypt_file_name: false,
             data_id: DataIdentifier::None,
             size,
         };
@@ -317,32 +324,20 @@ struct HcDownloadCacherItem {
     item: HardCacheItem,
     /// Set of readers at specific offsets.
     readers: BTreeMap<u64, Box<dyn CacheFileHandler>>,
-    /// Whether or not the filename was decrypted successfully
-    /// (assuming there is a crypt_context in drive_access)
-    crypt: bool,
 }
 
 impl HcDownloadCacherItem {
-    async fn new(drive_access: Arc<DriveAccess>, mut item: HardCacheItem) -> HcDownloadCacherItem {
-        let mut crypt = false;
-        if let Some(ref cc) = drive_access.crypt {
-            if let Some(file_name) = cc.cipher.decrypt_segment(&item.file_name).ok() {
-                crypt = true;
-                item.file_name = file_name;
-            }
-        }
-
+    async fn new(drive_access: Arc<DriveAccess>, item: HardCacheItem) -> HcDownloadCacherItem {
         HcDownloadCacherItem {
             drive_access,
             item,
             readers: BTreeMap::new(),
-            crypt,
         }
     }
 
     /// Open a new reader, depending on whether filename is encrypted or not.
     async fn open_reader(&mut self, offset: u64) -> Box<dyn CacheFileHandler> {
-        if self.crypt {
+        if self.item.crypt_file_name {
             if let Some(ref crypt_context) = self.drive_access.crypt {
                 let reader = self
                     .drive_access

@@ -239,7 +239,6 @@ fn handle_add_items(trees: &ScanTrees, parent: &str, items: &Vec<&PageItem>) {
             },
         };
 
-        dbg!(&drive_item, item, next_inode);
 
         let drive_item_bytes = serialize_rkyv(&drive_item);
 
@@ -290,7 +289,6 @@ fn handle_add_items(trees: &ScanTrees, parent: &str, items: &Vec<&PageItem>) {
         data: DriveItemData::Dir { items: new_items },
     };
 
-    dbg!(&parent_drive_item);
     let parent_drive_item_bytes = serialize_rkyv(&parent_drive_item);
     trees.inode_tree.insert(&parent_inode.to_le_bytes(), parent_drive_item_bytes.as_slice());
     trees.access_tree.insert(parent.as_bytes(), &parent_inode.to_le_bytes());

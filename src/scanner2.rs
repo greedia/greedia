@@ -1,8 +1,12 @@
-use crate::{drive_access2::DriveAccess, hard_cache::HardCacheMetadata, types::{ArchivedDriveItem, ArchivedDriveItemData, DirItem, DriveItem, DriveItemData, make_lookup_key}};
 use crate::{
-    hard_cache::HardCacher,
-    types::TreeKeys,
+    drive_access2::DriveAccess,
+    hard_cache::HardCacheMetadata,
+    types::{
+        make_lookup_key, ArchivedDriveItem, ArchivedDriveItemData, DirItem, DriveItem,
+        DriveItemData,
+    },
 };
+use crate::{hard_cache::HardCacher, types::TreeKeys};
 use std::{
     collections::{HashMap, HashSet},
     convert::TryInto,
@@ -108,7 +112,7 @@ async fn perform_scan(
             handle_one_page(trees, &page).await;
 
             if let Some(next_page_token) = page.next_page_token.as_deref() {
-                println!("NEXT PAGE TOKEN: {}", next_page_token);
+                // println!("NEXT PAGE TOKEN: {}", next_page_token);
                 let next_page_token_bytes = serialize_rkyv(&next_page_token.to_string());
                 trees
                     .scan_tree
@@ -145,9 +149,9 @@ async fn perform_caching(trees: &ScanTrees, drive_access: Arc<DriveAccess>) {
             let data_id = data_id.deserialize(&mut AllocDeserializer).unwrap();
             let data_id_key = serialize_rkyv(&data_id);
             let hc_bytes = trees.hc_meta_tree.get(data_id_key.as_slice());
-            let hc_meta = hc_bytes.as_deref().map(|m| {
-                get_rkyv::<HardCacheMetadata>(m)
-            });
+            let hc_meta = hc_bytes
+                .as_deref()
+                .map(|m| get_rkyv::<HardCacheMetadata>(m));
             // println!("Processing {}, size {}", file_name, size);
             if let Some(meta) = hard_cacher
                 .process(data.access_id.as_str(), file_name, &data_id, *size, hc_meta)
@@ -220,7 +224,9 @@ fn handle_add_items(trees: &ScanTrees, parent: &str, items: &Vec<&PageItem>) {
             // Make sure the lookup key still exists though
             let inode = u64::from_le_bytes(inode_bytes.as_ref().try_into().unwrap());
             item_inodes.insert(item.id.clone(), inode);
-            trees.lookup_tree.insert(lookup_key.as_slice(), inode_bytes.as_ref());
+            trees
+                .lookup_tree
+                .insert(lookup_key.as_slice(), inode_bytes.as_ref());
             continue;
         }
 
@@ -239,23 +245,28 @@ fn handle_add_items(trees: &ScanTrees, parent: &str, items: &Vec<&PageItem>) {
             },
         };
 
-
         let drive_item_bytes = serialize_rkyv(&drive_item);
 
         item_inodes.insert(item.id.clone(), next_inode);
 
         // Add the inode key, which stores the actual drive item.
-        trees.inode_tree.insert(&next_inode.to_le_bytes(), drive_item_bytes.as_slice());
+        trees
+            .inode_tree
+            .insert(&next_inode.to_le_bytes(), drive_item_bytes.as_slice());
 
         // Add the access and lookup keys, which reference the inode.
-        trees.access_tree.insert(item.id.as_bytes(), &next_inode.to_le_bytes());
-        trees.lookup_tree.insert(lookup_key.as_slice(), &next_inode.to_le_bytes());
+        trees
+            .access_tree
+            .insert(item.id.as_bytes(), &next_inode.to_le_bytes());
+        trees
+            .lookup_tree
+            .insert(lookup_key.as_slice(), &next_inode.to_le_bytes());
 
         next_inode += 1;
     }
 
-    println!("items had {} len", items.len());
-    println!("item_inodes had {} len", item_inodes.len());
+    // println!("items had {} len", items.len());
+    // println!("item_inodes had {} len", item_inodes.len());
 
     // Merge items into parent
     let items = items
@@ -268,8 +279,6 @@ fn handle_add_items(trees: &ScanTrees, parent: &str, items: &Vec<&PageItem>) {
             is_dir: x.file_info.is_none(),
         })
         .collect::<Vec<_>>();
-
-    println!("items has {} len", items.len());
 
     // Add existing items to new_items, if parent already exists
     let (parent_modified_time, new_items) =
@@ -290,12 +299,19 @@ fn handle_add_items(trees: &ScanTrees, parent: &str, items: &Vec<&PageItem>) {
     };
 
     let parent_drive_item_bytes = serialize_rkyv(&parent_drive_item);
-    trees.inode_tree.insert(&parent_inode.to_le_bytes(), parent_drive_item_bytes.as_slice());
-    trees.access_tree.insert(parent.as_bytes(), &parent_inode.to_le_bytes());
+    trees.inode_tree.insert(
+        &parent_inode.to_le_bytes(),
+        parent_drive_item_bytes.as_slice(),
+    );
+    trees
+        .access_tree
+        .insert(parent.as_bytes(), &parent_inode.to_le_bytes());
 
     // Update next_inode value
     next_inode += 1;
-    trees.scan_tree.insert(b"next_inode", &next_inode.to_le_bytes());
+    trees
+        .scan_tree
+        .insert(b"next_inode", &next_inode.to_le_bytes());
 }
 
 fn handle_update_parent(trees: &ScanTrees, parent: &str, modified_time: i64) {

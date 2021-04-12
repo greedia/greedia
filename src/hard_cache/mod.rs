@@ -1,7 +1,16 @@
 use async_trait::async_trait;
 use futures::{ready, Future, FutureExt};
 use smart_cacher::{FileSpec, ScErr, ScOk, ScResult, SmartCacher};
-use std::{cmp::min, collections::{BTreeMap, HashMap}, ffi::OsStr, io::SeekFrom, path::Path, pin::Pin, sync::Arc, task::{Context, Poll}};
+use std::{
+    cmp::min,
+    collections::{BTreeMap, HashMap},
+    ffi::OsStr,
+    io::SeekFrom,
+    path::Path,
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+};
 use tokio::io::{AsyncRead, AsyncSeek, ReadBuf};
 
 #[cfg(feature = "sctest")]
@@ -10,7 +19,13 @@ use std::path::PathBuf;
 use rkyv::{de::deserializers::AllocDeserializer, Archive, Deserialize, Serialize};
 
 use self::smart_cacher::SMART_CACHER_VERSION;
-use crate::{cache_handlers::{crypt_passthrough::CryptPassthrough, CacheFileHandler}, config::{DownloadAmount, SmartCacherConfig}, drive_access2::DriveAccess, types::DataIdentifier};
+use crate::{
+    cache_handlers::{crypt_passthrough::CryptPassthrough, CacheFileHandler},
+    config::{DownloadAmount, SmartCacherConfig},
+    crypt_context::CryptContext,
+    drive_access2::DriveAccess,
+    types::DataIdentifier,
+};
 
 #[cfg(feature = "sctest")]
 mod sctest;
@@ -37,7 +52,7 @@ static SMART_CACHERS: &[&dyn SmartCacher] = &[&sc_mp3::ScMp3, &sc_mkv::ScMkv];
 pub struct HardCacheItem {
     access_id: String,
     file_name: String,
-    crypt_file_name: bool,
+    crypt_context: Option<Arc<CryptContext>>,
     data_id: DataIdentifier,
     size: u64,
 }
@@ -61,7 +76,9 @@ pub struct HardCacher {
 impl HardCacher {
     /// Create a new HardCacher for production use.
     pub fn new(drive_access: Arc<DriveAccess>, min_size: u64) -> HardCacher {
-        let cacher = Arc::new(HcDownloadCacher { drive_access: drive_access.clone() });
+        let cacher = Arc::new(HcDownloadCacher {
+            drive_access: drive_access.clone(),
+        });
 
         Self::new_inner(cacher, min_size, Some(drive_access))
     }
@@ -86,7 +103,11 @@ impl HardCacher {
         Self::new_inner(cacher, 0, None)
     }
 
-    fn new_inner(cacher: Arc<dyn HcCacher + Send + Sync>, min_size: u64, drive_access: Option<Arc<DriveAccess>>) -> HardCacher {
+    fn new_inner(
+        cacher: Arc<dyn HcCacher + Send + Sync>,
+        min_size: u64,
+        drive_access: Option<Arc<DriveAccess>>,
+    ) -> HardCacher {
         let mut cachers_by_ext = HashMap::new();
 
         for sc in SMART_CACHERS {
@@ -113,19 +134,24 @@ impl HardCacher {
         size: u64,
         meta: Option<&ArchivedHardCacheMetadata>,
     ) -> Option<HardCacheMetadata> {
-
-        let (crypt_file_name, file_name) = if let Some(file_name) = self.drive_access.as_ref()
-            .and_then(|da| da.crypt.as_ref())
-            .and_then(|cc| cc.cipher.decrypt_segment(file_name).ok()) {
-                (true, file_name)
-            } else {
-                (false, file_name.to_string())
-            };
+        let (crypt_context, file_name) = if let Some((cc, file_name)) = self
+            .drive_access
+            .as_ref()
+            .map(|da| &da.crypts)?
+            .iter()
+            .find_map(|cc| {
+                let file_name = cc.cipher.decrypt_segment(file_name).ok()?;
+                Some((cc.clone(), file_name))
+            }) {
+            (Some(cc), file_name)
+        } else {
+            (None, file_name.to_string())
+        };
 
         let item = HardCacheItem {
             access_id: access_id.to_string(),
             file_name,
-            crypt_file_name,
+            crypt_context,
             data_id: data_id.clone(),
             size,
         };
@@ -142,7 +168,7 @@ impl HardCacher {
         let item = HardCacheItem {
             access_id: String::new(),
             file_name,
-            crypt_file_name: false,
+            crypt_context: None,
             data_id: DataIdentifier::None,
             size,
         };
@@ -192,7 +218,10 @@ impl HardCacher {
 
         if let Some(pc) = preferred_cacher {
             let spec = pc.spec();
-            println!("Trying preferred cacher {}", spec.name);
+            println!(
+                "Trying preferred cacher {} on {}",
+                spec.name, file_spec.name
+            );
             let res: ScResult = pc.cache(&smart_cacher_config, &file_spec, &mut hcd).await;
 
             match res {
@@ -337,24 +366,22 @@ impl HcDownloadCacherItem {
 
     /// Open a new reader, depending on whether filename is encrypted or not.
     async fn open_reader(&mut self, offset: u64) -> Box<dyn CacheFileHandler> {
-        if self.item.crypt_file_name {
-            if let Some(ref crypt_context) = self.drive_access.crypt {
-                let reader = self
-                    .drive_access
-                    .cache_handler
-                    .open_file(
-                        self.item.access_id.clone(),
-                        self.item.data_id.clone(),
-                        self.item.size,
-                        offset,
-                        true,
-                    )
-                    .await
-                    .unwrap();
+        if let Some(ref crypt_context) = self.item.crypt_context {
+            let reader = self
+                .drive_access
+                .cache_handler
+                .open_file(
+                    self.item.access_id.clone(),
+                    self.item.data_id.clone(),
+                    self.item.size,
+                    offset,
+                    true,
+                )
+                .await
+                .unwrap();
 
-                if let Some(reader) = CryptPassthrough::new(crypt_context, reader).await {
-                    return Box::new(reader);
-                }
+            if let Some(reader) = CryptPassthrough::new(crypt_context, reader).await {
+                return Box::new(reader);
             }
         }
 
@@ -492,11 +519,14 @@ impl HcCacherItem for HcDownloadCacherItem {
 
 pub struct HardCacheDownloader {
     item: Box<dyn HcCacherItem + Send + Sync>,
-    file_item: HardCacheItem
+    file_item: HardCacheItem,
 }
 
 impl HardCacheDownloader {
-    async fn new(item: Box<dyn HcCacherItem + Send + Sync>, file_item: HardCacheItem) -> HardCacheDownloader {
+    async fn new(
+        item: Box<dyn HcCacherItem + Send + Sync>,
+        file_item: HardCacheItem,
+    ) -> HardCacheDownloader {
         HardCacheDownloader { item, file_item }
     }
 

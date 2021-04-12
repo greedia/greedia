@@ -1,7 +1,11 @@
 use std::{
+    borrow::Cow,
     convert::TryInto,
     path::{Component, Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
 
 use rkyv::de::deserializers::AllocDeserializer;
@@ -27,7 +31,7 @@ pub struct DriveAccess {
     pub cache_handler: Box<dyn CacheDriveHandler>,
     pub db: Db,
     pub root_path: Option<PathBuf>,
-    pub crypt: Option<CryptContext>,
+    pub crypts: Vec<Arc<CryptContext>>,
     inode_tree: Tree,
     lookup_tree: Tree,
     /// Optimization so we don't need to traverse for the root path repeatedly
@@ -40,13 +44,13 @@ impl DriveAccess {
         cache_handler: Box<dyn CacheDriveHandler>,
         db: Db,
         root_path: Option<PathBuf>,
-        passwords: Option<(String, String)>,
+        crypts: Vec<Arc<CryptContext>>,
     ) -> DriveAccess {
         let tree_keys = TreeKeys::new(
             cache_handler.get_drive_type(),
             &cache_handler.get_drive_id(),
         );
-        let crypt = passwords.map(|(p1, p2)| CryptContext::new(&p1, &p2).unwrap());
+        //let crypt = passwords.map(|(p1, p2)| CryptContext::new(&p1, &p2).unwrap());
         let inode_tree = db.tree(&tree_keys.inode_key);
         let lookup_tree = db.tree(&tree_keys.lookup_key);
         let root_inode = AtomicU64::new(u64::MAX);
@@ -55,7 +59,7 @@ impl DriveAccess {
             cache_handler,
             db,
             root_path,
-            crypt,
+            crypts,
             inode_tree,
             lookup_tree,
             root_inode,
@@ -69,10 +73,19 @@ impl DriveAccess {
     ) -> TypeResult<Box<dyn CacheFileHandler>> {
         if let Some(drive_item_bytes) = self.inode_tree.get(inode.to_le_bytes()) {
             let drive_item = get_rkyv::<DriveItem>(&drive_item_bytes);
-            if let ArchivedDriveItemData::FileItem { file_name: _, data_id, size } = &drive_item.data {
+            if let ArchivedDriveItemData::FileItem {
+                file_name: _,
+                data_id,
+                size,
+            } = &drive_item.data
+            {
                 let access_id = drive_item.access_id.to_string();
                 let data_id = data_id.deserialize(&mut AllocDeserializer).unwrap();
-                let file = self.cache_handler.open_file(access_id, data_id, *size, offset, false).await.unwrap();
+                let file = self
+                    .cache_handler
+                    .open_file(access_id, data_id, *size, offset, false)
+                    .await
+                    .unwrap();
                 TypeResult::IsType(file)
             } else {
                 TypeResult::IsNotType
@@ -110,12 +123,18 @@ impl DriveAccess {
             inode
         };
 
-        let inode = if let Some(ref cc) = self.crypt {
-            let file_name = cc.cipher.encrypt_segment(file_name).ok().unwrap_or_else(|| file_name.to_string());
-            self.lookup_inode(inode, &file_name)
-        } else {
-            self.lookup_inode(inode, file_name)
-        }?;
+        let file_name = self
+            .crypts
+            .iter()
+            .find_map(|cc| {
+                cc.cipher
+                    .encrypt_segment(file_name)
+                    .ok()
+                    .map(|s| Cow::Owned(s))
+            })
+            .unwrap_or_else(|| Cow::Borrowed(file_name));
+
+        let inode = self.lookup_inode(inode, &file_name)?;
 
         let drive_item_bytes = self.inode_tree.get(inode.to_le_bytes())?;
         let drive_item = get_rkyv::<DriveItem>(&&drive_item_bytes);

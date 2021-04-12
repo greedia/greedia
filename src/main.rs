@@ -3,6 +3,7 @@ use std::{fs, path::Path};
 
 use anyhow::{bail, Result};
 use cache_handlers::filesystem::{lru::Lru, FilesystemCacheHandler};
+use crypt_context::CryptContext;
 use db::Db;
 use downloaders::{gdrive::GDriveClient, timecode::TimecodeDrive, DownloaderClient};
 use drive_access2::DriveAccess;
@@ -141,8 +142,23 @@ async fn get_gdrive_drives(
     let hard_cache_root = cache_path.join("hard_cache");
     let soft_cache_root = cache_path.join("soft_cache");
 
+    // DriveAccesses share clients, which is necessary for things like rate limiting.
     let mut clients: HashMap<String, Arc<GDriveClient>> = HashMap::new();
+    // Since scans are done by client rather than by DriveAccess, we need to know all passwords
+    // given to the drive configs, so that encrypted files are scanned properly.
+    let mut client_crypts: HashMap<String, Vec<Arc<CryptContext>>> = HashMap::new();
     let mut da_out = Vec::new();
+
+    for (_, cfg_drive) in &gdrives {
+        if let (Some(password), Some(password2)) = (&cfg_drive.password, &cfg_drive.password2) {
+            let cc = CryptContext::new(password, password2)?;
+            if let Some(v) = client_crypts.get_mut(&cfg_drive.drive_id) {
+                v.push(Arc::new(cc));
+            } else {
+                client_crypts.insert(cfg_drive.drive_id.clone(), vec![Arc::new(cc)]);
+            }
+        }
+    }
 
     for (name, cfg_drive) in gdrives {
         let client = if let Some(client) = clients.get(&cfg_drive.client_id) {
@@ -171,18 +187,16 @@ async fn get_gdrive_drives(
 
         let root_path = cfg_drive.root_path.map(|x| PathBuf::from(x));
 
-        let da =
-            if let (Some(password), Some(password2)) = (cfg_drive.password, cfg_drive.password2) {
-                DriveAccess::new(
-                    name.clone(),
-                    cache_handler,
-                    db.clone(),
-                    root_path,
-                    Some((password, password2)),
-                )
-            } else {
-                DriveAccess::new(name.clone(), cache_handler, db.clone(), root_path, None)
-            };
+        let da = DriveAccess::new(
+            name.clone(),
+            cache_handler,
+            db.clone(),
+            root_path,
+            client_crypts
+                .get(&cfg_drive.drive_id)
+                .cloned()
+                .unwrap_or(vec![]),
+        );
 
         da_out.push(Arc::new(da));
     }
@@ -208,7 +222,7 @@ async fn get_timecode_drives(
             drive,
         );
 
-        let da = DriveAccess::new(name.clone(), cache_handler, db.clone(), None, None);
+        let da = DriveAccess::new(name.clone(), cache_handler, db.clone(), None, vec![]);
 
         da_out.push(Arc::new(da));
     }

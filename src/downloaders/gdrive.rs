@@ -114,15 +114,15 @@ async fn scanner_bg_thread(
 
     let mut access_token = state.access_token.unwrap();
 
-    let mut query = state.root_query.clone();
-
-    if let Some(page_token) = &state.last_page_token {
-        query.push(("pageToken", page_token.to_string()));
-    }
-
     state.rate_limiter.bg_wait().await;
 
     loop {
+        
+        let mut query = state.root_query.clone();
+        if let Some(page_token) = &state.last_page_token {
+            query.push(("pageToken", page_token.to_string()));
+        }
+
         let res = state
             .http_client
             .get("https://www.googleapis.com/drive/v3/files")
@@ -152,6 +152,7 @@ async fn scanner_bg_thread(
                 }
 
                 let page = r.json::<GPage>().await.unwrap();
+                println!("Page tokens\nOld: {:?}\nNew: {:?}", state.last_page_token, page.next_page_token);
                 state.last_page_token = page.next_page_token;
                 if let Some(files) = page.files {
                     let items = files

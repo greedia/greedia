@@ -4,8 +4,8 @@ use std::{
     io::SeekFrom,
     path::PathBuf,
 };
-use tokio::{fs::File, io::AsyncSeekExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::{fs::File, io::AsyncSeekExt};
 
 use super::{HardCacheItem, HcCacher, HcCacherItem};
 use crate::config::DownloadAmount;
@@ -68,7 +68,7 @@ impl HcCacherItem for HcTestCacherItem {
         self.input.seek(SeekFrom::Start(offset)).await.unwrap();
         let mut buf = vec![0u8; size as usize];
         let mut buf_off = 0;
-        
+
         // read_exact errors if a non-exact number of bytes is read, so we can't use it.
         loop {
             let bytes_read = self.input.read(&mut buf[buf_off..]).await.unwrap();
@@ -161,7 +161,10 @@ impl HcCacherItem for HcTestCacherItem {
             self.output.write_all(&buf).await.unwrap();
         }
         // Make sure file is full length
-        self.output.seek(SeekFrom::Start(self.input_size - 1)).await.unwrap();
+        self.output
+            .seek(SeekFrom::Start(self.input_size - 1))
+            .await
+            .unwrap();
         self.output.write_all(&[0]).await.unwrap();
 
         self.output.flush().await.unwrap();

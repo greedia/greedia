@@ -14,16 +14,19 @@ use crate::config::SmartCacherConfig;
 
 use self::{ebml::MResult, mkv::Seek};
 
-use super::{HardCacheDownloader, smart_cacher::{FileSpec, ScOk::*, ScErr::*, ScResult, SmartCacher, SmartCacherSpec}};
+use super::{
+    smart_cacher::{FileSpec, ScErr::*, ScOk::*, ScResult, SmartCacher, SmartCacherSpec},
+    HardCacheDownloader,
+};
 use async_trait::async_trait;
-use ebml::{Element, ElementType, read_uint};
+use ebml::{read_uint, Element, ElementType};
 use ids::EBML_DOC_TYPE;
 use mkv::Info;
 use tokio::io::AsyncRead;
 
-mod mkv;
 mod ebml;
 mod ids;
+mod mkv;
 
 static SPEC: SmartCacherSpec = SmartCacherSpec {
     name: "mkv_testing",
@@ -46,7 +49,7 @@ impl SmartCacher for ScMkv {
     ) -> ScResult {
         // Attempt to read header
         let mut r = action.reader(0);
-        
+
         let (id_0, size_0, _) = ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
         if id_0 != ids::EBML_HEADER {
             return Err(Cancel);
@@ -58,7 +61,7 @@ impl SmartCacher for ScMkv {
             if e.id == EBML_DOC_TYPE {
                 if let ElementType::String(val) = e.val {
                     if val != "matroska" && val != "webm" {
-                        return Err(Cancel)
+                        return Err(Cancel);
                     }
                 }
             }
@@ -94,7 +97,9 @@ impl SmartCacher for ScMkv {
 
             match id_1 {
                 ids::SEEKHEAD => {
-                    let st = OrderedSeektable::parse(&mut r, size_1).await.or(Err(Cancel))?;
+                    let st = OrderedSeektable::parse(&mut r, size_1)
+                        .await
+                        .or(Err(Cancel))?;
                     seek_table = Some(st);
                 }
                 ids::INFO => {
@@ -125,13 +130,14 @@ impl SmartCacher for ScMkv {
                     r.cache_bytes(size_1).await;
                 }
                 ids::CLUSTER => {
-                    let timecode_scale = info.as_ref().ok_or(Cancel)?.timecode_scale.ok_or(Cancel)?;                    
+                    let timecode_scale =
+                        info.as_ref().ok_or(Cancel)?.timecode_scale.ok_or(Cancel)?;
                     //got_clusters = true; // TODO: find clusters afterwards if they weren't found after header
 
                     // Get the starting timecode of this cluster
-                    let (_, size_2, _) = ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
+                    let (_, size_2, _) =
+                        ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
                     let timecode = read_uint(&mut r, size_2).await.or(Err(Cancel))?;
-
 
                     let cluster_start = Duration::from_nanos(timecode_scale * timecode).as_secs();
                     if cluster_start > config.seconds {
@@ -181,19 +187,20 @@ impl SmartCacher for ScMkv {
                         }
                         r.seek(segment_start + item_off);
 
-                        let (id_1, size_1, _) = ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
+                        let (id_1, size_1, _) =
+                            ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
                         if id_1 == ids::INFO {
                             r.cache_bytes(size_1).await;
                         }
-
                     }
                     ids::TRACKS => {
                         if got_tracks {
                             continue;
                         }
                         r.seek(segment_start + item_off);
-                        
-                        let (id_1, size_1, _) = ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
+
+                        let (id_1, size_1, _) =
+                            ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
                         if id_1 == ids::TRACKS {
                             r.cache_bytes(size_1).await;
                         }
@@ -203,8 +210,9 @@ impl SmartCacher for ScMkv {
                             continue;
                         }
                         r.seek(segment_start + item_off);
-                        
-                        let (id_1, size_1, _) = ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
+
+                        let (id_1, size_1, _) =
+                            ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
                         if id_1 == ids::CHAPTERS {
                             r.cache_bytes(size_1).await;
                         }
@@ -214,8 +222,9 @@ impl SmartCacher for ScMkv {
                             continue;
                         }
                         r.seek(segment_start + item_off);
-                        
-                        let (id_1, size_1, _) = ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
+
+                        let (id_1, size_1, _) =
+                            ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
                         if id_1 == ids::CUES {
                             r.cache_bytes(size_1).await;
                         }
@@ -225,8 +234,9 @@ impl SmartCacher for ScMkv {
                             continue;
                         }
                         r.seek(segment_start + item_off);
-                        
-                        let (id_1, size_1, _) = ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
+
+                        let (id_1, size_1, _) =
+                            ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
                         if id_1 == ids::ATTACHMENTS {
                             r.cache_bytes(size_1).await;
                         }
@@ -236,14 +246,14 @@ impl SmartCacher for ScMkv {
                             continue;
                         }
                         r.seek(segment_start + item_off);
-                        
-                        let (id_1, size_1, _) = ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
+
+                        let (id_1, size_1, _) =
+                            ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
                         if id_1 == ids::TAGS {
                             r.cache_bytes(size_1).await;
                         }
-                    },
-                    _item_id => {
                     }
+                    _item_id => {}
                 }
             }
         }
@@ -255,7 +265,7 @@ impl SmartCacher for ScMkv {
 /// Seek table that keys the offsets rather than the IDs.
 #[derive(Debug)]
 struct OrderedSeektable {
-    pub seek: BTreeMap<u64, u32>
+    pub seek: BTreeMap<u64, u32>,
 }
 
 impl OrderedSeektable {
@@ -265,7 +275,10 @@ impl OrderedSeektable {
         }
     }
 
-    async fn parse<R: AsyncRead + Send + Sync + Unpin>(r: &mut R, size: u64) -> MResult<OrderedSeektable> {
+    async fn parse<R: AsyncRead + Send + Sync + Unpin>(
+        r: &mut R,
+        size: u64,
+    ) -> MResult<OrderedSeektable> {
         let mut seektable = OrderedSeektable::new();
         for e in Element::parse_master(r, size).await? {
             if let Element {

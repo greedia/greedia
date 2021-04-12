@@ -17,7 +17,7 @@ use std::{error, fmt, io};
 use bitstream_io::{AsyncBitRead, AsyncBitReader, BigEndian};
 use chrono::offset::Utc;
 use chrono::DateTime;
-use futures::{FutureExt, future::BoxFuture};
+use futures::{future::BoxFuture, FutureExt};
 use phf::{phf_set, Set};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
@@ -105,7 +105,9 @@ static IDS_FLOAT: Set<u32> = phf_set! {
 };
 
 impl Element {
-    pub fn parse<'a, R: AsyncRead + Send + Sync + Unpin>(r: &'a mut R) -> BoxFuture<'a, MResult<Element>> {
+    pub fn parse<'a, R: AsyncRead + Send + Sync + Unpin>(
+        r: &'a mut R,
+    ) -> BoxFuture<'a, MResult<Element>> {
         async move {
             let (id, size, header_len) = read_element_id_size(r).await?;
             let val = Element::parse_body(r, id, size).await?;
@@ -114,28 +116,39 @@ impl Element {
                 size: header_len + size,
                 val,
             })
-        }.boxed()
+        }
+        .boxed()
     }
 
-    pub fn parse_body<'a, R: AsyncRead + Send + Sync + Unpin>(r: &'a mut R, id: u32, size: u64) -> BoxFuture<'a, MResult<ElementType>> {
+    pub fn parse_body<'a, R: AsyncRead + Send + Sync + Unpin>(
+        r: &'a mut R,
+        id: u32,
+        size: u64,
+    ) -> BoxFuture<'a, MResult<ElementType>> {
         async move {
             match id {
-                id if IDS_MASTER.contains(&id) => {
-                    Element::parse_master(r, size).await.map(ElementType::Master)
-                }
+                id if IDS_MASTER.contains(&id) => Element::parse_master(r, size)
+                    .await
+                    .map(ElementType::Master),
                 id if IDS_INT.contains(&id) => read_int(r, size).await.map(ElementType::Int),
                 id if IDS_UINT.contains(&id) => read_uint(r, size).await.map(ElementType::UInt),
-                id if IDS_STRING.contains(&id) => read_string(r, size).await.map(ElementType::String),
+                id if IDS_STRING.contains(&id) => {
+                    read_string(r, size).await.map(ElementType::String)
+                }
                 id if IDS_UTF8.contains(&id) => read_utf8(r, size).await.map(ElementType::UTF8),
                 id if IDS_BINARY.contains(&id) => read_bin(r, size).await.map(ElementType::Binary),
                 id if IDS_FLOAT.contains(&id) => read_float(r, size).await.map(ElementType::Float),
                 0x4461 => read_date(r, size).await.map(ElementType::Date),
                 _ => read_bin(r, size).await.map(ElementType::Binary),
             }
-        }.boxed()
+        }
+        .boxed()
     }
 
-    pub fn parse_master<'a, R: AsyncRead + Send + Sync + Unpin>(r: &'a mut R, mut size: u64) -> BoxFuture<'a, MResult<Vec<Element>>> {
+    pub fn parse_master<'a, R: AsyncRead + Send + Sync + Unpin>(
+        r: &'a mut R,
+        mut size: u64,
+    ) -> BoxFuture<'a, MResult<Vec<Element>>> {
         async move {
             let mut elements = Vec::new();
             while size > 0 {
@@ -145,7 +158,8 @@ impl Element {
                 elements.push(e);
             }
             Ok(elements)
-        }.boxed()
+        }
+        .boxed()
     }
 }
 
@@ -207,7 +221,9 @@ impl error::Error for MatroskaError {
     }
 }
 
-pub async fn read_element_id_size<R: AsyncRead + Send + Sync + Unpin>(reader: &mut R) -> MResult<(u32, u64, u64)> {
+pub async fn read_element_id_size<R: AsyncRead + Send + Sync + Unpin>(
+    reader: &mut R,
+) -> MResult<(u32, u64, u64)> {
     let mut r = AsyncBitReader::<_, BigEndian>::new(reader);
     let (id, id_len) = read_element_id(&mut r).await?;
     let (size, size_len) = read_element_size(&mut r).await?;
@@ -217,19 +233,23 @@ pub async fn read_element_id_size<R: AsyncRead + Send + Sync + Unpin>(reader: &m
 async fn read_element_id<R: AsyncBitRead>(r: &mut R) -> MResult<(u32, u64)> {
     match r.read_unary1().await {
         Ok(0) => r
-            .read::<u32>(7).await
+            .read::<u32>(7)
+            .await
             .map_err(MatroskaError::Io)
             .map(|u| (0b1000_0000 | u, 1)),
         Ok(1) => r
-            .read::<u32>(6 + 8).await
+            .read::<u32>(6 + 8)
+            .await
             .map_err(MatroskaError::Io)
             .map(|u| ((0b0100_0000 << 8) | u, 2)),
         Ok(2) => r
-            .read::<u32>(5 + 16).await
+            .read::<u32>(5 + 16)
+            .await
             .map_err(MatroskaError::Io)
             .map(|u| ((0b0010_0000 << 16) | u, 3)),
         Ok(3) => r
-            .read::<u32>(4 + 24).await
+            .read::<u32>(4 + 24)
+            .await
             .map_err(MatroskaError::Io)
             .map(|u| ((0b0001_0000 << 24) | u, 4)),
         Ok(_) => Err(MatroskaError::InvalidID),
@@ -240,28 +260,41 @@ async fn read_element_id<R: AsyncBitRead>(r: &mut R) -> MResult<(u32, u64)> {
 async fn read_element_size<R: AsyncBitRead>(r: &mut R) -> MResult<(u64, u64)> {
     match r.read_unary1().await {
         Ok(0) => r.read(7).await.map(|s| (s, 1)).map_err(MatroskaError::Io),
-        Ok(1) => r.read(6 + 8).await.map(|s| (s, 2)).map_err(MatroskaError::Io),
+        Ok(1) => r
+            .read(6 + 8)
+            .await
+            .map(|s| (s, 2))
+            .map_err(MatroskaError::Io),
         Ok(2) => r
-            .read(5 + (2 * 8)).await
+            .read(5 + (2 * 8))
+            .await
             .map(|s| (s, 3))
             .map_err(MatroskaError::Io),
         Ok(3) => r
-            .read(4 + (3 * 8)).await
+            .read(4 + (3 * 8))
+            .await
             .map(|s| (s, 4))
             .map_err(MatroskaError::Io),
         Ok(4) => r
-            .read(3 + (4 * 8)).await
+            .read(3 + (4 * 8))
+            .await
             .map(|s| (s, 5))
             .map_err(MatroskaError::Io),
         Ok(5) => r
-            .read(2 + (5 * 8)).await
+            .read(2 + (5 * 8))
+            .await
             .map(|s| (s, 6))
             .map_err(MatroskaError::Io),
         Ok(6) => r
-            .read(1 + (6 * 8)).await
+            .read(1 + (6 * 8))
+            .await
             .map(|s| (s, 7))
             .map_err(MatroskaError::Io),
-        Ok(7) => r.read(7 * 8).await.map(|s| (s, 8)).map_err(MatroskaError::Io),
+        Ok(7) => r
+            .read(7 * 8)
+            .await
+            .map(|s| (s, 8))
+            .map_err(MatroskaError::Io),
         Ok(_) => Err(MatroskaError::InvalidSize),
         Err(err) => Err(MatroskaError::Io(err)),
     }
@@ -302,27 +335,45 @@ pub async fn read_float<R: AsyncRead + Send + Sync + Unpin>(r: &mut R, size: u64
     }
 }
 
-pub async fn read_string<R: AsyncRead + Send + Sync + Unpin>(r: &mut R, size: u64) -> MResult<String> {
+pub async fn read_string<R: AsyncRead + Send + Sync + Unpin>(
+    r: &mut R,
+    size: u64,
+) -> MResult<String> {
     /*FIXME - limit this to ASCII set*/
-    read_bin(r, size).await.and_then(|bytes| String::from_utf8(bytes).map_err(MatroskaError::UTF8))
+    read_bin(r, size)
+        .await
+        .and_then(|bytes| String::from_utf8(bytes).map_err(MatroskaError::UTF8))
 }
 
-pub async fn read_utf8<R: AsyncRead + Send + Sync + Unpin>(r: &mut R, size: u64) -> MResult<String> {
-    read_bin(r, size).await.and_then(|bytes| String::from_utf8(bytes).map_err(MatroskaError::UTF8))
+pub async fn read_utf8<R: AsyncRead + Send + Sync + Unpin>(
+    r: &mut R,
+    size: u64,
+) -> MResult<String> {
+    read_bin(r, size)
+        .await
+        .and_then(|bytes| String::from_utf8(bytes).map_err(MatroskaError::UTF8))
 }
 
-pub async fn read_date<R: AsyncRead + Send + Sync + Unpin>(r: &mut R, size: u64) -> MResult<DateTime<Utc>> {
+pub async fn read_date<R: AsyncRead + Send + Sync + Unpin>(
+    r: &mut R,
+    size: u64,
+) -> MResult<DateTime<Utc>> {
     if size == 8 {
         use chrono::Duration;
         use chrono::TimeZone;
 
-        read_int(r, size).await.map(|d| Utc.ymd(2001, 1, 1).and_hms(0, 0, 0) + Duration::nanoseconds(d))
+        read_int(r, size)
+            .await
+            .map(|d| Utc.ymd(2001, 1, 1).and_hms(0, 0, 0) + Duration::nanoseconds(d))
     } else {
         Err(MatroskaError::InvalidDate)
     }
 }
 
-pub async fn read_bin<R: AsyncRead + Send + Sync + Unpin>(r: &mut R, size: u64) -> MResult<Vec<u8>> {
+pub async fn read_bin<R: AsyncRead + Send + Sync + Unpin>(
+    r: &mut R,
+    size: u64,
+) -> MResult<Vec<u8>> {
     let mut buf = vec![0; size as usize];
     r.read_exact(&mut buf)
         .await

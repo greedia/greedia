@@ -11,10 +11,13 @@
 
 #![allow(dead_code)]
 
-use std::{collections::BTreeMap, time::Duration};
+use super::{
+    ebml::{self, Element, ElementType, MResult, MatroskaError},
+    ids,
+};
 use chrono::{DateTime, Utc};
+use std::{collections::BTreeMap, time::Duration};
 use tokio::io::{AsyncRead, AsyncSeek, AsyncSeekExt};
-use super::{ebml::{self, Element, ElementType, MResult, MatroskaError}, ids};
 
 /// A Matroska file
 #[derive(Debug)]
@@ -40,7 +43,9 @@ impl Matroska {
     }
 
     /// Parses contents of open Matroska file
-    pub async fn open<R: AsyncRead + AsyncSeek + Send + Sync + Unpin>(mut file: &mut R) -> MResult<Matroska> {
+    pub async fn open<R: AsyncRead + AsyncSeek + Send + Sync + Unpin>(
+        mut file: &mut R,
+    ) -> MResult<Matroska> {
         use std::io::SeekFrom;
 
         let mut matroska = Matroska::new();
@@ -60,7 +65,8 @@ impl Matroska {
             }
         }
         while id_0 != ids::SEGMENT {
-            file.seek(SeekFrom::Current(size_0 as i64)).await
+            file.seek(SeekFrom::Current(size_0 as i64))
+                .await
                 .map(|_| ())
                 .map_err(MatroskaError::Io)?;
             let (id, size, _) = ebml::read_element_id_size(&mut file).await?;
@@ -68,7 +74,10 @@ impl Matroska {
             size_0 = size;
         }
 
-        let segment_start = file.seek(SeekFrom::Current(0)).await.map_err(MatroskaError::Io)?;
+        let segment_start = file
+            .seek(SeekFrom::Current(0))
+            .await
+            .map_err(MatroskaError::Io)?;
 
         while size_0 > 0 {
             let (id_1, size_1, len) = ebml::read_element_id_size(&mut file).await?;
@@ -77,28 +86,32 @@ impl Matroska {
                     // if seektable encountered, populate file from that
                     let seektable = Seektable::parse(&mut file, size_1).await?;
                     if let Some(pos) = seektable.get(ids::INFO) {
-                        file.seek(SeekFrom::Start(pos + segment_start)).await
+                        file.seek(SeekFrom::Start(pos + segment_start))
+                            .await
                             .map_err(MatroskaError::Io)?;
                         let (i, s, _) = ebml::read_element_id_size(&mut file).await?;
                         assert_eq!(i, ids::INFO);
                         matroska.info = Info::parse(&mut file, s).await?;
                     }
                     if let Some(pos) = seektable.get(ids::TRACKS) {
-                        file.seek(SeekFrom::Start(pos + segment_start)).await
+                        file.seek(SeekFrom::Start(pos + segment_start))
+                            .await
                             .map_err(MatroskaError::Io)?;
                         let (i, s, _) = ebml::read_element_id_size(&mut file).await?;
                         assert_eq!(i, ids::TRACKS);
                         matroska.tracks = Track::parse(&mut file, s).await?;
                     }
                     if let Some(pos) = seektable.get(ids::ATTACHMENTS) {
-                        file.seek(SeekFrom::Start(pos + segment_start)).await
+                        file.seek(SeekFrom::Start(pos + segment_start))
+                            .await
                             .map_err(MatroskaError::Io)?;
                         let (i, s, _) = ebml::read_element_id_size(&mut file).await?;
                         assert_eq!(i, ids::ATTACHMENTS);
                         matroska.attachments = Attachment::parse(&mut file, s).await?;
                     }
                     if let Some(pos) = seektable.get(ids::CHAPTERS) {
-                        file.seek(SeekFrom::Start(pos + segment_start)).await
+                        file.seek(SeekFrom::Start(pos + segment_start))
+                            .await
                             .map_err(MatroskaError::Io)?;
                         let (i, s, _) = ebml::read_element_id_size(&mut file).await?;
                         assert_eq!(i, ids::CHAPTERS);
@@ -120,7 +133,8 @@ impl Matroska {
                     matroska.chapters = ChapterEdition::parse(&mut file, size_1).await?;
                 }
                 _ => {
-                    file.seek(SeekFrom::Current(size_1 as i64)).await
+                    file.seek(SeekFrom::Current(size_1 as i64))
+                        .await
                         .map(|_| ())
                         .map_err(MatroskaError::Io)?;
                 }
@@ -174,7 +188,10 @@ impl Seektable {
         self.seek.get(&id).cloned()
     }
 
-    pub(super) async fn parse<R: AsyncRead + Send + Sync + Unpin>(r: &mut R, size: u64) -> MResult<Seektable> {
+    pub(super) async fn parse<R: AsyncRead + Send + Sync + Unpin>(
+        r: &mut R,
+        size: u64,
+    ) -> MResult<Seektable> {
         let mut seektable = Seektable::new();
         for e in Element::parse_master(r, size).await? {
             if let Element {
@@ -190,7 +207,6 @@ impl Seektable {
         Ok(seektable)
     }
 }
-
 
 #[derive(Debug)]
 pub(super) struct Seek {
@@ -264,7 +280,10 @@ impl Info {
         }
     }
 
-    pub(super) async fn parse<R: AsyncRead + Send + Sync + Unpin>(r: &mut R, size: u64) -> MResult<Info> {
+    pub(super) async fn parse<R: AsyncRead + Send + Sync + Unpin>(
+        r: &mut R,
+        size: u64,
+    ) -> MResult<Info> {
         let mut info = Info::new();
         let mut timecode_scale = None;
         let mut duration = None;
@@ -374,7 +393,10 @@ impl Track {
         }
     }
 
-    async fn parse<R: AsyncRead + Send + Sync + Unpin>(r: &mut R, size: u64) -> MResult<Vec<Track>> {
+    async fn parse<R: AsyncRead + Send + Sync + Unpin>(
+        r: &mut R,
+        size: u64,
+    ) -> MResult<Vec<Track>> {
         Element::parse_master(r, size).await.map(|elements| {
             elements
                 .into_iter()
@@ -681,7 +703,10 @@ impl Attachment {
         }
     }
 
-    pub(super) async fn parse<R: AsyncRead + Send + Sync + Unpin>(r: &mut R, size: u64) -> MResult<Vec<Attachment>> {
+    pub(super) async fn parse<R: AsyncRead + Send + Sync + Unpin>(
+        r: &mut R,
+        size: u64,
+    ) -> MResult<Vec<Attachment>> {
         Element::parse_master(r, size).await.map(|elements| {
             elements
                 .into_iter()
@@ -759,7 +784,10 @@ impl ChapterEdition {
         }
     }
 
-    async fn parse<R: AsyncRead + Send + Sync + Unpin>(r: &mut R, size: u64) -> MResult<Vec<ChapterEdition>> {
+    async fn parse<R: AsyncRead + Send + Sync + Unpin>(
+        r: &mut R,
+        size: u64,
+    ) -> MResult<Vec<ChapterEdition>> {
         Element::parse_master(r, size).await.map(|elements| {
             elements
                 .into_iter()

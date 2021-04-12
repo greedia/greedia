@@ -1,10 +1,10 @@
 use crate::crypt_context::CryptContext;
 
-use std::cmp::min;
 use super::CacheFileHandler;
 use async_trait::async_trait;
 use bytes::Bytes;
 use rclone_crypt::decrypter::{self, Decrypter};
+use std::cmp::min;
 
 pub struct CryptPassthrough {
     decrypter: Decrypter,
@@ -15,7 +15,10 @@ pub struct CryptPassthrough {
 }
 
 impl CryptPassthrough {
-    pub async fn new(ctx: &CryptContext, mut reader: Box<dyn CacheFileHandler>) -> Option<CryptPassthrough> {
+    pub async fn new(
+        ctx: &CryptContext,
+        mut reader: Box<dyn CacheFileHandler>,
+    ) -> Option<CryptPassthrough> {
         reader.seek_to(0).await;
         let mut header = [0u8; decrypter::FILE_HEADER_SIZE];
         reader.read_exact(&mut header).await;
@@ -48,18 +51,16 @@ impl CryptPassthrough {
 
         // Otherwise, load up a new last_bytes.
         let mut block_buf = [0u8; decrypter::BLOCK_SIZE];
-        let encrypted_block_len = self
-                .reader
-                .read_exact(&mut block_buf)
-                .await;
+        let encrypted_block_len = self.reader.read_exact(&mut block_buf).await;
 
         if encrypted_block_len < decrypter::BLOCK_SIZE {
             return 0;
         }
 
         let decrypted_block = self
-                .decrypter
-                .decrypt_block(self.last_block + 1, &block_buf).unwrap();
+            .decrypter
+            .decrypt_block(self.last_block + 1, &block_buf)
+            .unwrap();
 
         let read_len = min(decrypted_block.len(), len);
         if let Some(buf) = buf {
@@ -90,10 +91,9 @@ impl CacheFileHandler for CryptPassthrough {
         // and then decrypt them efficiently but this is easier to verify for now...
         let starting_block = offset / decrypter::BLOCK_DATA_SIZE as u64;
 
-
         let block_starting_offset =
-                decrypter::FILE_HEADER_SIZE as u64 + (starting_block * decrypter::BLOCK_SIZE as u64);
-        
+            decrypter::FILE_HEADER_SIZE as u64 + (starting_block * decrypter::BLOCK_SIZE as u64);
+
         // The 'offset' may be partially inside the block.
         // To compensate for this, calculate the offset into the decrypted block that
         // data needs to be retrieved from.
@@ -110,19 +110,19 @@ impl CacheFileHandler for CryptPassthrough {
         self.reader.seek_to(block_starting_offset as u64).await;
 
         let mut block_buf = [0u8; decrypter::BLOCK_SIZE];
-        let encrypted_block_len = self
-                .reader
-                .read_exact(&mut block_buf)
-                .await;
+        let encrypted_block_len = self.reader.read_exact(&mut block_buf).await;
 
         if encrypted_block_len < decrypter::BLOCK_SIZE {
             return;
         }
 
         let decrypted_block = self
-                .decrypter
-                .decrypt_block(self.last_block, &block_buf).unwrap();
+            .decrypter
+            .decrypt_block(self.last_block, &block_buf)
+            .unwrap();
 
-        self.last_bytes = Some(Bytes::copy_from_slice(&decrypted_block[decrypted_block_starting_offset..]));
+        self.last_bytes = Some(Bytes::copy_from_slice(
+            &decrypted_block[decrypted_block_starting_offset..],
+        ));
     }
 }

@@ -34,18 +34,18 @@ impl SmartCacher for ScMp3 {
     ) -> ScResult {
         let header_data = action.read_data(0, 256).await;
         // First, look for a starting ID3v2 tag and skip over it if necessary.
-        let header_scan_offset =
-            if let Some(id3_len) = read_id3_len(&header_data) {
-                id3_len as u64 + 10
-            } else {
-                0
-            };
+        let header_scan_offset = if let Some(id3_len) = read_id3_len(&header_data) {
+            id3_len as u64 + 10
+        } else {
+            0
+        };
 
         // Next, try to scan for the MP3 header.
 
         // Get a decently-sized buffer for scanning.
-        let header_scan_buffer = action.read_data_bridged(header_scan_offset, 65536, None)
-                .await;
+        let header_scan_buffer = action
+            .read_data_bridged(header_scan_offset, 65536, None)
+            .await;
 
         // Now, look for the actual MP3 header.
         let (mp3_header_offset, mp3_header_data) =

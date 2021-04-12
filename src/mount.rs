@@ -218,27 +218,33 @@ impl GreediaFS {
         let drive_access = self.drives.get(drive as usize)?;
         let file_name = name.to_str()?;
 
-        let reply_entry = drive_access.lookup_item(inode, file_name, |child_inode, drive_item| {
-            let global_inode = self.rev_inode(Inode::Drive(drive, child_inode));
-            let dur = Duration::from_secs(drive_item.modified_time as u64);
+        let reply_entry =
+            drive_access.lookup_item(inode, file_name, |child_inode, drive_item| {
+                let global_inode = self.rev_inode(Inode::Drive(drive, child_inode));
+                let dur = Duration::from_secs(drive_item.modified_time as u64);
 
-            let mut reply_entry = EntryOut::default();
-            let file_attr = reply_entry.attr();
-            if let ArchivedDriveItemData::FileItem { file_name: _, data_id: _, size } = drive_item.data {
-                file_attr.size(size);
-                file_attr.mode(libc::S_IFREG as u32 | 0o444);
-            } else {
-                file_attr.mode(libc::S_IFDIR as u32 | 0o555);
-            }
-            file_attr.ctime(dur);
-            file_attr.mtime(dur);
-            file_attr.ino(global_inode);
+                let mut reply_entry = EntryOut::default();
+                let file_attr = reply_entry.attr();
+                if let ArchivedDriveItemData::FileItem {
+                    file_name: _,
+                    data_id: _,
+                    size,
+                } = drive_item.data
+                {
+                    file_attr.size(size);
+                    file_attr.mode(libc::S_IFREG as u32 | 0o444);
+                } else {
+                    file_attr.mode(libc::S_IFDIR as u32 | 0o555);
+                }
+                file_attr.ctime(dur);
+                file_attr.mtime(dur);
+                file_attr.ino(global_inode);
 
-            reply_entry.ino(global_inode);
-            reply_entry.ttl_attr(TTL_LONG);
-            reply_entry.ttl_entry(TTL_LONG);
-            reply_entry
-        })?;
+                reply_entry.ino(global_inode);
+                reply_entry.ttl_attr(TTL_LONG);
+                reply_entry.ttl_entry(TTL_LONG);
+                reply_entry
+            })?;
 
         Some(reply_entry)
     }

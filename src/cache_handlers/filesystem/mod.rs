@@ -964,9 +964,7 @@ fn get_file_cache_path(cache_root: &Path, data_id: &DataIdentifier) -> PathBuf {
             cache_root.join(dir_1).join(dir_2).join(hex_md5)
         }
         #[cfg(feature = "sctest")]
-        DataIdentifier::None => {
-            PathBuf::new()
-        }
+        DataIdentifier::None => PathBuf::new(),
     }
 }
 

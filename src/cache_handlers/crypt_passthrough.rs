@@ -9,7 +9,7 @@ use std::cmp::min;
 pub struct CryptPassthrough {
     decrypter: Decrypter,
     reader: Box<dyn CacheFileHandler>,
-    last_block: u64,
+    cur_block: u64,
     /// The last block of decrypted bytes, if any.
     last_bytes: Option<Bytes>,
 }
@@ -24,13 +24,13 @@ impl CryptPassthrough {
         reader.read_exact(&mut header).await;
         let decrypter = Decrypter::new(&ctx.cipher.file_key, &header).ok()?;
 
-        let last_block = 0;
+        let cur_block = 0;
         let last_bytes = None;
 
         Some(CryptPassthrough {
             decrypter,
             reader,
-            last_block,
+            cur_block,
             last_bytes,
         })
     }
@@ -59,7 +59,7 @@ impl CryptPassthrough {
 
         let decrypted_block = self
             .decrypter
-            .decrypt_block(self.last_block + 1, &block_buf)
+            .decrypt_block(self.cur_block, &block_buf)
             .unwrap();
 
         let read_len = min(decrypted_block.len(), len);
@@ -67,7 +67,7 @@ impl CryptPassthrough {
             buf[..read_len].copy_from_slice(&decrypted_block[..read_len]);
         }
 
-        self.last_block += 1;
+        self.cur_block += 1;
         self.last_bytes = Some(Bytes::copy_from_slice(&decrypted_block[read_len..]));
 
         read_len
@@ -103,7 +103,7 @@ impl CacheFileHandler for CryptPassthrough {
             offset as usize
         };
 
-        self.last_block = starting_block;
+        self.cur_block = starting_block;
         self.last_bytes = None;
 
         // Decrypt starting_block, and discard bytes up to the correct offset
@@ -118,7 +118,7 @@ impl CacheFileHandler for CryptPassthrough {
 
         let decrypted_block = self
             .decrypter
-            .decrypt_block(self.last_block, &block_buf)
+            .decrypt_block(self.cur_block, &block_buf)
             .unwrap();
 
         self.last_bytes = Some(Bytes::copy_from_slice(

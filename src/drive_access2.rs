@@ -8,10 +8,12 @@ use std::{
     },
 };
 
+use rclone_crypt::decrypter::{self, Decrypter};
+
 use rkyv::de::deserializers::AllocDeserializer;
 use rkyv::Deserialize;
 
-use crate::db::get_rkyv;
+use crate::{cache_handlers::crypt_passthrough::CryptPassthrough, db::get_rkyv};
 use crate::{
     cache_handlers::{CacheDriveHandler, CacheFileHandler},
     crypt_context::CryptContext,
@@ -20,6 +22,8 @@ use crate::{
     types::{ArchivedDriveItem, ArchivedDriveItemData, TreeKeys},
 };
 
+
+#[derive(Debug)]
 pub enum TypeResult<T> {
     IsType(T),
     IsNotType,
@@ -32,6 +36,7 @@ pub struct DriveAccess {
     pub db: Db,
     pub root_path: Option<PathBuf>,
     pub crypts: Vec<Arc<CryptContext>>,
+    uses_crypt: bool,
     inode_tree: Tree,
     lookup_tree: Tree,
     /// Optimization so we don't need to traverse for the root path repeatedly
@@ -44,6 +49,7 @@ impl DriveAccess {
         cache_handler: Box<dyn CacheDriveHandler>,
         db: Db,
         root_path: Option<PathBuf>,
+        uses_crypt: bool,
         crypts: Vec<Arc<CryptContext>>,
     ) -> DriveAccess {
         let tree_keys = TreeKeys::new(
@@ -60,6 +66,7 @@ impl DriveAccess {
             db,
             root_path,
             crypts,
+            uses_crypt,
             inode_tree,
             lookup_tree,
             root_inode,
@@ -81,11 +88,23 @@ impl DriveAccess {
             {
                 let access_id = drive_item.access_id.to_string();
                 let data_id = data_id.deserialize(&mut AllocDeserializer).unwrap();
-                let file = self
+                let mut file = self
                     .cache_handler
                     .open_file(access_id, data_id, *size, offset, false)
                     .await
                     .unwrap();
+
+                for cc in self.crypts.iter() {
+                    file.seek_to(0).await;
+
+                    let mut header = [0u8; decrypter::FILE_HEADER_SIZE];
+                    file.read_exact(&mut header).await;
+                    if Decrypter::new(&cc.cipher.file_key, &header).is_ok() {
+                        file.seek_to(0).await;
+                        return TypeResult::IsType(Box::new(CryptPassthrough::new(&cc, file).await.unwrap()));
+                    }
+                }
+
                 TypeResult::IsType(file)
             } else {
                 TypeResult::IsNotType
@@ -123,7 +142,8 @@ impl DriveAccess {
             inode
         };
 
-        let file_name = self
+        let file_name = if self.uses_crypt {
+            self
             .crypts
             .iter()
             .find_map(|cc| {
@@ -132,7 +152,10 @@ impl DriveAccess {
                     .ok()
                     .map(|s| Cow::Owned(s))
             })
-            .unwrap_or_else(|| Cow::Borrowed(file_name));
+            .unwrap_or_else(|| Cow::Borrowed(file_name))
+        } else {
+            Cow::Borrowed(file_name)
+        };
 
         let inode = self.lookup_inode(inode, &file_name)?;
 
@@ -143,17 +166,19 @@ impl DriveAccess {
 
     pub fn getattr_item<T>(
         &self,
-        _inode: u64,
-        mut _to_t: impl FnOnce(&ArchivedDriveItem) -> T,
+        inode: u64,
+        to_t: impl FnOnce(&ArchivedDriveItem) -> T,
     ) -> Option<T> {
-        todo!()
+        let drive_item_bytes = self.inode_tree.get(inode.to_le_bytes())?;
+        let drive_item = get_rkyv::<DriveItem>(&&drive_item_bytes);
+        Some(to_t(drive_item))
     }
 
     pub fn readdir(
         &self,
         inode: u64,
         offset: u64,
-        mut for_each: impl FnMut(u64, &ArchivedDirItem) -> bool,
+        mut for_each: impl FnMut(u64, &ArchivedDirItem, Option<&str>) -> bool,
     ) -> Option<()> {
         let inode = if inode == 0 {
             self.root_inode().unwrap_or(0)
@@ -170,7 +195,8 @@ impl DriveAccess {
 
         if let ArchivedDriveItemData::Dir { items } = &dir.data {
             for (off, item) in items.iter().enumerate().skip(offset as usize) {
-                if for_each(off as u64, item) {
+                let decrypted_file_name = self.crypts.iter().find_map(|cc| cc.cipher.decrypt_segment(&item.name).ok());
+                if for_each(off as u64, item, decrypted_file_name.as_deref()) {
                     // The FUSE entry is full, so stop iterating
                     break;
                 }

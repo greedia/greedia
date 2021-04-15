@@ -12,6 +12,7 @@ pub struct CryptPassthrough {
     cur_block: u64,
     /// The last block of decrypted bytes, if any.
     last_bytes: Option<Bytes>,
+    under_offset: u64,
 }
 
 impl CryptPassthrough {
@@ -32,34 +33,38 @@ impl CryptPassthrough {
             reader,
             cur_block,
             last_bytes,
+            under_offset: header.len() as u64,
         })
     }
 
-    async fn handle_read_into(&mut self, len: usize, buf: Option<&mut [u8]>) -> usize {
+    async fn handle_read_into(&mut self, len: usize, mut buf: Option<&mut [u8]>) -> usize {
+        // println!("crypt handle_read_into len {} is_buf {}", len, buf.is_some());
         // If data exists in last_bytes, read from there first
         if let Some(last_bytes) = &mut self.last_bytes {
-            let bytes_split_len = min(len, last_bytes.len());
-            let from_last_bytes = last_bytes.split_to(bytes_split_len);
-            if let Some(buf) = buf {
-                buf[..from_last_bytes.len()].copy_from_slice(&from_last_bytes);
-            }
             if last_bytes.is_empty() {
-                self.last_bytes = None;
+                self.last_bytes = None
+            } else {
+                // println!("read from last_bytes first");
+                let bytes_split_len = min(len, last_bytes.len());
+                let from_last_bytes = last_bytes.split_to(bytes_split_len);
+                if let Some(buf) = buf.as_mut() {
+                    buf[..bytes_split_len].copy_from_slice(&from_last_bytes);
+                }
+                return bytes_split_len;
             }
-            return bytes_split_len;
         }
 
         // Otherwise, load up a new last_bytes.
         let mut block_buf = [0u8; decrypter::BLOCK_SIZE];
         let encrypted_block_len = self.reader.read_exact(&mut block_buf).await;
 
-        if encrypted_block_len < decrypter::BLOCK_SIZE {
+        if encrypted_block_len == 0 {
             return 0;
         }
 
         let decrypted_block = self
             .decrypter
-            .decrypt_block(self.cur_block, &block_buf)
+            .decrypt_block(self.cur_block, &block_buf[..encrypted_block_len])
             .unwrap();
 
         let read_len = min(decrypted_block.len(), len);
@@ -69,7 +74,7 @@ impl CryptPassthrough {
 
         self.cur_block += 1;
         self.last_bytes = Some(Bytes::copy_from_slice(&decrypted_block[read_len..]));
-
+        // println!("handle_read_into read_len {} last_bytes {}", read_len, &decrypted_block[read_len..].len());
         read_len
     }
 }
@@ -85,11 +90,14 @@ impl CacheFileHandler for CryptPassthrough {
     }
 
     async fn seek_to(&mut self, offset: u64) {
+        // println!("crypt seek_to {}", offset);
+
         // The block to start at - note the data may span more than one block.
         // For simplicity, each block is read and decrypted individually.
         // Ideally, we could calculate all blocks required, issue one read call,
         // and then decrypt them efficiently but this is easier to verify for now...
         let starting_block = offset / decrypter::BLOCK_DATA_SIZE as u64;
+        // let starting_block = offset / decrypter::BLOCK_DATA_SIZE as u64;
 
         let block_starting_offset =
             decrypter::FILE_HEADER_SIZE as u64 + (starting_block * decrypter::BLOCK_SIZE as u64);
@@ -103,26 +111,36 @@ impl CacheFileHandler for CryptPassthrough {
             offset as usize
         };
 
+        // dbg!(starting_block, block_starting_offset, decrypted_block_starting_offset);
+
         self.cur_block = starting_block;
         self.last_bytes = None;
 
         // Decrypt starting_block, and discard bytes up to the correct offset
         self.reader.seek_to(block_starting_offset as u64).await;
+        self.under_offset = block_starting_offset as u64;
 
         let mut block_buf = [0u8; decrypter::BLOCK_SIZE];
         let encrypted_block_len = self.reader.read_exact(&mut block_buf).await;
 
-        if encrypted_block_len < decrypter::BLOCK_SIZE {
+        // dbg!(encrypted_block_len);
+
+        if encrypted_block_len == 0 {
             return;
         }
 
         let decrypted_block = self
             .decrypter
-            .decrypt_block(self.cur_block, &block_buf)
+            .decrypt_block(self.cur_block, &block_buf[..encrypted_block_len])
             .unwrap();
 
-        self.last_bytes = Some(Bytes::copy_from_slice(
-            &decrypted_block[decrypted_block_starting_offset..],
-        ));
+        if let Some(decrypted_block) = decrypted_block.get(decrypted_block_starting_offset..) {
+            self.last_bytes = Some(Bytes::copy_from_slice(
+                decrypted_block,
+            ));
+            self.cur_block += 1;
+        } else {
+            self.last_bytes = None;
+        }
     }
 }

@@ -231,66 +231,67 @@ pub async fn read_element_id_size<R: AsyncRead + Send + Sync + Unpin>(
 }
 
 async fn read_element_id<R: AsyncBitRead>(r: &mut R) -> MResult<(u32, u64)> {
-    match r.read_unary1().await {
-        Ok(0) => r
+    let res = match r.read_unary1(Some(4)).await {
+        Ok(Some(0)) => r
             .read::<u32>(7)
             .await
             .map_err(MatroskaError::Io)
             .map(|u| (0b1000_0000 | u, 1)),
-        Ok(1) => r
+        Ok(Some(1)) => r
             .read::<u32>(6 + 8)
             .await
             .map_err(MatroskaError::Io)
             .map(|u| ((0b0100_0000 << 8) | u, 2)),
-        Ok(2) => r
+        Ok(Some(2)) => r
             .read::<u32>(5 + 16)
             .await
             .map_err(MatroskaError::Io)
             .map(|u| ((0b0010_0000 << 16) | u, 3)),
-        Ok(3) => r
+        Ok(Some(3)) => r
             .read::<u32>(4 + 24)
             .await
             .map_err(MatroskaError::Io)
             .map(|u| ((0b0001_0000 << 24) | u, 4)),
         Ok(_) => Err(MatroskaError::InvalidID),
         Err(err) => Err(MatroskaError::Io(err)),
-    }
+    };
+    res
 }
 
 async fn read_element_size<R: AsyncBitRead>(r: &mut R) -> MResult<(u64, u64)> {
-    match r.read_unary1().await {
-        Ok(0) => r.read(7).await.map(|s| (s, 1)).map_err(MatroskaError::Io),
-        Ok(1) => r
+    match r.read_unary1(Some(8)).await {
+        Ok(Some(0)) => r.read(7).await.map(|s| (s, 1)).map_err(MatroskaError::Io),
+        Ok(Some(1)) => r
             .read(6 + 8)
             .await
             .map(|s| (s, 2))
             .map_err(MatroskaError::Io),
-        Ok(2) => r
+        Ok(Some(2)) => r
             .read(5 + (2 * 8))
             .await
             .map(|s| (s, 3))
             .map_err(MatroskaError::Io),
-        Ok(3) => r
+        Ok(Some(3)) => r
             .read(4 + (3 * 8))
             .await
             .map(|s| (s, 4))
             .map_err(MatroskaError::Io),
-        Ok(4) => r
+        Ok(Some(4)) => r
             .read(3 + (4 * 8))
             .await
             .map(|s| (s, 5))
             .map_err(MatroskaError::Io),
-        Ok(5) => r
+        Ok(Some(5)) => r
             .read(2 + (5 * 8))
             .await
             .map(|s| (s, 6))
             .map_err(MatroskaError::Io),
-        Ok(6) => r
+        Ok(Some(6)) => r
             .read(1 + (6 * 8))
             .await
             .map(|s| (s, 7))
             .map_err(MatroskaError::Io),
-        Ok(7) => r
+        Ok(Some(7)) => r
             .read(7 * 8)
             .await
             .map(|s| (s, 8))

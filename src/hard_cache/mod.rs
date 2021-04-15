@@ -201,7 +201,7 @@ impl HardCacher {
 
         // If below min_size, call min_size cacher
         if item_size <= self.min_size {
-            // println!("Using min_size cacher");
+            println!("Using min_size cacher for {} ({} bytes)", file_spec.name, file_spec.size);
             hcd.cache_data_fully().await;
             hcd.save().await;
             return Some(HardCacheMetadata {
@@ -219,13 +219,13 @@ impl HardCacher {
         if let Some(pc) = preferred_cacher {
             let spec = pc.spec();
             println!(
-                "Trying preferred cacher {} on {}",
-                spec.name, file_spec.name
+                "Trying preferred cacher {} on {} ({} bytes)",
+                spec.name, file_spec.name, file_spec.size
             );
             let res: ScResult = pc.cache(&smart_cacher_config, &file_spec, &mut hcd).await;
 
             match res {
-                Ok(ScOk::Finalize) => {
+                Ok(ScOk::Finalize) => { 
                     // Write metadata, save here
                     // println!("Success with smart cacher {}", spec.name);
                     hcd.save().await;
@@ -235,9 +235,14 @@ impl HardCacher {
                     });
                 }
                 Err(ScErr::Cancel) => {
-                    // println!("Smart cacher {} failed, trying next...", spec.name);
+                    println!("Preferred cacher {} failed, trying next...", spec.name);
                 }
             }
+        } else {
+            println!(
+                "No preferred cacher for {} ({} bytes)",
+                file_spec.name, file_spec.size
+            );
         }
 
         for cacher in SMART_CACHERS {
@@ -248,7 +253,7 @@ impl HardCacher {
                     continue;
                 }
             }
-            println!("Trying smart cacher {}", spec.name);
+            println!("Trying smart cacher {} for {} ({} bytes)", spec.name, file_spec.name, file_spec.size);
             let res: ScResult = cacher
                 .cache(&smart_cacher_config, &file_spec, &mut hcd)
                 .await;
@@ -256,7 +261,7 @@ impl HardCacher {
             match res {
                 Ok(ScOk::Finalize) => {
                     // Write metadata, save here
-                    // println!("Success with smart cacher {}", spec.name);
+                    println!("Success with smart cacher {}", spec.name);
                     hcd.save().await;
                     return Some(HardCacheMetadata {
                         cacher: spec.name.to_string(),
@@ -264,12 +269,12 @@ impl HardCacher {
                     });
                 }
                 Err(ScErr::Cancel) => {
-                    // println!("Smart cacher {} failed, trying next...", spec.name);
+                    println!("Smart cacher {} failed, trying next...", spec.name);
                 }
             }
         }
 
-        println!("Using generic cacher");
+        println!("Using generic cacher for {} ({} bytes)", file_spec.name, file_spec.size);
 
         // If we reach here, try a generic start-end downloader.
         let (start_dl, end_dl) = &self.cacher.generic_cache_sizes();
@@ -511,7 +516,19 @@ impl HcCacherItem for HcDownloadCacherItem {
     }
 
     async fn cache_data_fully(&mut self) {
-        todo!()
+        let mut reader = self
+            .drive_access
+            .cache_handler
+            .open_file(
+                self.item.access_id.clone(),
+                self.item.data_id.clone(),
+                self.item.size,
+                0,
+                true,
+            )
+            .await
+            .unwrap();
+        reader.cache_exact(self.item.size as usize).await;
     }
 
     async fn save(&mut self) {}
@@ -674,7 +691,6 @@ impl<'a> HardCacheReader<'a> {
     }
 
     fn seek(&mut self, offset: u64) {
-        println!("Seeking from {} to {}", self.offset, offset);
         self.offset = min(offset, self.size);
     }
 

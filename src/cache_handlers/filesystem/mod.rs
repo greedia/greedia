@@ -791,7 +791,7 @@ impl FilesystemCacheFileHandler {
                         Receiver::Downloader(downloader) => {
                             let next_chunk: Result<Option<Bytes>, CacheHandlerError> =
                                 downloader.next().await.transpose().map_err(|e| e.into());
-                            if let Some(next_chunk) = next_chunk.unwrap() {
+                            if let Ok(Some(next_chunk)) = next_chunk {
                                 if next_chunk.len() == 0 {
                                     Reader::NeedsNewChunk
                                 } else {
@@ -1083,7 +1083,9 @@ mod test {
     }
 
     async fn tester(init_offsets: &[u64], init_hard_cache: &[bool], actions: Vec<TestAction>) {
-        let d = Arc::new(TimecodeDrive {});
+        let d = Arc::new(TimecodeDrive {
+            root_name: "test".to_string()
+        });
 
         let file_id = r#"{"bytes_len": 65535}"#;
         let data_id = DataIdentifier::GlobalMd5(vec![0, 0, 0, 0]);
@@ -1195,7 +1197,9 @@ mod test {
     /// Test cache chunk splitting with download
     #[tokio::test]
     async fn test_splitting() {
-        let d = Arc::new(TimecodeDrive {});
+        let d = Arc::new(TimecodeDrive {
+            root_name: "test".to_string()
+        });
 
         let file_id = r#"{"bytes_len": 65535}"#;
         let data_id = DataIdentifier::GlobalMd5(vec![0, 0, 0, 0]);
@@ -1226,7 +1230,9 @@ mod test {
 
     #[tokio::test]
     async fn test_dl_drop() {
-        let d = Arc::new(TimecodeDrive {});
+        let d = Arc::new(TimecodeDrive {
+            root_name: "test".to_string()
+        });
 
         let file_id = r#"{"bytes_len": 65535}"#;
         let data_id = DataIdentifier::GlobalMd5(vec![0, 0, 0, 0]);

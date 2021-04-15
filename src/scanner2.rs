@@ -14,15 +14,18 @@ use std::{
 };
 
 use chrono::{Duration, TimeZone, Utc};
-use futures::{Stream, TryStreamExt};
+use flume::Receiver;
+use futures::{Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use rkyv::{de::deserializers::AllocDeserializer, Archive, Deserialize, Serialize};
+use sled::IVec;
 
 use crate::{
     cache_handlers::{DownloaderError, Page, PageItem},
     db::{get_rkyv, serialize_rkyv, Db, Tree},
 };
 
+#[derive(Clone)]
 struct ScanTrees {
     drive_id: String,
     /// Tree that contains general scan metadata for this drive.
@@ -135,33 +138,54 @@ async fn perform_scan(
 
 /// Use HardCacher to hard cache data required for all files.
 async fn perform_caching(trees: &ScanTrees, drive_access: Arc<DriveAccess>) {
-    let hard_cacher = HardCacher::new(drive_access, 1_000);
+    // Start 10 threads for caching
+    let (send, recv) = flume::bounded(1);
+    for _ in 0..100 {
+        tokio::spawn(caching_thread(trees.clone(), drive_access.clone(), recv.clone()));
+    }
 
     for item in trees.inode_tree.iter() {
         let (_, value) = item.unwrap();
-        let data = get_rkyv::<DriveItem>(&value);
-        if let ArchivedDriveItemData::FileItem {
-            file_name,
-            data_id,
-            size,
-        } = &data.data
+        send.send_async(value).await.unwrap();
+    }
+}
+
+async fn caching_thread(trees: ScanTrees, drive_access: Arc<DriveAccess>, recv: Receiver<IVec>) {
+    //println!("Starting caching thread for {}", drive_access.name);
+    {
+        let hard_cacher = HardCacher::new(drive_access.clone(), 1_000_000); // TODO: not hardcode min_size
+        let mut stream = recv.into_stream();
+        while let Some(item) = stream.next().await {
+            let item = get_rkyv::<DriveItem>(&item);
+            perform_one_cache(&trees, &hard_cacher, item).await;
+        }
+    }
+
+    println!("Caching thread for {} complete.", drive_access.name);
+}
+
+async fn perform_one_cache(trees: &ScanTrees, hard_cacher: &HardCacher, item: &ArchivedDriveItem) {
+    if let ArchivedDriveItemData::FileItem {
+        file_name,
+        data_id,
+        size,
+    } = &item.data
+    {
+        let data_id = data_id.deserialize(&mut AllocDeserializer).unwrap();
+        let data_id_key = serialize_rkyv(&data_id);
+        let hc_bytes = trees.hc_meta_tree.get(data_id_key.as_slice());
+        let hc_meta = hc_bytes
+            .as_deref()
+            .map(|m| get_rkyv::<HardCacheMetadata>(m));
+
+        if let Some(meta) = hard_cacher
+            .process(item.access_id.as_str(), file_name, &data_id, *size, hc_meta)
+            .await
         {
-            let data_id = data_id.deserialize(&mut AllocDeserializer).unwrap();
-            let data_id_key = serialize_rkyv(&data_id);
-            let hc_bytes = trees.hc_meta_tree.get(data_id_key.as_slice());
-            let hc_meta = hc_bytes
-                .as_deref()
-                .map(|m| get_rkyv::<HardCacheMetadata>(m));
-            // println!("Processing {}, size {}", file_name, size);
-            if let Some(meta) = hard_cacher
-                .process(data.access_id.as_str(), file_name, &data_id, *size, hc_meta)
-                .await
-            {
-                let meta_bytes = serialize_rkyv(&meta);
-                trees
-                    .hc_meta_tree
-                    .insert(data_id_key.as_slice(), meta_bytes);
-            }
+            let meta_bytes = serialize_rkyv(&meta);
+            trees
+                .hc_meta_tree
+                .insert(data_id_key.as_slice(), meta_bytes);
         }
     }
 }

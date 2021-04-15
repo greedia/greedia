@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{collections::{HashMap, HashSet}, path::PathBuf, sync::Arc};
 use std::{fs, path::Path};
 
 use anyhow::{bail, Result};
@@ -122,12 +122,12 @@ async fn run(config_path: &Path) -> Result<()> {
 
     // Start a scanner for each cache handler
     let mut join_handles = vec![];
-    for drive_access in &drives {
+    for drive_access in drives.iter().filter(|(_, do_scan)| *do_scan).map(|(da, _)| da) {
         join_handles.push(tokio::spawn(scan_thread(drive_access.clone())));
     }
 
     // Start a mount thread
-    join_handles.push(tokio::spawn(mount_thread(drives, cfg.caching.mount_point)));
+    join_handles.push(tokio::spawn(mount_thread(drives.into_iter().map(|(da, _)| da).collect(), cfg.caching.mount_point)));
 
     join_all(join_handles).await;
 
@@ -138,7 +138,7 @@ async fn get_gdrive_drives(
     cache_path: &Path,
     db: Db,
     gdrives: HashMap<String, ConfigGoogleDrive>,
-) -> Result<Vec<Arc<DriveAccess>>> {
+) -> Result<Vec<(Arc<DriveAccess>, bool)>> {
     let hard_cache_root = cache_path.join("hard_cache");
     let soft_cache_root = cache_path.join("soft_cache");
 
@@ -147,6 +147,8 @@ async fn get_gdrive_drives(
     // Since scans are done by client rather than by DriveAccess, we need to know all passwords
     // given to the drive configs, so that encrypted files are scanned properly.
     let mut client_crypts: HashMap<String, Vec<Arc<CryptContext>>> = HashMap::new();
+    // We only want one scanner per drive ID, so check if a scanner already exists for a drive.
+    let mut drive_set: HashSet<String> = HashSet::new();
     let mut da_out = Vec::new();
 
     for (_, cfg_drive) in &gdrives {
@@ -176,6 +178,9 @@ async fn get_gdrive_drives(
             new_client
         };
 
+
+        let do_scan = drive_set.insert(cfg_drive.drive_id.clone());
+
         let drive = client.open_drive(&cfg_drive.drive_id);
 
         let cache_handler = FilesystemCacheHandler::new(
@@ -192,13 +197,14 @@ async fn get_gdrive_drives(
             cache_handler,
             db.clone(),
             root_path,
+            cfg_drive.password.is_some() && cfg_drive.password2.is_some(),
             client_crypts
                 .get(&cfg_drive.drive_id)
                 .cloned()
                 .unwrap_or(vec![]),
         );
 
-        da_out.push(Arc::new(da));
+        da_out.push((Arc::new(da), do_scan));
     }
 
     Ok(da_out)
@@ -208,13 +214,15 @@ async fn get_timecode_drives(
     cache_path: &Path,
     db: Db,
     timecode_drives: HashMap<String, ConfigTimecodeDrive>,
-) -> Result<Vec<Arc<DriveAccess>>> {
+) -> Result<Vec<(Arc<DriveAccess>, bool)>> {
     let hard_cache_root = cache_path.join("hard_cache");
     let soft_cache_root = cache_path.join("soft_cache");
 
     let mut da_out = Vec::new();
     for (name, cfg_drive) in timecode_drives {
-        let drive = Arc::new(TimecodeDrive {});
+        let drive = Arc::new(TimecodeDrive {
+            root_name: cfg_drive.drive_id.clone()
+        });
         let cache_handler = FilesystemCacheHandler::new(
             &cfg_drive.drive_id,
             &hard_cache_root,
@@ -222,9 +230,9 @@ async fn get_timecode_drives(
             drive,
         );
 
-        let da = DriveAccess::new(name.clone(), cache_handler, db.clone(), None, vec![]);
+        let da = DriveAccess::new(name.clone(), cache_handler, db.clone(), None, false, vec![]);
 
-        da_out.push(Arc::new(da));
+        da_out.push((Arc::new(da), true));
     }
 
     Ok(da_out)

@@ -117,7 +117,6 @@ async fn scanner_bg_thread(
     state.rate_limiter.bg_wait().await;
 
     loop {
-
         let mut query = state.root_query.clone();
         if let Some(page_token) = &state.last_page_token {
             query.push(("pageToken", page_token.to_string()));
@@ -280,7 +279,7 @@ async fn open_request(
     let mut access_token = access_token_mutex.lock().await.clone();
     let mut retry = false;
 
-    for _ in 0..5 {
+    for _ in 0..50 {
         if bg_request {
             if retry {
                 rate_limiter.bg_retry_wait().await;
@@ -312,6 +311,7 @@ async fn open_request(
                     }
                     // Bad access token, refresh it and retry request
                     401 => {
+                        println!("access token needs refresh");
                         access_token = refresh_access_token(
                             access_token_mutex,
                             rate_limiter,
@@ -321,10 +321,14 @@ async fn open_request(
                         .await;
                     }
                     // Rate limit or server error, retry request
-                    _ => (),
+                    other => {
+                        println!("Other: {}", other);
+                    },
                 }
             }
-            Err(_) => {}
+            Err(e) => {
+                println!("Error: {}", e)
+            }
         }
 
         retry = true

@@ -178,7 +178,7 @@ impl OpenFile {
         write_hard_cache: bool,
         file_path: &Path,
     ) -> Result<(File, DownloadHandle), CacheHandlerError> {
-        println!("START DL {}", offset);
+        // println!("START DL {}", offset);
 
         let next_chunk = self.get_next_chunk(
             offset,
@@ -332,7 +332,7 @@ impl OpenFile {
         write_hard_cache: bool,
         file_path: &Path,
     ) -> Result<(File, DownloadHandle), CacheHandlerError> {
-        println!("APPEND DL");
+        // println!("APPEND DL");
 
         let next_chunk = self.get_next_chunk(
             start_offset,

@@ -45,14 +45,14 @@ impl TreeKeys {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Page {
-    pub files: Option<Vec<PageItem>>,
+pub struct GdrivePage {
+    pub files: Option<Vec<GdrivePageItem>>,
     pub next_page_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PageItem {
+pub struct GdrivePageItem {
     pub id: String,
     pub name: String,
     pub parents: Vec<String>,
@@ -68,11 +68,11 @@ pub struct ScannedItem {
     pub name: String,
     pub parent: String,
     pub modified_time: DateTime<Utc>,
-    pub file_info: Option<FileInfo>,
+    pub file_info: Option<GdriveFileInfo>,
 }
 
 #[derive(Debug, Clone)]
-pub struct FileInfo {
+pub struct GdriveFileInfo {
     pub md5: String,
     pub size: u64,
 }

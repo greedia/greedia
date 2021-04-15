@@ -15,41 +15,34 @@ use tokio::{
     task::{self, JoinHandle},
 };
 
-use std::{
-    ffi::OsStr,
-    io,
-    path::PathBuf,
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{ffi::OsStr, io, path::PathBuf, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}};
 
 const TTL_LONG: Duration = Duration::from_secs(60 * 60 * 24 * 365);
 const ITEM_BITS: usize = 48;
 const DRIVE_OFFSET: u64 = 1 << ITEM_BITS;
 const ITEM_MASK: u64 = DRIVE_OFFSET - 1;
 
-pub async fn mount_thread(drives: Vec<Arc<DriveAccess>>, mount_point: PathBuf) {
+pub async fn mount_thread(drives: Vec<Arc<DriveAccess>>, mountpoint: PathBuf) {
     let mut config = KernelConfig::default();
     config.mount_option("ro");
-    config.mount_option("allow_other");
 
-    let session = AsyncSession::mount(mount_point, config).await.unwrap();
+    let session = AsyncSession::mount(mountpoint, config).await.unwrap();
 
     let fs = Arc::new(GreediaFS::new(drives));
 
     while let Some(req) = session.next_request().await.unwrap() {
         let fs = fs.clone();
 
-        let _: JoinHandle<Result<()>> = tokio::spawn(async move {
-            let operation = req.operation();
-            match operation? {
+        let _: JoinHandle<Result<()>> = task::spawn(async move {
+            let operation = req.operation()?;
+            match operation {
                 Operation::Lookup(op) => fs.do_lookup(&req, op).await?,
                 Operation::Getattr(op) => fs.do_getattr(&req, op).await?,
+                Operation::Opendir(op) => fs.do_opendir(&req, op).await?,
                 Operation::Readdir(op) => fs.do_readdir(&req, op).await?,
                 Operation::Open(op) => fs.do_open(&req, op).await?,
-                Operation::Opendir(op) => fs.do_opendir(&req, op).await?,
                 Operation::Read(op) => fs.do_read(&req, op).await?,
-                Operation::Release(op) => fs.do_release(op).await?,
+                Operation::Release(op) => fs.do_release(&req, op).await?,
                 _ => req.reply_error(libc::ENOSYS)?,
             }
 
@@ -82,11 +75,11 @@ impl GreediaFS {
     pub fn new(drives: Vec<Arc<DriveAccess>>) -> GreediaFS {
         let start = SystemTime::now();
         let start_time = start.duration_since(UNIX_EPOCH).unwrap();
-        let open_files = FhMap::new();
+        let file_handles = FhMap::new();
         GreediaFS {
             drives,
             start_time,
-            file_handles: open_files,
+            file_handles,
         }
     }
 
@@ -153,7 +146,6 @@ impl GreediaFS {
                     file_attr.mode(libc::S_IFDIR as u32 | 0o555);
                 }
             };
-            todo!()
         })?;
         Some(TTL_LONG)
     }
@@ -179,8 +171,9 @@ impl GreediaFS {
     ) -> Option<()> {
         let drive_access = self.drives.get(drive as usize)?;
 
-        drive_access.readdir(inode, offset, |off, item| {
-            let name = OsStr::new(item.name.as_str());
+        drive_access.readdir(inode, offset, |off, item, file_name_override| {
+            let file_name = file_name_override.unwrap_or(item.name.as_str());
+            let name = OsStr::new(file_name);
             let ino = self.rev_inode(Inode::Drive(drive, item.inode));
             let off = off + 1;
             let typ = if item.is_dir {
@@ -435,9 +428,11 @@ impl GreediaFS {
         Ok(())
     }
 
-    async fn do_release(&self, op: op::Release<'_>) -> io::Result<()> {
+    async fn do_release(&self, req: &Request, op: op::Release<'_>) -> io::Result<()> {
         let fh = op.fh();
         self.file_handles.close(fh).await;
+
+        req.reply(())?;
 
         Ok(())
     }

@@ -32,7 +32,7 @@ impl SmartCacher for ScMp3 {
         file_spec: &FileSpec,
         action: &mut HardCacheDownloader,
     ) -> ScResult {
-        let header_data = action.read_data(0, 256).await;
+        let header_data = action.read_data(0, 65536).await;
         // First, look for a starting ID3v2 tag and skip over it if necessary.
         let header_scan_offset = if let Some(id3_len) = read_id3_len(&header_data) {
             id3_len as u64 + 10

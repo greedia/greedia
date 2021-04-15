@@ -431,10 +431,10 @@ mod test {
     use futures::StreamExt;
     #[tokio::test]
     async fn do_stuff() {
-        let client_id = "***REMOVED***";
-        let client_secret = "***REMOVED***";
-        let refresh_token = "***REMOVED***";
-        let drive_id = "***REMOVED***";
+        let client_id = "removed";
+        let client_secret = "removed";
+        let refresh_token = "removed";
+        let drive_id = "removed";
 
         let c = GDriveClient::new(client_id, client_secret, refresh_token)
             .await

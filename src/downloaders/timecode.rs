@@ -48,6 +48,12 @@ impl DownloaderDrive for TimecodeDrive {
         ]))
     }
 
+    fn watch_changes(
+        &self
+    ) -> Box<dyn Stream<Item = Result<Vec<super::Change>, DownloaderError>> + Send + Sync + Unpin> {
+        Box::new(stream::empty())
+    }
+
     async fn open_file(
         &self,
         file_id: String,
@@ -81,7 +87,7 @@ impl DownloaderDrive for TimecodeDrive {
         Ok(stream)
     }
 
-    fn get_drive_type(&self) -> &'static str {
+    fn get_downloader_type(&self) -> &'static str {
         "timecode"
     }
 }

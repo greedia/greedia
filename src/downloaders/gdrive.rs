@@ -1,4 +1,4 @@
-use super::{DownloaderClient, DownloaderDrive, DownloaderError, FileInfo, Page, PageItem};
+use super::{Change, DownloaderClient, DownloaderDrive, DownloaderError, FileInfo, Page, PageItem};
 use crate::{prio_limit::PrioLimit, types::DataIdentifier};
 use anyhow::{format_err, Result};
 use async_trait::async_trait;
@@ -11,7 +11,7 @@ use oauth2::{
 };
 use reqwest::{self, Client};
 use serde::Deserialize;
-use std::{sync::Arc, time::Duration};
+use std::{borrow::Cow, sync::Arc, time::Duration};
 use tokio::sync::{
     mpsc::{self, Sender},
     Mutex,
@@ -93,7 +93,7 @@ pub struct GDriveDrive {
 
 pub struct GDriveStreamState {
     access_token_mutex: Arc<Mutex<AccessToken>>,
-    root_query: Vec<(&'static str, String)>,
+    root_query: Vec<(&'static str, Cow<'static, str>)>,
     rate_limiter: Arc<PrioLimit>,
     http_client: Client,
     conn_info: ConnInfo,
@@ -118,8 +118,8 @@ async fn scanner_bg_thread(
 
     loop {
         let mut query = state.root_query.clone();
-        if let Some(page_token) = &state.last_page_token {
-            query.push(("pageToken", page_token.to_string()));
+        if let Some(page_token) = state.last_page_token.as_deref() {
+            query.push(("pageToken", Cow::Borrowed(page_token)));
         }
 
         let res = state
@@ -156,7 +156,7 @@ async fn scanner_bg_thread(
                     let items = files
                         .into_iter()
                         .filter(|x| accepted_document_type(x))
-                        .map(|x| to_page_item(x))
+                        .map(to_page_item)
                         .collect();
 
                     let _ = sender
@@ -171,6 +171,138 @@ async fn scanner_bg_thread(
                     // This is the final page.
                     break;
                 }
+            }
+            Err(_) => {
+                // Something bad happened, but continue anyways.
+                continue;
+            }
+        }
+    }
+}
+
+pub struct GDriveWatchState {
+    access_token_mutex: Arc<Mutex<AccessToken>>,
+    rate_limiter: Arc<PrioLimit>,
+    http_client: Client,
+    conn_info: ConnInfo,
+    drive_id: String,
+    access_token: Option<AccessToken>,
+    last_page_token: Option<String>,
+}
+
+async fn watcher_bg_thread(
+    mut state: GDriveWatchState,
+    sender: Sender<Result<Vec<Change>, DownloaderError>>,
+) {
+    if state.access_token.is_none() {
+        state.access_token = Some(state.access_token_mutex.lock().await.clone());
+    }
+
+    let mut access_token = state.access_token.unwrap();
+
+    state.rate_limiter.bg_wait().await;
+
+    let mut start_page_token: Option<String> = None;
+
+    let root_query = vec![
+        ("alt", Cow::Borrowed("json")),
+        ("includeItemsFromAllDrives", Cow::Borrowed("true")),
+        ("prettyPrint", Cow::Borrowed("false")),
+        ("supportsAllDrives", Cow::Borrowed("true")),
+        ("pageSize", Cow::Borrowed("1000")),
+        ("driveId", Cow::Borrowed(state.drive_id.as_str())),
+        ("restrictToMyDrive", Cow::Borrowed("true")),
+        ("includeRemoved", Cow::Borrowed("true")),
+        ("corpora", Cow::Borrowed("drive")),
+        (
+            "fields",
+            Cow::Borrowed("changes(changeType,removed,file(id,name,parents,modifiedTime,md5Checksum,size,mimeType, trashed)),nextPageToken,newStartPageToken"),
+        ),
+    ];
+
+    loop {
+        let res = if let Some(start_page_token) = &start_page_token {
+            // If we wanted to get extra fancy, we could get a 10-second deadline, bg_wait,
+            // then sleep for whatever time's left. This is probably good enough for now, though.
+            state.rate_limiter.bg_wait().await;
+            tokio::time::sleep(Duration::from_secs(10)).await;
+
+            // If we have a last_page_token, use that
+            // Otherwise use the start_page_token
+            let page_token = if let Some(last_page_token) = state.last_page_token.as_deref() {
+                last_page_token
+            } else {
+                start_page_token.as_str()
+            };
+
+            let mut query = root_query.clone();
+            query.push(("pageToken", Cow::Borrowed(page_token)));
+
+            state
+                .http_client
+                .get("https://www.googleapis.com/drive/v3/changes")
+                .bearer_auth(access_token.secret())
+                .query(&query)
+                .send()
+                .await
+        } else {
+            // getStartPageToken
+            let init_query = vec![
+                ("alt", Cow::Borrowed("json")),
+                ("prettyPrint", Cow::Borrowed("true")),
+                ("driveId", Cow::Borrowed(state.drive_id.as_str())),
+                ("supportsAllDrives", Cow::Borrowed("true")),
+            ];
+
+            state
+                .http_client
+                .get("https://www.googleapis.com/drive/v3/changes/startPageToken")
+                .bearer_auth(access_token.secret())
+                .query(&init_query)
+                .send()
+                .await
+        };
+
+        match res {
+            Ok(r) => {
+                match r.status().as_u16() {
+                    // Everything's good
+                    200 => (),
+                    // Bad access token, refresh it and retry request
+                    401 => {
+                        access_token = refresh_access_token(
+                            &state.access_token_mutex,
+                            &state.rate_limiter,
+                            &state.conn_info,
+                            access_token,
+                        )
+                        .await;
+                        continue;
+                    }
+                    // Rate limit or server error, retry request
+                    _ => continue,
+                }
+
+                if let Some(start_page_token) = &mut start_page_token {
+                    let changes = r.json::<GChange>().await.unwrap();
+
+                    if let Some(new_start_page_token) = changes.new_start_page_token {
+                        *start_page_token = new_start_page_token;
+                    }
+
+                    let items: Vec<_> = changes
+                        .changes
+                        .into_iter()
+                        .filter_map(to_change_item)
+                        .collect();
+
+                    if sender.send(Ok(items)).await.is_err() {
+                        break;
+                    }
+                } else {
+                    let change_start = r.json::<GChangeStart>().await.unwrap();
+                    start_page_token = Some(change_start.start_page_token.clone());
+                };
             }
             Err(_) => {
                 // Something bad happened, but continue anyways.
@@ -205,18 +337,19 @@ impl DownloaderDrive for GDriveDrive {
         }
 
         let root_query = vec![
-            ("alt", "json".to_string()),
-            ("includeItemsFromAllDrives", "true".to_string()),
-            ("prettyPrint", "false".to_string()),
-            ("supportsAllDrives", "true".to_string()),
-            ("pageSize", "1000".to_string()),
-            ("driveId", drive_id.to_string()),
-            ("corpora", "drive".to_string()),
-            ("q", query.to_string()),
+            ("alt", Cow::Borrowed("json")),
+            ("includeItemsFromAllDrives", Cow::Borrowed("true")),
+            ("prettyPrint", Cow::Borrowed("false")),
+            ("supportsAllDrives", Cow::Borrowed("true")),
+            ("pageSize", Cow::Borrowed("1000")),
+            ("driveId", Cow::Owned(drive_id)),
+            ("corpora", Cow::Borrowed("drive")),
+            ("q", Cow::Owned(query)),
             (
                 "fields",
-                "files(id,name,parents,modifiedTime,md5Checksum,size,mimeType),nextPageToken"
-                    .to_string(),
+                Cow::Borrowed(
+                    "files(id,name,parents,modifiedTime,md5Checksum,size,mimeType),nextPageToken",
+                ),
             ),
         ];
 
@@ -232,6 +365,30 @@ impl DownloaderDrive for GDriveDrive {
 
         let (sender, recv) = mpsc::channel(1);
         tokio::spawn(scanner_bg_thread(state, sender));
+        Box::new(ReceiverStream::new(recv))
+    }
+
+    fn watch_changes(
+        &self,
+    ) -> Box<dyn Stream<Item = Result<Vec<Change>, DownloaderError>> + Send + Sync + Unpin> {
+        let drive_id = self.drive_id.to_string();
+        let access_token_mutex = self.access_token.clone();
+        let rate_limiter = self.rate_limiter.clone();
+        let http_client = self.http_client.clone();
+        let conn_info = self.conn_info.clone();
+
+        let state = GDriveWatchState {
+            access_token_mutex,
+            rate_limiter,
+            http_client,
+            conn_info,
+            drive_id,
+            access_token: None,
+            last_page_token: None,
+        };
+
+        let (sender, recv) = mpsc::channel(1);
+        tokio::spawn(watcher_bg_thread(state, sender));
         Box::new(ReceiverStream::new(recv))
     }
 
@@ -259,7 +416,7 @@ impl DownloaderDrive for GDriveDrive {
         Ok(Box::new(stream))
     }
 
-    fn get_drive_type(&self) -> &'static str {
+    fn get_downloader_type(&self) -> &'static str {
         "gdrive"
     }
 }
@@ -323,7 +480,7 @@ async fn open_request(
                     // Rate limit or server error, retry request
                     other => {
                         println!("Other: {}", other);
-                    },
+                    }
                 }
             }
             Err(e) => {
@@ -405,6 +562,36 @@ fn to_page_item(file: GPageItem) -> PageItem {
     }
 }
 
+fn to_change_item(change: GChangeItem) -> Option<Change> {
+    // dbg!(&change);
+
+    if let Some(file) = change.file {
+        if file.trashed || change.removed {
+            Some(Change::Removed(file.id))
+        } else {
+            Some(Change::Added(PageItem {
+                id: file.id,
+                name: file.name,
+                parent: file.parents[0].clone(),
+                modified_time: file.modified_time.parse().ok()?,
+                file_info: if file.mime_type.as_deref()
+                    == Some("application/vnd.google-apps.folder")
+                {
+                    None
+                } else {
+                    let md5 = hex::decode(file.md5_checksum?).ok()?;
+                    Some(FileInfo {
+                        data_id: DataIdentifier::GlobalMd5(md5),
+                        size: file.size?.parse().ok()?,
+                    })
+                },
+            }))
+        }
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GPage {
@@ -424,56 +611,65 @@ pub struct GPageItem {
     pub mime_type: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GChangeStart {
+    pub start_page_token: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GChange {
+    pub changes: Vec<GChangeItem>,
+    pub next_page_token: Option<String>,
+    pub new_start_page_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GChangeItem {
+    change_type: String,
+    removed: bool,
+    file: Option<GChangeFile>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GChangeFile {
+    pub id: String,
+    pub name: String,
+    pub parents: Vec<String>,
+    pub modified_time: String,
+    pub md5_checksum: Option<String>,
+    pub size: Option<String>,
+    pub mime_type: Option<String>,
+    pub trashed: bool,
+}
+
 #[cfg(test)]
 mod test {
+    use std::env;
+
     use super::{DownloaderClient, GDriveClient};
 
     use futures::StreamExt;
     #[tokio::test]
-    async fn do_stuff() {
-        let client_id = "removed";
-        let client_secret = "removed";
-        let refresh_token = "removed";
-        let drive_id = "removed";
+    async fn do_gdrive_stuff() {
+        let client_id = env::var("TEST_CLIENT_ID").unwrap();
+        let client_secret = env::var("TEST_CLIENT_SECRET").unwrap();
+        let refresh_token = env::var("TEST_REFRESH_TOKEN").unwrap();
+        let drive_id = env::var("TEST_DRIVE_ID").unwrap();
 
-        let c = GDriveClient::new(client_id, client_secret, refresh_token)
+        let c = GDriveClient::new(&client_id, &client_secret, &refresh_token)
             .await
             .unwrap();
 
-        let d = c.open_drive(drive_id);
+        let d = c.open_drive(&drive_id);
 
-        let mut pages = d.scan_pages(None, None);
+        let mut changes = d.watch_changes();
 
-        let mut items = vec![];
-        while let Some(Ok(mut page)) = pages.next().await {
-            dbg!(&page);
-            items.append(&mut page.items);
+        while let Some(Ok(change_list)) = changes.next().await {
+            dbg!(&change_list);
         }
-
-        dbg!(&items[1]);
-
-        let mut f = d
-            .open_file(items[1].id.to_string(), 0, false)
-            .await
-            .unwrap();
-
-        if let Some(Ok(a)) = f.next().await {
-            dbg!(&a.len());
-        };
-
-        if let Some(Ok(a)) = f.next().await {
-            dbg!(&a.len());
-        };
-
-        if let Some(Ok(a)) = f.next().await {
-            dbg!(&a.len());
-        };
-
-        /*let buf_out = f.read_bytes(4).await;
-        dbg!(&buf_out);
-
-        f.cache(4, &mut cursor).await;
-
-        dbg!(&cursor);*/
     }
 }

@@ -21,13 +21,22 @@ pub trait DownloaderClient {
 
 #[async_trait]
 pub trait DownloaderDrive: Sync + Send + 'static {
-    fn get_drive_type(&self) -> &'static str;
+    /// Get the downloader type.
+    fn get_downloader_type(&self) -> &'static str;
+
+    /// Perform an initial scan of files in the drive, for at startup.
     fn scan_pages(
         &self,
         last_page_token: Option<String>,
         last_modified_date: Option<DateTime<Utc>>,
     ) -> Box<dyn Stream<Item = Result<Page, DownloaderError>> + Send + Sync + Unpin>;
 
+    /// Continuously watch for file changes over time.
+    fn watch_changes(
+        &self
+    ) -> Box<dyn Stream<Item = Result<Vec<Change>, DownloaderError>> + Send + Sync + Unpin>;
+
+    /// Open a download thread at a specific offset for this downloader.
     async fn open_file(
         &self,
         file_id: String,
@@ -49,7 +58,7 @@ pub struct Page {
 pub struct PageItem {
     pub id: String,
     pub name: String,
-    pub parent: String,
+    pub parent: String, // TODO: pass multiple parents through
     pub modified_time: DateTime<Utc>,
     pub file_info: Option<FileInfo>,
 }
@@ -58,4 +67,10 @@ pub struct PageItem {
 pub struct FileInfo {
     pub data_id: DataIdentifier,
     pub size: u64,
+}
+
+#[derive(Debug)]
+pub enum Change {
+    Added(PageItem), // Could also represent changed item, e.g. moved directories?
+    Removed(String), // File ID?
 }

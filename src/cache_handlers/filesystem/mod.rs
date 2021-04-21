@@ -186,7 +186,7 @@ impl CacheDriveHandler for FilesystemCacheHandler {
     }
 
     fn get_drive_type(&self) -> &'static str {
-        self.downloader_drive.get_drive_type()
+        self.downloader_drive.get_downloader_type()
     }
 }
 

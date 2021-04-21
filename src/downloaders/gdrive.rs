@@ -286,6 +286,10 @@ async fn watcher_bg_thread(
                 if let Some(start_page_token) = &mut start_page_token {
                     let changes = r.json::<GChange>().await.unwrap();
 
+                    if let Some(next_page_token) = changes.next_page_token {
+                        state.last_page_token = Some(next_page_token);
+                    }
+                    
                     if let Some(new_start_page_token) = changes.new_start_page_token {
                         *start_page_token = new_start_page_token;
                     }

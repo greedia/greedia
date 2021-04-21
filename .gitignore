@@ -6,3 +6,4 @@
 config.toml
 settings.json
 byte-ranger/target
+.env

@@ -8,7 +8,7 @@ use thiserror::Error;
 use tokio::io;
 
 pub use crate::downloaders::{DownloaderError, Page, PageItem};
-use crate::types::DataIdentifier;
+use crate::{downloaders::Change, types::DataIdentifier};
 
 #[derive(Error, Debug)]
 pub enum CacheHandlerError {
@@ -29,6 +29,9 @@ pub trait CacheDriveHandler: Send + Sync {
         last_page_token: Option<String>,
         last_modified_date: Option<DateTime<Utc>>,
     ) -> Box<dyn Stream<Item = Result<Page, DownloaderError>> + Send + Sync + Unpin>;
+    fn watch_changes(
+        &self
+    ) -> Box<dyn Stream<Item = Result<Vec<Change>, DownloaderError>> + Send + Sync + Unpin>;
     async fn open_file(
         &self,
         file_id: String,

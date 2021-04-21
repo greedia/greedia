@@ -92,6 +92,12 @@ pub struct DriveItem {
     pub data: DriveItemData,
 }
 
+#[derive(Debug, PartialEq, Archive, RkyvSerialize, RkyvDeserialize)]
+pub struct ReverseAccess {
+    pub parent_inode: u64,
+    pub name: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Archive, RkyvSerialize, RkyvDeserialize)]
 pub enum DriveItemData {
     FileItem {

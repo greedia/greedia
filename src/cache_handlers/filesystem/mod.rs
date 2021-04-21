@@ -158,6 +158,15 @@ impl CacheDriveHandler for FilesystemCacheHandler {
         )
     }
 
+    fn watch_changes(
+        &self
+    ) -> Box<dyn Stream<Item = Result<Vec<crate::downloaders::Change>, DownloaderError>> + Send + Sync + Unpin> {
+        Box::new(
+            self.downloader_drive
+                .watch_changes(),
+        )
+    }
+
     async fn open_file(
         &self,
         file_id: String,

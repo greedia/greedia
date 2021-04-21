@@ -1,16 +1,20 @@
 use crate::{
+    downloaders::Change,
     drive_access2::DriveAccess,
     hard_cache::HardCacheMetadata,
     types::{
         make_lookup_key, ArchivedDriveItem, ArchivedDriveItemData, DirItem, DriveItem,
-        DriveItemData,
+        DriveItemData, ReverseAccess,
     },
 };
 use crate::{hard_cache::HardCacher, types::TreeKeys};
 use std::{
     collections::{HashMap, HashSet},
     convert::TryInto,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
 
 use chrono::{Duration, TimeZone, Utc};
@@ -36,8 +40,12 @@ struct ScanTrees {
     inode_tree: Tree,
     /// Tree that maps a dir inode + filename to an inode.
     lookup_tree: Tree,
+    /// Tree that maps an access_id to a parent inode containing the item.
+    raccess_tree: Tree,
     /// Tree that maps data_ids to HardCacheMetadatas.
     hc_meta_tree: Tree,
+    /// Atomic value that contains the next inode.
+    next_inode: Arc<AtomicU64>,
 }
 
 impl ScanTrees {
@@ -48,7 +56,15 @@ impl ScanTrees {
         let access_tree = db.tree(&tree_keys.access_key);
         let inode_tree = db.tree(&tree_keys.inode_key);
         let lookup_tree = db.tree(&tree_keys.lookup_key);
+        let raccess_tree = db.tree(&tree_keys.raccess_key);
         let hc_meta_tree = db.tree(&tree_keys.hc_meta_key);
+
+        let next_inode = scan_tree
+            .get(b"next_inode")
+            .map(|i| u64::from_le_bytes(i.as_ref().try_into().unwrap()))
+            .unwrap_or(1);
+
+        let next_inode = Arc::new(AtomicU64::new(next_inode));
 
         ScanTrees {
             drive_id: drive_id.to_string(),
@@ -56,8 +72,17 @@ impl ScanTrees {
             access_tree,
             inode_tree,
             lookup_tree,
+            raccess_tree,
             hc_meta_tree,
+            next_inode,
         }
+    }
+
+    fn next_inode(&self) -> u64 {
+        let new_inode = self.next_inode.fetch_add(1, Ordering::Acquire);
+        self.scan_tree
+            .insert(b"next_inode", &(new_inode + 1).to_le_bytes());
+        new_inode
     }
 }
 
@@ -69,6 +94,10 @@ pub async fn scan_thread(drive_access: Arc<DriveAccess>) {
     println!("Scanning {} ({}:{})...", name, drive_type, drive_id);
 
     let trees = ScanTrees::new(drive_access.db.clone(), drive_type, &drive_id);
+
+    // Start watcher thread
+    tokio::spawn(watch_thread(trees.clone(), drive_access.clone()));
+
     let last_page_token = trees
         .scan_tree
         .get(b"last_page_token")
@@ -99,6 +128,89 @@ pub async fn scan_thread(drive_access: Arc<DriveAccess>) {
     println!("Finished caching {} ({}:{}).", name, drive_type, drive_id);
 }
 
+async fn watch_thread(trees: ScanTrees, drive_access: Arc<DriveAccess>) {
+    let mut change_stream = drive_access.cache_handler.watch_changes();
+
+    while let Some(changes) = change_stream.next().await {
+        let changes = changes.unwrap();
+        let (additions, removals): (Vec<_>, _) = changes.into_iter().partition(|c| {
+            if let Change::Added(_) = c {
+                true
+            } else {
+                false
+            }
+        });
+
+        // Handle the additions
+        handle_one_page(
+            &trees,
+            &additions
+                .into_iter()
+                .filter_map(|c| {
+                    if let Change::Added(page_item) = c {
+                        Some(page_item)
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+        )
+        .await;
+
+        // Handle the removals
+        for r in removals {
+            if let Change::Removed(id) = r {
+                // Lookup inode and remove it
+                if let Some(inode) = trees.access_tree.get(id.as_bytes()) {
+                    trees.inode_tree.remove(inode);
+                }
+                // Lookup raccess_tree entry and remove item from lookup_tree and parent dir
+                if let Some(raccess_data) = trees.raccess_tree.get(id.as_bytes()) {
+                    let raccess = get_rkyv::<ReverseAccess>(&raccess_data);
+
+                    // Remove from parent dir
+                    if let Some(parent_drive_item_bytes) =
+                        trees.inode_tree.get(raccess.parent_inode.to_le_bytes())
+                    {
+                        let parent_drive_item = get_rkyv::<DriveItem>(&parent_drive_item_bytes);
+                        let mut new_items = vec![];
+                        if let ArchivedDriveItemData::Dir { items } = &parent_drive_item.data {
+                            for item in items.iter() {
+                                if item.name != raccess.name {
+                                    new_items
+                                        .push(item.deserialize(&mut AllocDeserializer).unwrap())
+                                }
+                            }
+                        }
+
+                        let new_parent_drive_item = DriveItem {
+                            access_id: parent_drive_item.access_id.to_string(),
+                            modified_time: parent_drive_item.modified_time,
+                            data: DriveItemData::Dir { items: new_items },
+                        };
+
+                        let new_parent_drive_item_bytes = serialize_rkyv(&new_parent_drive_item);
+                        trees.inode_tree.insert(
+                            raccess.parent_inode.to_le_bytes(),
+                            new_parent_drive_item_bytes.as_slice(),
+                        );
+                    }
+
+                    // Remove from lookup tree
+                    let lookup_key = make_lookup_key(raccess.parent_inode, &raccess.name);
+                    trees.lookup_tree.remove(lookup_key.as_slice());
+                }
+
+                // Remove raccess_tree entry
+                trees.raccess_tree.remove(id.as_bytes());
+                
+                // Remove access_tree entry
+                trees.access_tree.remove(id.as_bytes());
+            }
+        }
+    }
+}
+
 /// Scan the drive for new files.
 async fn perform_scan(
     trees: &ScanTrees,
@@ -112,7 +224,7 @@ async fn perform_scan(
 
     loop {
         if let Some(page) = scan_stream.try_next().await.unwrap() {
-            handle_one_page(trees, &page).await;
+            handle_one_page(trees, &page.items).await;
 
             if let Some(next_page_token) = page.next_page_token.as_deref() {
                 // println!("NEXT PAGE TOKEN: {}", next_page_token);
@@ -141,7 +253,11 @@ async fn perform_caching(trees: &ScanTrees, drive_access: Arc<DriveAccess>) {
     // Start 10 threads for caching
     let (send, recv) = flume::bounded(1);
     for _ in 0..100 {
-        tokio::spawn(caching_thread(trees.clone(), drive_access.clone(), recv.clone()));
+        tokio::spawn(caching_thread(
+            trees.clone(),
+            drive_access.clone(),
+            recv.clone(),
+        ));
     }
 
     for item in trees.inode_tree.iter() {
@@ -190,9 +306,8 @@ async fn perform_one_cache(trees: &ScanTrees, hard_cacher: &HardCacher, item: &A
     }
 }
 
-async fn handle_one_page(trees: &ScanTrees, page: &Page) {
-    for (p, i) in page
-        .items
+async fn handle_one_page(trees: &ScanTrees, page_items: &Vec<PageItem>) {
+    for (p, i) in page_items
         .iter()
         .group_by(|f| f.parent.clone())
         .into_iter()
@@ -201,7 +316,7 @@ async fn handle_one_page(trees: &ScanTrees, page: &Page) {
         tokio::task::block_in_place(|| handle_add_items(trees, p.as_ref(), &i))
     }
 
-    for p in page.items.iter().filter(|x| x.file_info.is_none()) {
+    for p in page_items.iter().filter(|x| x.file_info.is_none()) {
         let modified_time = p.modified_time.timestamp();
         tokio::task::block_in_place(|| handle_update_parent(trees, &p.id, modified_time))
     }
@@ -213,16 +328,6 @@ fn handle_add_items(trees: &ScanTrees, parent: &str, items: &Vec<&PageItem>) {
     // If not set, 1 is set as the next available inode. Inode 0 is reserved for the root of the drive.
     // Stored as a u64, but shouldn't have a value that goes over 2^48.
     // That's 281 trillion though, which should never be reached even in extreme circumstances.
-    let mut next_inode = trees
-        .scan_tree
-        .get(b"next_inode")
-        .map(|i| u64::from_le_bytes(i.as_ref().try_into().unwrap()))
-        .unwrap_or(1);
-
-    // Keep a byte buffer for the next inode value
-    // TODO: get rid of this and just use to_le_bytes directly everywhere
-    // let mut inode_bytes = [0u8; 8];
-    // inode_bytes.copy_from_slice(&next_inode.to_le_bytes());
 
     // Figure out the inode for this parent.
     let parent_inode = if parent == trees.drive_id {
@@ -233,8 +338,7 @@ fn handle_add_items(trees: &ScanTrees, parent: &str, items: &Vec<&PageItem>) {
         u64::from_le_bytes(ei.as_ref().try_into().unwrap())
     } else {
         // Directory doesn't exist, so allocate a new inode
-        let parent_inode = next_inode;
-        next_inode += 1;
+        let parent_inode = trees.next_inode();
         parent_inode
     };
 
@@ -271,6 +375,8 @@ fn handle_add_items(trees: &ScanTrees, parent: &str, items: &Vec<&PageItem>) {
 
         let drive_item_bytes = serialize_rkyv(&drive_item);
 
+        let next_inode = trees.next_inode();
+
         item_inodes.insert(item.id.clone(), next_inode);
 
         // Add the inode key, which stores the actual drive item.
@@ -286,7 +392,16 @@ fn handle_add_items(trees: &ScanTrees, parent: &str, items: &Vec<&PageItem>) {
             .lookup_tree
             .insert(lookup_key.as_slice(), &next_inode.to_le_bytes());
 
-        next_inode += 1;
+        let raccess = ReverseAccess {
+            parent_inode,
+            name: item.name.clone(),
+        };
+
+        let raccess_data = serialize_rkyv(&raccess);
+
+        trees
+            .raccess_tree
+            .insert(item.id.as_bytes(), raccess_data.as_slice());
     }
 
     // println!("items had {} len", items.len());
@@ -330,12 +445,6 @@ fn handle_add_items(trees: &ScanTrees, parent: &str, items: &Vec<&PageItem>) {
     trees
         .access_tree
         .insert(parent.as_bytes(), &parent_inode.to_le_bytes());
-
-    // Update next_inode value
-    next_inode += 1;
-    trees
-        .scan_tree
-        .insert(b"next_inode", &next_inode.to_le_bytes());
 }
 
 fn handle_update_parent(trees: &ScanTrees, parent: &str, modified_time: i64) {

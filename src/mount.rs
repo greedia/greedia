@@ -1,6 +1,6 @@
 use crate::{
     cache_handlers::CacheFileHandler,
-    drive_access2::{DriveAccess, TypeResult},
+    drive_access::{DriveAccess, TypeResult},
     fh_map::FhMap,
     types::ArchivedDriveItemData,
 };

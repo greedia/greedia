@@ -10,10 +10,10 @@ use cache_handlers::filesystem::{lru::Lru, FilesystemCacheHandler};
 use crypt_context::CryptContext;
 use db::Db;
 use downloaders::{gdrive::GDriveClient, timecode::TimecodeDrive, DownloaderClient};
-use drive_access2::DriveAccess;
+use drive_access::DriveAccess;
 use futures::future::join_all;
 use mount::mount_thread;
-use scanner2::scan_thread;
+use scanner::scan_thread;
 use structopt::StructOpt;
 
 #[cfg(feature = "sctest")]
@@ -25,12 +25,12 @@ mod config;
 mod crypt_context;
 mod db;
 mod downloaders;
-mod drive_access2;
+mod drive_access;
 mod fh_map;
 mod hard_cache;
 mod mount;
 mod prio_limit;
-mod scanner2;
+mod scanner;
 mod types;
 
 use config::{validate_config, Config, ConfigGoogleDrive, ConfigTimecodeDrive};

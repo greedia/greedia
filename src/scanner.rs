@@ -1,6 +1,6 @@
 use crate::{
     downloaders::Change,
-    drive_access2::DriveAccess,
+    drive_access::DriveAccess,
     hard_cache::HardCacheMetadata,
     types::{
         make_lookup_key, ArchivedDriveItem, ArchivedDriveItemData, DirItem, DriveItem,

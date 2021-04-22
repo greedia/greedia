@@ -23,7 +23,7 @@ use crate::{
     cache_handlers::{crypt_passthrough::CryptPassthrough, CacheFileHandler},
     config::{DownloadAmount, SmartCacherConfig},
     crypt_context::CryptContext,
-    drive_access2::DriveAccess,
+    drive_access::DriveAccess,
     types::DataIdentifier,
 };
 

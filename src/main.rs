@@ -19,16 +19,6 @@ use structopt::StructOpt;
 #[cfg(feature = "sctest")]
 use hard_cache::HardCacher;
 
-// mod cache;
-// mod cache_reader;
-// mod downloader;
-// mod downloader_inner;
-// mod drive_access;
-// mod drive_cache;
-// mod encrypted_cache_reader;
-// mod scanner;
-// mod soft_cache_lru;
-
 // New stuff
 mod cache_handlers;
 mod config;

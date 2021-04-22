@@ -379,7 +379,6 @@ impl OpenFile {
                 self.revision,
             ))));
 
-            // KTODO: remove if confident
             assert_eq!(start_offset, cache_data.end_offset.load(Ordering::Acquire));
             cache_data.download_status = Arc::downgrade(&download_status);
 

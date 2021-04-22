@@ -1,9 +1,18 @@
 // Filesystem cache handler
 
-use std::{cmp::min, collections::HashMap, io::SeekFrom, mem, path::Path, path::PathBuf, sync::Arc, sync::{
+use std::{
+    cmp::min,
+    collections::HashMap,
+    io::SeekFrom,
+    mem,
+    path::Path,
+    path::PathBuf,
+    sync::Arc,
+    sync::{
         atomic::{AtomicU64, Ordering},
         Weak,
-    }};
+    },
+};
 
 use self::open_file::{Cache, DownloadHandle, DownloadStatus, Receiver};
 
@@ -150,12 +159,14 @@ impl CacheDriveHandler for FilesystemCacheHandler {
     }
 
     fn watch_changes(
-        &self
-    ) -> Box<dyn Stream<Item = Result<Vec<crate::downloaders::Change>, DownloaderError>> + Send + Sync + Unpin> {
-        Box::new(
-            self.downloader_drive
-                .watch_changes(),
-        )
+        &self,
+    ) -> Box<
+        dyn Stream<Item = Result<Vec<crate::downloaders::Change>, DownloaderError>>
+            + Send
+            + Sync
+            + Unpin,
+    > {
+        Box::new(self.downloader_drive.watch_changes())
     }
 
     async fn open_file(
@@ -1091,7 +1102,7 @@ mod test {
 
     async fn tester(init_offsets: &[u64], init_hard_cache: &[bool], actions: Vec<TestAction>) {
         let d = Arc::new(TimecodeDrive {
-            root_name: "test".to_string()
+            root_name: "test".to_string(),
         });
 
         let file_id = r#"{"bytes_len": 65535}"#;
@@ -1205,7 +1216,7 @@ mod test {
     #[tokio::test]
     async fn test_splitting() {
         let d = Arc::new(TimecodeDrive {
-            root_name: "test".to_string()
+            root_name: "test".to_string(),
         });
 
         let file_id = r#"{"bytes_len": 65535}"#;
@@ -1238,7 +1249,7 @@ mod test {
     #[tokio::test]
     async fn test_dl_drop() {
         let d = Arc::new(TimecodeDrive {
-            root_name: "test".to_string()
+            root_name: "test".to_string(),
         });
 
         let file_id = r#"{"bytes_len": 65535}"#;

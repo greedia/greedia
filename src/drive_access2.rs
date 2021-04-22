@@ -13,7 +13,9 @@ use rclone_crypt::decrypter::{self, Decrypter};
 use rkyv::de::deserializers::AllocDeserializer;
 use rkyv::Deserialize;
 
-use crate::{cache_handlers::crypt_passthrough::CryptPassthrough, db::get_rkyv, types::DataIdentifier};
+use crate::{
+    cache_handlers::crypt_passthrough::CryptPassthrough, db::get_rkyv, types::DataIdentifier,
+};
 use crate::{
     cache_handlers::{CacheDriveHandler, CacheFileHandler},
     crypt_context::CryptContext,
@@ -21,7 +23,6 @@ use crate::{
     types::{make_lookup_key, ArchivedDirItem, DriveItem},
     types::{ArchivedDriveItem, ArchivedDriveItemData, TreeKeys},
 };
-
 
 #[derive(Debug)]
 pub enum TypeResult<T> {
@@ -101,7 +102,9 @@ impl DriveAccess {
                     file.read_exact(&mut header).await;
                     if Decrypter::new(&cc.cipher.file_key, &header).is_ok() {
                         file.seek_to(0).await;
-                        return TypeResult::IsType(Box::new(CryptPassthrough::new(&cc, file).await.unwrap()));
+                        return TypeResult::IsType(Box::new(
+                            CryptPassthrough::new(&cc, file).await.unwrap(),
+                        ));
                     }
                 }
 
@@ -148,16 +151,15 @@ impl DriveAccess {
         };
 
         let file_name = if self.uses_crypt {
-            self
-            .crypts
-            .iter()
-            .find_map(|cc| {
-                cc.cipher
-                    .encrypt_segment(file_name)
-                    .ok()
-                    .map(|s| Cow::Owned(s))
-            })
-            .unwrap_or_else(|| Cow::Borrowed(file_name))
+            self.crypts
+                .iter()
+                .find_map(|cc| {
+                    cc.cipher
+                        .encrypt_segment(file_name)
+                        .ok()
+                        .map(|s| Cow::Owned(s))
+                })
+                .unwrap_or_else(|| Cow::Borrowed(file_name))
         } else {
             Cow::Borrowed(file_name)
         };
@@ -200,7 +202,10 @@ impl DriveAccess {
 
         if let ArchivedDriveItemData::Dir { items } = &dir.data {
             for (off, item) in items.iter().enumerate().skip(offset as usize) {
-                let decrypted_file_name = self.crypts.iter().find_map(|cc| cc.cipher.decrypt_segment(&item.name).ok());
+                let decrypted_file_name = self
+                    .crypts
+                    .iter()
+                    .find_map(|cc| cc.cipher.decrypt_segment(&item.name).ok());
                 if for_each(off as u64, item, decrypted_file_name.as_deref()) {
                     // The FUSE entry is full, so stop iterating
                     break;

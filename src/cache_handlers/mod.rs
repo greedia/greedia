@@ -30,7 +30,7 @@ pub trait CacheDriveHandler: Send + Sync {
         last_modified_date: Option<DateTime<Utc>>,
     ) -> Box<dyn Stream<Item = Result<Page, DownloaderError>> + Send + Sync + Unpin>;
     fn watch_changes(
-        &self
+        &self,
     ) -> Box<dyn Stream<Item = Result<Vec<Change>, DownloaderError>> + Send + Sync + Unpin>;
     async fn open_file(
         &self,

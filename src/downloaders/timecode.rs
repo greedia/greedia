@@ -5,15 +5,15 @@ use std::{
     task::{Context, Poll},
 };
 
-use chrono::Utc;
+use crate::types::DataIdentifier;
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
+use chrono::Utc;
 use futures::{stream, Stream};
 use serde::{Deserialize, Serialize};
 use timecode_rs::TimecodeReader;
-use crate::types::DataIdentifier;
 
-use super::{DownloaderDrive, DownloaderError, Page, PageItem, FileInfo};
+use super::{DownloaderDrive, DownloaderError, FileInfo, Page, PageItem};
 
 /// A test drive that returns timecode files for testing offsets.
 pub struct TimecodeDrive {
@@ -29,28 +29,25 @@ impl DownloaderDrive for TimecodeDrive {
     ) -> Box<dyn Stream<Item = Result<Page, DownloaderError>> + Send + Sync + Unpin> {
         // Should we use this to list out timecode files of different sizes?
         // Perhaps the file_id should encode the file size in it. Use JSON?
-        Box::new(stream::iter(vec![
-            Ok(Page{
-                items: vec![
-                    PageItem{
-                        id: r#"{"bytes_len": 65535}"#.to_string(),
-                        name: "timecode.bin".to_string(),
-                        parent: self.root_name.clone(),
-                        modified_time: Utc::now(),
-                        file_info: Some(FileInfo {
-                            data_id: DataIdentifier::GlobalMd5(vec![0,0,0,0]),
-                            size: 1_073_741_824
-                        })
-                    }
-                ],
-                next_page_token: None,
-            })
-        ]))
+        Box::new(stream::iter(vec![Ok(Page {
+            items: vec![PageItem {
+                id: r#"{"bytes_len": 65535}"#.to_string(),
+                name: "timecode.bin".to_string(),
+                parent: self.root_name.clone(),
+                modified_time: Utc::now(),
+                file_info: Some(FileInfo {
+                    data_id: DataIdentifier::GlobalMd5(vec![0, 0, 0, 0]),
+                    size: 1_073_741_824,
+                }),
+            }],
+            next_page_token: None,
+        })]))
     }
 
     fn watch_changes(
-        &self
-    ) -> Box<dyn Stream<Item = Result<Vec<super::Change>, DownloaderError>> + Send + Sync + Unpin> {
+        &self,
+    ) -> Box<dyn Stream<Item = Result<Vec<super::Change>, DownloaderError>> + Send + Sync + Unpin>
+    {
         Box::new(stream::empty())
     }
 

@@ -201,7 +201,10 @@ impl HardCacher {
 
         // If below min_size, call min_size cacher
         if item_size <= self.min_size {
-            println!("Using min_size cacher for {} ({} bytes)", file_spec.name, file_spec.size);
+            println!(
+                "Using min_size cacher for {} ({} bytes)",
+                file_spec.name, file_spec.size
+            );
             hcd.cache_data_fully().await;
             hcd.save().await;
             return Some(HardCacheMetadata {
@@ -225,7 +228,7 @@ impl HardCacher {
             let res: ScResult = pc.cache(&smart_cacher_config, &file_spec, &mut hcd).await;
 
             match res {
-                Ok(ScOk::Finalize) => { 
+                Ok(ScOk::Finalize) => {
                     // Write metadata, save here
                     // println!("Success with smart cacher {}", spec.name);
                     hcd.save().await;
@@ -253,7 +256,10 @@ impl HardCacher {
                     continue;
                 }
             }
-            println!("Trying smart cacher {} for {} ({} bytes)", spec.name, file_spec.name, file_spec.size);
+            println!(
+                "Trying smart cacher {} for {} ({} bytes)",
+                spec.name, file_spec.name, file_spec.size
+            );
             let res: ScResult = cacher
                 .cache(&smart_cacher_config, &file_spec, &mut hcd)
                 .await;
@@ -274,7 +280,10 @@ impl HardCacher {
             }
         }
 
-        println!("Using generic cacher for {} ({} bytes)", file_spec.name, file_spec.size);
+        println!(
+            "Using generic cacher for {} ({} bytes)",
+            file_spec.name, file_spec.size
+        );
 
         // If we reach here, try a generic start-end downloader.
         let (start_dl, end_dl) = &self.cacher.generic_cache_sizes();

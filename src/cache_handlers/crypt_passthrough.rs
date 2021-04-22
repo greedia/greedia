@@ -135,9 +135,7 @@ impl CacheFileHandler for CryptPassthrough {
             .unwrap();
 
         if let Some(decrypted_block) = decrypted_block.get(decrypted_block_starting_offset..) {
-            self.last_bytes = Some(Bytes::copy_from_slice(
-                decrypted_block,
-            ));
+            self.last_bytes = Some(Bytes::copy_from_slice(decrypted_block));
             self.cur_block += 1;
         } else {
             self.last_bytes = None;

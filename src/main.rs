@@ -1,4 +1,8 @@
-use std::{collections::{HashMap, HashSet}, path::PathBuf, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    sync::Arc,
+};
 use std::{fs, path::Path};
 
 use anyhow::{bail, Result};
@@ -122,12 +126,19 @@ async fn run(config_path: &Path) -> Result<()> {
 
     // Start a scanner for each cache handler
     let mut join_handles = vec![];
-    for drive_access in drives.iter().filter(|(_, do_scan)| *do_scan).map(|(da, _)| da) {
+    for drive_access in drives
+        .iter()
+        .filter(|(_, do_scan)| *do_scan)
+        .map(|(da, _)| da)
+    {
         join_handles.push(tokio::spawn(scan_thread(drive_access.clone())));
     }
 
     // Start a mount thread
-    join_handles.push(tokio::spawn(mount_thread(drives.into_iter().map(|(da, _)| da).collect(), cfg.caching.mount_point)));
+    join_handles.push(tokio::spawn(mount_thread(
+        drives.into_iter().map(|(da, _)| da).collect(),
+        cfg.caching.mount_point,
+    )));
 
     join_all(join_handles).await;
 
@@ -178,7 +189,6 @@ async fn get_gdrive_drives(
             new_client
         };
 
-
         let do_scan = drive_set.insert(cfg_drive.drive_id.clone());
 
         let drive = client.open_drive(&cfg_drive.drive_id);
@@ -221,7 +231,7 @@ async fn get_timecode_drives(
     let mut da_out = Vec::new();
     for (name, cfg_drive) in timecode_drives {
         let drive = Arc::new(TimecodeDrive {
-            root_name: cfg_drive.drive_id.clone()
+            root_name: cfg_drive.drive_id.clone(),
         });
         let cache_handler = FilesystemCacheHandler::new(
             &cfg_drive.drive_id,

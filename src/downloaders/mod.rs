@@ -33,7 +33,7 @@ pub trait DownloaderDrive: Sync + Send + 'static {
 
     /// Continuously watch for file changes over time.
     fn watch_changes(
-        &self
+        &self,
     ) -> Box<dyn Stream<Item = Result<Vec<Change>, DownloaderError>> + Send + Sync + Unpin>;
 
     /// Open a download thread at a specific offset for this downloader.

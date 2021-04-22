@@ -145,22 +145,18 @@ async fn watch_thread(trees: ScanTrees, drive_access: Arc<DriveAccess>) {
 
         // Handle the additions
         let page_items = &additions
-        .into_iter()
-        .filter_map(|c| {
-            if let Change::Added(page_item) = c {
-                Some(page_item)
-            } else {
-                None
-            }
-        })
-        .collect();
+            .into_iter()
+            .filter_map(|c| {
+                if let Change::Added(page_item) = c {
+                    Some(page_item)
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         // Add to DB
-        handle_one_page(
-            &trees,
-            page_items,
-        )
-        .await;
+        handle_one_page(&trees, page_items).await;
 
         // Hard cache files
         for page_item in page_items {

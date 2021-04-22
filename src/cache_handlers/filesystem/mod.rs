@@ -1,18 +1,9 @@
 // Filesystem cache handler
 
-use std::{
-    cmp::min,
-    collections::HashMap,
-    io::SeekFrom,
-    mem,
-    path::Path,
-    path::PathBuf,
-    sync::Arc,
-    sync::{
+use std::{cmp::min, collections::HashMap, io::SeekFrom, mem, path::Path, path::PathBuf, sync::Arc, sync::{
         atomic::{AtomicU64, Ordering},
         Weak,
-    },
-};
+    }};
 
 use self::open_file::{Cache, DownloadHandle, DownloadStatus, Receiver};
 
@@ -24,7 +15,7 @@ use byte_ranger::GetRange;
 use bytes::{Bytes, BytesMut};
 use futures::{Stream, StreamExt};
 use tokio::{
-    fs::File,
+    fs::{self, File},
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
     sync::Mutex,
 };
@@ -196,6 +187,13 @@ impl CacheDriveHandler for FilesystemCacheHandler {
 
     fn get_drive_type(&self) -> &'static str {
         self.downloader_drive.get_downloader_type()
+    }
+
+    async fn clear_cache_item(&self, data_id: DataIdentifier) {
+        let hard_cache_file_root = get_file_cache_path(&self.hard_cache_root, &data_id);
+        let soft_cache_file_root = get_file_cache_path(&self.soft_cache_root, &data_id);
+        let _ = fs::remove_dir_all(&hard_cache_file_root).await;
+        let _ = fs::remove_dir_all(&soft_cache_file_root).await;
     }
 }
 

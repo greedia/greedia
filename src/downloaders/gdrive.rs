@@ -300,8 +300,10 @@ async fn watcher_bg_thread(
                         .filter_map(to_change_item)
                         .collect();
 
-                    if sender.send(Ok(items)).await.is_err() {
-                        break;
+                    if !items.is_empty() {
+                        if sender.send(Ok(items)).await.is_err() {
+                            break;
+                        }
                     }
                 } else {
                     let change_start = r.json::<GChangeStart>().await.unwrap();

@@ -13,7 +13,7 @@ use rclone_crypt::decrypter::{self, Decrypter};
 use rkyv::de::deserializers::AllocDeserializer;
 use rkyv::Deserialize;
 
-use crate::{cache_handlers::crypt_passthrough::CryptPassthrough, db::get_rkyv};
+use crate::{cache_handlers::crypt_passthrough::CryptPassthrough, db::get_rkyv, types::DataIdentifier};
 use crate::{
     cache_handlers::{CacheDriveHandler, CacheFileHandler},
     crypt_context::CryptContext,
@@ -112,6 +112,11 @@ impl DriveAccess {
         } else {
             TypeResult::DoesNotExist
         }
+    }
+
+    // Clear an item from the cache, if exists
+    pub async fn clear_cache_item(&self, data_id: DataIdentifier) {
+        self.cache_handler.clear_cache_item(data_id).await;
     }
 
     /// Check if a directory exists and is a directory.

@@ -40,6 +40,7 @@ pub trait CacheDriveHandler: Send + Sync {
         offset: u64,
         write_hard_cache: bool,
     ) -> Result<Box<dyn CacheFileHandler>, CacheHandlerError>;
+    async fn clear_cache_item(&self, data_id: DataIdentifier);
 }
 
 #[async_trait]

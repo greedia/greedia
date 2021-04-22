@@ -130,8 +130,10 @@ pub async fn scan_thread(drive_access: Arc<DriveAccess>) {
 
 async fn watch_thread(trees: ScanTrees, drive_access: Arc<DriveAccess>) {
     let mut change_stream = drive_access.cache_handler.watch_changes();
+    let hard_cacher = HardCacher::new(drive_access.clone(), 1_000_000); // TODO: not hardcode min_size
 
     while let Some(changes) = change_stream.next().await {
+        dbg!(&changes);
         let changes = changes.unwrap();
         let (additions, removals): (Vec<_>, _) = changes.into_iter().partition(|c| {
             if let Change::Added(_) = c {
@@ -142,26 +144,56 @@ async fn watch_thread(trees: ScanTrees, drive_access: Arc<DriveAccess>) {
         });
 
         // Handle the additions
+        let page_items = &additions
+        .into_iter()
+        .filter_map(|c| {
+            if let Change::Added(page_item) = c {
+                Some(page_item)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+        // Add to DB
         handle_one_page(
             &trees,
-            &additions
-                .into_iter()
-                .filter_map(|c| {
-                    if let Change::Added(page_item) = c {
-                        Some(page_item)
-                    } else {
-                        None
-                    }
-                })
-                .collect(),
+            page_items,
         )
         .await;
+
+        // Hard cache files
+        for page_item in page_items {
+            if let Some(inode) = trees.access_tree.get(page_item.id.as_bytes()) {
+                if let Some(drive_item_bytes) = trees.inode_tree.get(inode) {
+                    let drive_item = get_rkyv::<DriveItem>(&drive_item_bytes);
+                    perform_one_cache(&trees, &hard_cacher, drive_item).await;
+                }
+            }
+        }
 
         // Handle the removals
         for r in removals {
             if let Change::Removed(id) = r {
                 // Lookup inode and remove it
                 if let Some(inode) = trees.access_tree.get(id.as_bytes()) {
+                    if let Some(drive_item_bytes) = trees.inode_tree.get(&inode) {
+                        let drive_item = get_rkyv::<DriveItem>(&drive_item_bytes);
+
+                        // Remove from hard_cache and hc_meta_tree
+                        if let ArchivedDriveItemData::FileItem {
+                            file_name: _,
+                            data_id,
+                            size: _,
+                        } = &drive_item.data
+                        {
+                            let data_id = data_id.deserialize(&mut AllocDeserializer).unwrap();
+                            let data_id_key = serialize_rkyv(&data_id);
+
+                            trees.hc_meta_tree.remove(data_id_key.as_slice());
+                            drive_access.clear_cache_item(data_id).await;
+                        }
+                    }
                     trees.inode_tree.remove(inode);
                 }
                 // Lookup raccess_tree entry and remove item from lookup_tree and parent dir
@@ -203,7 +235,7 @@ async fn watch_thread(trees: ScanTrees, drive_access: Arc<DriveAccess>) {
 
                 // Remove raccess_tree entry
                 trees.raccess_tree.remove(id.as_bytes());
-                
+
                 // Remove access_tree entry
                 trees.access_tree.remove(id.as_bytes());
             }
@@ -277,7 +309,7 @@ async fn caching_thread(trees: ScanTrees, drive_access: Arc<DriveAccess>, recv: 
         }
     }
 
-    println!("Caching thread for {} complete.", drive_access.name);
+    // println!("Caching thread for {} complete.", drive_access.name);
 }
 
 async fn perform_one_cache(trees: &ScanTrees, hard_cacher: &HardCacher, item: &ArchivedDriveItem) {

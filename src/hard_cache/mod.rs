@@ -39,7 +39,7 @@ mod sc_ogg;
 /*
 HARD_CACHE RULES
 ----------------
-If a file's hard cache metadata states the global hard cache version matches, don't touch the file. (TODO)
+If a file's hard cache metadata states the global hard cache version matches, don't touch the file.
 If file is below min_size, cache the whole thing. If not, continue.
 If file has a known extension as specified in SPEC.exts, attempt to smart cache it. If failed, continue.
 Iterate through the rest of the enabled smart cachers. If all of them fail, continue.

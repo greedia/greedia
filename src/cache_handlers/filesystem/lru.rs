@@ -1,5 +1,3 @@
-#![allow(dead_code)] // TODO: remove this
-
 use rkyv::de::deserializers::AllocDeserializer;
 use rkyv::{Archive, Deserialize, Serialize};
 use std::{
@@ -25,27 +23,24 @@ pub struct Lru {
 
 impl Lru {
     pub async fn new(db: &Db, db_path: &Path, size_limit: u64) -> Lru {
-        let hard_cache_root = db_path.join("hard_cache");
         let soft_cache_root = db_path.join("soft_cache");
         let db = db.clone();
-        let (cmd_sender, recv) = channel(10);
+        let (cmd_sender, recv) = channel(100);
         tokio::spawn(run_background(
             db,
             size_limit,
-            hard_cache_root,
             soft_cache_root,
             recv,
         ));
         Lru { cmd_sender }
     }
 
-    pub async fn touch_file(&self, data_id: DataIdentifier, offset: u64, hard_cache: bool) {
+    pub async fn touch_file(&self, data_id: &DataIdentifier, offset: u64) {
         self.cmd_sender
             .clone()
             .send(LruInnerMsg::UpdateFile {
-                data_id,
+                data_id: data_id.clone(),
                 offset,
-                hard_cache,
                 size: None,
             })
             .await
@@ -54,17 +49,15 @@ impl Lru {
 
     pub async fn update_file_size(
         &self,
-        data_id: DataIdentifier,
+        data_id: &DataIdentifier,
         offset: u64,
-        hard_cache: bool,
         size: u64,
     ) {
         self.cmd_sender
             .clone()
             .send(LruInnerMsg::UpdateFile {
-                data_id,
+                data_id: data_id.clone(),
                 offset,
-                hard_cache,
                 size: Some(size),
             })
             .await
@@ -77,7 +70,6 @@ enum LruInnerMsg {
     UpdateFile {
         data_id: DataIdentifier,
         offset: u64,
-        hard_cache: bool,
         size: Option<u64>,
     },
 }
@@ -86,7 +78,6 @@ enum LruInnerMsg {
 async fn run_background(
     db: Db,
     size_limit: u64,
-    hard_cache_root: PathBuf,
     soft_cache_root: PathBuf,
     mut recv: Receiver<LruInnerMsg>,
 ) {
@@ -106,7 +97,6 @@ async fn run_background(
             LruInnerMsg::UpdateFile {
                 data_id,
                 offset,
-                hard_cache,
                 size,
             } => {
                 handle_update_file(
@@ -114,7 +104,6 @@ async fn run_background(
                     &data_tree,
                     &data_id,
                     offset,
-                    hard_cache,
                     size,
                     &mut space_usage,
                 );
@@ -123,11 +112,11 @@ async fn run_background(
         handle_cache_cleanup(
             &ts_tree,
             &data_tree,
-            &hard_cache_root,
             &soft_cache_root,
             size_limit,
             &mut space_usage,
         );
+        // println!("Space usage is {}", space_usage);
         if last_space_usage != space_usage {
             lru_tree.insert("space_usage", &space_usage.to_be_bytes());
         }
@@ -147,14 +136,13 @@ fn get_space_usage(lru_tree: &Tree) -> u64 {
 fn handle_cache_cleanup(
     ts_tree: &Tree,
     data_tree: &Tree,
-    hard_cache_root: &Path,
     soft_cache_root: &Path,
     size_limit: u64,
     space_usage: &mut u64,
 ) {
     // TODO: handle space_usage elsewhere too
     while *space_usage > size_limit {
-        let recovered_space = remove_one_file(ts_tree, data_tree, hard_cache_root, soft_cache_root);
+        let recovered_space = remove_one_file(ts_tree, data_tree, soft_cache_root);
         *space_usage = space_usage.saturating_sub(recovered_space);
     }
 }
@@ -163,30 +151,22 @@ fn handle_cache_cleanup(
 fn remove_one_file(
     ts_tree: &Tree,
     data_tree: &Tree,
-    hard_cache_root: &Path,
-    soft_cache_root: &Path,
+    cache_root: &Path,
 ) -> u64 {
     if let Some((_, data)) = ts_tree.pop_min() {
         // Get data_key
         let ts_data = get_rkyv::<LruTimestampData>(&data);
         let data_id = ts_data.data_id.deserialize(&mut AllocDeserializer).unwrap();
 
-        let cache_root = if ts_data.hard_cache {
-            hard_cache_root
-        } else {
-            soft_cache_root
-        };
-
         // Delete file
         let file_path = get_file_cache_chunk_path(cache_root, &data_id, ts_data.offset);
-        if let Err(_) = fs::remove_file(file_path) {
+        if let Err(_) = fs::remove_file(&file_path) {
             // If we can't delete the file, just ignore it.
         }
 
         let data_key = LruDataKey {
             data_id,
             offset: ts_data.offset,
-            hard_cache: ts_data.hard_cache,
         }
         .to_bytes();
 
@@ -213,19 +193,17 @@ fn handle_update_file(
     data_tree: &Tree,
     data_id: &DataIdentifier,
     offset: u64,
-    hard_cache: bool,
     size: Option<u64>,
     space_usage: &mut u64,
 ) {
     // Create a new timestamp key
-    let ts_key = add_new_ts_key(ts_tree, &data_id, offset, hard_cache);
+    let ts_key = add_new_ts_key(ts_tree, &data_id, offset);
 
     // Update data key, returning the old ts_key if existed
     let old_ts_key = update_data_key(
         data_tree,
         data_id,
         offset,
-        hard_cache,
         ts_key,
         size,
         space_usage,
@@ -233,7 +211,7 @@ fn handle_update_file(
 
     // Delete old_ts_key if existed
     if let Some(old_ts_key) = old_ts_key {
-        ts_tree.remove(old_ts_key).unwrap();
+        ts_tree.remove(old_ts_key);
     }
 }
 
@@ -242,7 +220,6 @@ fn update_data_key(
     data_tree: &Tree,
     data_id: &DataIdentifier,
     offset: u64,
-    hard_cache: bool,
     ts_key: [u8; 9],
     size: Option<u64>,
     space_usage: &mut u64,
@@ -250,7 +227,6 @@ fn update_data_key(
     let data_key = LruDataKey {
         data_id: data_id.clone(),
         offset,
-        hard_cache,
     }
     .to_bytes();
 
@@ -263,7 +239,7 @@ fn update_data_key(
             old_ts_key = Some(new_data.timestamp_key);
             new_data.timestamp_key = ts_key;
             if let Some(size) = size {
-                let diff = new_data.size as i64 - size as i64;
+                let diff = size as i64 - new_data.size as i64;
                 if diff.is_negative() {
                     *space_usage = space_usage.saturating_sub(diff.neg() as u64);
                 } else {
@@ -281,7 +257,7 @@ fn update_data_key(
         .to_bytes();
         (None, new_data)
     };
-    data_tree.insert(data_key, new_data).unwrap();
+    data_tree.insert(data_key, new_data);
     old_ts_key
 }
 
@@ -290,12 +266,10 @@ fn add_new_ts_key(
     ts_tree: &Tree,
     data_id: &DataIdentifier,
     offset: u64,
-    hard_cache: bool,
 ) -> [u8; 9] {
     let data = LruTimestampData {
         data_id: data_id.clone(),
         offset,
-        hard_cache,
     }
     .to_bytes();
 
@@ -325,7 +299,6 @@ struct LruDataKey {
     #[archive(derive(Clone))]
     data_id: DataIdentifier,
     offset: u64,
-    hard_cache: bool,
 }
 
 impl LruDataKey {
@@ -370,7 +343,6 @@ impl LruTimestampKey {
 struct LruTimestampData {
     data_id: DataIdentifier,
     offset: u64,
-    hard_cache: bool,
 }
 
 impl LruTimestampData {

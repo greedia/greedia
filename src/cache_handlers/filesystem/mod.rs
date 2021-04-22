@@ -14,7 +14,7 @@ use std::{
     },
 };
 
-use self::open_file::{Cache, DownloadHandle, DownloadStatus, Receiver};
+use self::{lru::Lru, open_file::{Cache, DownloadHandle, DownloadStatus, Receiver}};
 
 use super::{CacheDriveHandler, CacheFileHandler, CacheHandlerError, Page};
 use crate::downloaders::{DownloaderDrive, DownloaderError};
@@ -38,6 +38,7 @@ const MAX_CHUNK_SIZE: u64 = 100_000_000;
 
 pub struct FilesystemCacheHandler {
     drive_id: String,
+    lru: Option<Lru>,
     hard_cache_root: PathBuf,
     soft_cache_root: PathBuf,
     open_files: Mutex<HashMap<String, Weak<Mutex<OpenFile>>>>,
@@ -93,6 +94,7 @@ enum Reader {
 impl FilesystemCacheHandler {
     pub fn new(
         drive_id: &str,
+        lru: Option<Lru>,
         hard_cache_root: &Path,
         soft_cache_root: &Path,
         downloader_drive: Arc<dyn DownloaderDrive>,
@@ -102,6 +104,7 @@ impl FilesystemCacheHandler {
         let soft_cache_root = soft_cache_root.to_path_buf();
         Box::new(FilesystemCacheHandler {
             drive_id: drive_id.to_owned(),
+            lru,
             hard_cache_root,
             soft_cache_root,
             open_files,
@@ -135,6 +138,7 @@ impl FilesystemCacheHandler {
     async fn create_open_handle(&self, file_id: &str, data_id: &DataIdentifier) -> OpenFile {
         let downloader_drive = self.downloader_drive.clone();
         OpenFile::new(
+            self.lru.clone(),
             &self.hard_cache_root,
             &self.soft_cache_root,
             file_id,
@@ -183,6 +187,8 @@ impl CacheDriveHandler for FilesystemCacheHandler {
 
         Ok(Box::new(FilesystemCacheFileHandler {
             handle,
+            data_id: data_id.clone(),
+            lru: self.lru.clone(),
             size,
             offset,
             write_hard_cache,
@@ -210,6 +216,8 @@ impl CacheDriveHandler for FilesystemCacheHandler {
 
 struct FilesystemCacheFileHandler {
     handle: Arc<Mutex<OpenFile>>,
+    data_id: DataIdentifier,
+    lru: Option<Lru>,
     size: u64,
     offset: u64,
     hard_cache_file_root: PathBuf,
@@ -634,7 +642,12 @@ impl FilesystemCacheFileHandler {
             let dl_status_arc = download_status.clone();
             if let Some(download_status) = &*download_status.lock().await {
                 if let Receiver::Downloader(_) = download_status.receiver {
-                    let mut file = File::open(file_path).await.unwrap();
+                    let mut file = File::open(&file_path).await.unwrap();
+                    if let Some(lru) = &self.lru {
+                        if !self.write_hard_cache {
+                            lru.touch_file(&self.data_id, chunk_start_offset).await;
+                        }
+                    }
                     file.seek(SeekFrom::Start(self.offset - chunk_start_offset))
                         .await
                         .unwrap();
@@ -720,7 +733,13 @@ impl FilesystemCacheFileHandler {
     ) -> CurrentChunk {
         let file_path = self.get_file_cache_chunk_path(is_hard_cache, chunk_start_offset);
 
-        let mut file = File::open(file_path).await.unwrap();
+        let mut file = File::open(&file_path).await.unwrap();
+        if let Some(lru) = &self.lru {
+            if !is_hard_cache {
+                lru.touch_file(&self.data_id, chunk_start_offset).await;
+            }
+        }
+
         file.seek(SeekFrom::Start(self.offset - start_offset))
             .await
             .unwrap();
@@ -957,7 +976,7 @@ impl FilesystemCacheFileHandler {
             read_data.is_hard_cache,
             read_data.chunk_start_offset,
             read_data.end_offset - read_data.chunk_start_offset,
-        );
+        ).await;
 
         Reader::Data(from_last_bytes.len())
     }
@@ -1121,7 +1140,7 @@ mod test {
             )
         };
 
-        let fsch = FilesystemCacheHandler::new("main", &hard_cache_root, &soft_cache_root, d);
+        let fsch = FilesystemCacheHandler::new("main", None, &hard_cache_root, &soft_cache_root, d);
 
         let mut offsets = init_offsets.to_vec();
         let mut files = vec![];
@@ -1236,7 +1255,7 @@ mod test {
             )
         };
 
-        let fsch = FilesystemCacheHandler::new("main", &hard_cache_root, &soft_cache_root, d);
+        let fsch = FilesystemCacheHandler::new("main", None, &hard_cache_root, &soft_cache_root, d);
 
         let mut f = fsch
             .open_file(file_id.to_owned(), data_id.clone(), file_size, 0, false)
@@ -1269,7 +1288,7 @@ mod test {
             )
         };
 
-        let fsch = FilesystemCacheHandler::new("main", &hard_cache_root, &soft_cache_root, d);
+        let fsch = FilesystemCacheHandler::new("main", None, &hard_cache_root, &soft_cache_root, d);
 
         {
             let mut f = fsch

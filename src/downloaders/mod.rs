@@ -58,7 +58,7 @@ pub struct Page {
 pub struct PageItem {
     pub id: String,
     pub name: String,
-    pub parent: String, // TODO: pass multiple parents through
+    pub parent: String,
     pub modified_time: DateTime<Utc>,
     pub file_info: Option<FileInfo>,
 }

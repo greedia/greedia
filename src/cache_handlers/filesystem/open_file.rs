@@ -24,7 +24,7 @@ use crate::{
 };
 use byte_ranger::{ByteRanger, GetRange};
 
-use super::{get_file_cache_path, MAX_CHUNK_SIZE};
+use super::{MAX_CHUNK_SIZE, get_file_cache_path, lru::Lru};
 
 /// OpenFile is a struct representing a single open file within the cache. It is a requirement
 /// that, for any file, only one of these structs exist and that it is protected by a mutex.
@@ -49,12 +49,16 @@ use super::{get_file_cache_path, MAX_CHUNK_SIZE};
 pub struct OpenFile {
     /// ID used within the downloader.
     file_id: String,
+    /// Data identifier used on-disk.
+    data_id: DataIdentifier,
     /// Downloader this file is attached to.
     downloader_drive: Arc<dyn DownloaderDrive>,
     /// List of chunks in the hard cache.
     hc_chunks: ByteRanger<ChunkData>,
     /// List of chunks in the soft cache.
     sc_chunks: ByteRanger<ChunkData>,
+    /// Handle to the soft_cache LRU handler.
+    lru: Option<Lru>,
     /// Number of changes made to either cache. This is so downloaders don't need to repeatedly check
     /// the hard and soft cache for changes if none have been made.
     revision: u64,
@@ -62,6 +66,7 @@ pub struct OpenFile {
 
 impl OpenFile {
     pub async fn new(
+        lru: Option<Lru>,
         hard_cache_root: &Path,
         soft_cache_root: &Path,
         file_id: &str,
@@ -77,9 +82,11 @@ impl OpenFile {
 
         OpenFile {
             file_id,
+            data_id: data_id.clone(),
             downloader_drive,
             hc_chunks,
             sc_chunks,
+            lru,
             revision,
         }
     }
@@ -203,6 +210,11 @@ impl OpenFile {
         }
 
         let write_file = File::create(file_path).await?;
+        if let Some(lru) = &self.lru {
+            if !write_hard_cache {
+                lru.touch_file(&self.data_id, offset).await;
+            }
+        }
 
         let downloader = self
             .downloader_drive
@@ -283,6 +295,11 @@ impl OpenFile {
         }
 
         let write_file = File::create(file_path).await?;
+        if let Some(lru) = &self.lru {
+            if !write_hard_cache {
+                lru.touch_file(&self.data_id, offset).await;
+            }
+        }
 
         self.revision += 1;
 
@@ -359,6 +376,11 @@ impl OpenFile {
         // Check that the chunk actually exists
         if let Some(mut cache_data) = chunks.get_data_mut(chunk_start_offset) {
             let mut write_file = OpenOptions::new().append(true).open(file_path).await?;
+            if let Some(lru) = &self.lru {
+                if !write_hard_cache {
+                    lru.touch_file(&self.data_id, chunk_start_offset).await;
+                }
+            }
 
             // Seek to proper offset, relative to chunk's start offset.
             write_file.seek(SeekFrom::End(0)).await?;
@@ -459,7 +481,7 @@ impl OpenFile {
     }
 
     /// Set a new chunk size as the chunk gets downloaded.
-    pub fn update_chunk_size(&mut self, hard_cache: bool, start_offset: u64, new_size: u64) {
+    pub async fn update_chunk_size(&mut self, hard_cache: bool, start_offset: u64, new_size: u64) {
         if hard_cache {
             &mut self.hc_chunks
         } else {
@@ -467,6 +489,12 @@ impl OpenFile {
         }
         .extend_range(start_offset, new_size);
         self.revision += 1;
+
+        if let Some(lru) = &self.lru {
+            if !hard_cache {
+                lru.update_file_size(&self.data_id, start_offset, new_size).await;
+            }
+        }
     }
 
     /// Get the end_offset and DownloadStatus of a particular chunk.

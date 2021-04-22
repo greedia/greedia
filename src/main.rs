@@ -117,11 +117,11 @@ async fn run(config_path: &Path) -> Result<()> {
     // Initialize cache handlers
     let mut drives = Vec::new();
     if let Some(gdrives) = cfg.gdrive {
-        drives.extend(get_gdrive_drives(&cfg.caching.db_path, db.clone(), gdrives).await?);
+        drives.extend(get_gdrive_drives(&cfg.caching.db_path, lru.clone(), db.clone(), gdrives).await?);
     }
     if let Some(timecode_drives) = cfg.timecode {
         drives
-            .extend(get_timecode_drives(&cfg.caching.db_path, db.clone(), timecode_drives).await?);
+            .extend(get_timecode_drives(&cfg.caching.db_path, lru.clone(), db.clone(), timecode_drives).await?);
     }
 
     // Start a scanner for each cache handler
@@ -147,6 +147,7 @@ async fn run(config_path: &Path) -> Result<()> {
 
 async fn get_gdrive_drives(
     cache_path: &Path,
+    lru: Lru,
     db: Db,
     gdrives: HashMap<String, ConfigGoogleDrive>,
 ) -> Result<Vec<(Arc<DriveAccess>, bool)>> {
@@ -195,6 +196,7 @@ async fn get_gdrive_drives(
 
         let cache_handler = FilesystemCacheHandler::new(
             &cfg_drive.drive_id,
+            Some(lru.clone()),
             &hard_cache_root,
             &soft_cache_root,
             drive.into(),
@@ -222,6 +224,7 @@ async fn get_gdrive_drives(
 
 async fn get_timecode_drives(
     cache_path: &Path,
+    lru: Lru,
     db: Db,
     timecode_drives: HashMap<String, ConfigTimecodeDrive>,
 ) -> Result<Vec<(Arc<DriveAccess>, bool)>> {
@@ -235,6 +238,7 @@ async fn get_timecode_drives(
         });
         let cache_handler = FilesystemCacheHandler::new(
             &cfg_drive.drive_id,
+            Some(lru.clone()),
             &hard_cache_root,
             &soft_cache_root,
             drive,

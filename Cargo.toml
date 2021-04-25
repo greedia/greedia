@@ -1,5 +1,5 @@
 [package]
-name = "greedia3"
+name = "greedia"
 version = "0.1.0"
 authors = ["k3d3"]
 edition = "2018"

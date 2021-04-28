@@ -92,7 +92,7 @@ async fn run_background(
 
     let mut space_usage = get_space_usage(&lru_tree);
     while let Some(msg) = recv.recv().await {
-        let last_space_usage = space_usage;        println!("LRUMSGLRUMSGLRUMSGLRUMSGLRUMSGLRUMSGLRUMSGLRUMSG");
+        let last_space_usage = space_usage;
         match msg {
             LruInnerMsg::UpdateFile {
                 data_id,
@@ -140,7 +140,7 @@ fn handle_cache_cleanup(
     size_limit: u64,
     space_usage: &mut u64,
 ) {
-    println!("space_usage: {}, size_limit: {}", *space_usage, size_limit);
+    // println!("space_usage: {}, size_limit: {}", *space_usage, size_limit);
     // TODO: handle space_usage elsewhere too
     while *space_usage > size_limit {
         remove_one_file(ts_tree, data_tree, soft_cache_root, space_usage);

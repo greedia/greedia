@@ -31,6 +31,7 @@ const ITEM_MASK: u64 = DRIVE_OFFSET - 1;
 pub async fn mount_thread(drives: Vec<Arc<DriveAccess>>, mountpoint: PathBuf) {
     let mut config = KernelConfig::default();
     config.mount_option("ro");
+    config.mount_option("allow_other");
 
     let session = AsyncSession::mount(mountpoint, config).await.unwrap();
 

@@ -8,7 +8,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::{fs::File, io::AsyncSeekExt};
 
 use super::{HardCacheItem, HcCacher, HcCacherItem};
-use crate::config::DownloadAmount;
+use crate::{cache_handlers::CacheHandlerError, config::DownloadAmount};
 pub struct HcTestCacher {
     pub input: PathBuf,
     pub output: PathBuf,
@@ -62,7 +62,7 @@ struct HcTestCacherItem {
 #[cfg(feature = "sctest")]
 #[async_trait]
 impl HcCacherItem for HcTestCacherItem {
-    async fn read_data(&mut self, offset: u64, size: u64) -> Vec<u8> {
+    async fn read_data(&mut self, offset: u64, size: u64) -> Result<Vec<u8>, CacheHandlerError> {
         //println!("read_data {} {}", offset, size);
         self.bridge_points.insert(offset + size);
         self.input.seek(SeekFrom::Start(offset)).await.unwrap();
@@ -71,7 +71,7 @@ impl HcCacherItem for HcTestCacherItem {
 
         // read_exact errors if a non-exact number of bytes is read, so we can't use it.
         loop {
-            let bytes_read = self.input.read(&mut buf[buf_off..]).await.unwrap();
+            let bytes_read = self.input.read(&mut buf[buf_off..]).await?;
             if bytes_read == 0 {
                 break;
             } else {
@@ -84,14 +84,14 @@ impl HcCacherItem for HcTestCacherItem {
         self.output.seek(SeekFrom::Start(offset)).await.unwrap();
         self.output.write_all(&buf).await.unwrap();
         self.bytes_downloaded += buf.len() as u64;
-        buf
+        Ok(buf)
     }
     async fn read_data_bridged(
         &mut self,
         offset: u64,
         size: u64,
         max_bridge_len: Option<u64>,
-    ) -> Vec<u8> {
+    ) -> Result<Vec<u8>, CacheHandlerError> {
         //println!("read_data_bridged {} {} {:?}", offset, size, max_bridge_len);
         let last_bridge_point =
             if let Some(last_bridge_point) = self.bridge_points.range(..offset).rev().next() {
@@ -112,12 +112,14 @@ impl HcCacherItem for HcTestCacherItem {
 
         self.read_data(offset, size).await
     }
-    async fn cache_data(&mut self, offset: u64, size: u64) {
+    async fn cache_data(&mut self, offset: u64, size: u64) -> Result<(), CacheHandlerError> {
         //println!("cache_data {} {}", offset, size);
         self.bytes_downloaded += size;
         self.ranges_to_cache.insert(offset, size);
+
+        Ok(())
     }
-    async fn cache_data_bridged(&mut self, offset: u64, size: u64, max_bridge_len: Option<u64>) {
+    async fn cache_data_bridged(&mut self, offset: u64, size: u64, max_bridge_len: Option<u64>) -> Result<(), CacheHandlerError> {
         // println!(
         //     "cache_data_bridged {} {} {:?}",
         //     offset, size, max_bridge_len
@@ -138,15 +140,21 @@ impl HcCacherItem for HcTestCacherItem {
             self.ranges_to_cache
                 .insert(last_bridge_point, offset - last_bridge_point + size);
         }
+
+        Ok(())
     }
-    async fn cache_data_to(&mut self, offset: u64) {
+    async fn cache_data_to(&mut self, offset: u64) -> Result<(), CacheHandlerError> {
         // println!("cache_data_to {}", offset);
         self.ranges_to_cache.insert(0, offset);
+
+        Ok(())
     }
 
-    async fn cache_data_fully(&mut self) {
+    async fn cache_data_fully(&mut self) -> Result<(), CacheHandlerError> {
         // println!("cache_data_fully");
         self.ranges_to_cache.insert(0, self.input_size);
+
+        Ok(())
     }
 
     async fn save(&mut self) {
@@ -155,19 +163,19 @@ impl HcCacherItem for HcTestCacherItem {
         for (offset, size) in &self.ranges_to_cache {
             buf.resize(*size as usize, 0);
             // println!("bufsize {}, offset {}, size {}", buf.len(), offset, size);
-            self.input.seek(SeekFrom::Start(*offset)).await.unwrap();
-            self.input.read_exact(&mut buf).await.unwrap();
-            self.output.seek(SeekFrom::Start(*offset)).await.unwrap();
-            self.output.write_all(&buf).await.unwrap();
+            self.input.seek(SeekFrom::Start(*offset)).await.expect("sctest seek failed");
+            self.input.read_exact(&mut buf).await.expect("sctest read_exact failed");
+            self.output.seek(SeekFrom::Start(*offset)).await.expect("sctest seek failed");
+            self.output.write_all(&buf).await.expect("sctest write_all failed");
         }
         // Make sure file is full length
         self.output
             .seek(SeekFrom::Start(self.input_size - 1))
             .await
-            .unwrap();
-        self.output.write_all(&[0]).await.unwrap();
+            .expect("sctest seek failed");
+        self.output.write_all(&[0]).await.expect("sctest write_all failed");
 
-        self.output.flush().await.unwrap();
+        self.output.flush().await.expect("sctest flush failed");
 
         println!("Downloaded size is {}", self.bytes_downloaded);
     }

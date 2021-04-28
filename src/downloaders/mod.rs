@@ -12,7 +12,9 @@ pub mod timecode;
 #[derive(Error, Debug)]
 pub enum DownloaderError {
     #[error("Reqwest error")]
-    ReqwestError(#[from] reqwest::Error),
+    Reqwest(#[from] reqwest::Error),
+    #[error("Download quota for this file has been exceeded")]
+    QuotaExceeded
 }
 
 pub trait DownloaderClient {

@@ -1,5 +1,5 @@
 use super::HardCacheDownloader;
-use crate::config::SmartCacherConfig;
+use crate::{cache_handlers::CacheHandlerError, config::SmartCacherConfig};
 use async_trait::async_trait;
 
 /// Global smart cacher version. Increment this any time a release is made with
@@ -48,6 +48,13 @@ pub enum ScErr {
     /// Consider file download to be unsuccessful, but keep downloaded data.
     /// The cacher will then attempt to download using a different SmartCacher.
     Cancel,
+    CacheHandlerError(CacheHandlerError)
+}
+
+impl From<CacheHandlerError> for ScErr {
+    fn from(e: CacheHandlerError) -> Self {
+        ScErr::CacheHandlerError(e)
+    }
 }
 
 #[cfg(test)]

@@ -20,6 +20,12 @@ pub enum CacheHandlerError {
     AppendChunkError { start_offset: u64 },
 }
 
+impl CacheHandlerError {
+    pub fn into_tokio_io_error(self) -> io::Error {
+        io::Error::new(io::ErrorKind::Other, Box::new(self))
+    }
+}
+
 #[async_trait]
 pub trait CacheDriveHandler: Send + Sync {
     fn get_drive_type(&self) -> &'static str;

@@ -92,7 +92,7 @@ async fn run_background(
 
     let mut space_usage = get_space_usage(&lru_tree);
     while let Some(msg) = recv.recv().await {
-        let last_space_usage = space_usage;
+        let last_space_usage = space_usage;        println!("LRUMSGLRUMSGLRUMSGLRUMSGLRUMSGLRUMSGLRUMSGLRUMSG");
         match msg {
             LruInnerMsg::UpdateFile {
                 data_id,
@@ -140,10 +140,15 @@ fn handle_cache_cleanup(
     size_limit: u64,
     space_usage: &mut u64,
 ) {
+    println!("space_usage: {}, size_limit: {}", *space_usage, size_limit);
     // TODO: handle space_usage elsewhere too
     while *space_usage > size_limit {
-        let recovered_space = remove_one_file(ts_tree, data_tree, soft_cache_root);
-        *space_usage = space_usage.saturating_sub(recovered_space);
+        remove_one_file(ts_tree, data_tree, soft_cache_root, space_usage);
+        if ts_tree.len() == 0 {
+            // If we're over the size limit, but no items exist,
+            // the LRU has become inconsistent, so re-scan.
+            scan_soft_cache(soft_cache_root, space_usage);
+        }
     }
 }
 
@@ -152,7 +157,8 @@ fn remove_one_file(
     ts_tree: &Tree,
     data_tree: &Tree,
     cache_root: &Path,
-) -> u64 {
+    space_usage: &mut u64,
+) {
     if let Some((_, data)) = ts_tree.pop_min() {
         // Get data_key
         let ts_data = get_rkyv::<LruTimestampData>(&data);
@@ -161,7 +167,8 @@ fn remove_one_file(
         // Delete file
         let file_path = get_file_cache_chunk_path(cache_root, &data_id, ts_data.offset);
         if let Err(_) = fs::remove_file(&file_path) {
-            // If we can't delete the file, just ignore it.
+            // If we can't delete the file, just ignore the error.
+            // We've likely already recovered the space from it.
         }
 
         let data_key = LruDataKey {
@@ -181,9 +188,7 @@ fn remove_one_file(
 
         // Delete the lru_data entry.
         data_tree.remove(&data_key);
-        size
-    } else {
-        0
+        *space_usage = space_usage.saturating_sub(size);
     }
 }
 
@@ -291,6 +296,11 @@ fn add_new_ts_key(
     }
 
     panic!("Failed to add LRU timestamp extra_val 256 times")
+}
+
+/// Scan all files in the soft cache, to rebuild the LRU from scratch.
+fn scan_soft_cache(soft_cache_root: &Path, space_usage: &mut u64) {
+    todo!()
 }
 
 /// Key used for the LruData database tree.

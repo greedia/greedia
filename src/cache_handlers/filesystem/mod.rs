@@ -14,7 +14,10 @@ use std::{
     },
 };
 
-use self::{lru::Lru, open_file::{Cache, DownloadHandle, DownloadStatus, Receiver}};
+use self::{
+    lru::Lru,
+    open_file::{Cache, DownloadHandle, DownloadStatus, Receiver},
+};
 
 use super::{CacheDriveHandler, CacheFileHandler, CacheHandlerError, Page};
 use crate::downloaders::{DownloaderDrive, DownloaderError};
@@ -185,6 +188,14 @@ impl CacheDriveHandler for FilesystemCacheHandler {
         let hard_cache_file_root = get_file_cache_path(&self.hard_cache_root, &data_id);
         let soft_cache_file_root = get_file_cache_path(&self.soft_cache_root, &data_id);
 
+        // let hex_md5 = if let DataIdentifier::GlobalMd5(x) = &data_id {
+        //     hex::encode(x)
+        // } else {
+        //     "(not md5)".to_string()
+        // };
+
+        // println!("Open new FilesystemCacheFileHandler, offset {} size {} ({})", offset, size, hex_md5);
+
         Ok(Box::new(FilesystemCacheFileHandler {
             handle,
             data_id: data_id.clone(),
@@ -282,6 +293,7 @@ impl CacheFileHandler for FilesystemCacheFileHandler {
 impl FilesystemCacheFileHandler {
     /// Handle the read_into and cache_data methods
     async fn handle_read_into(&mut self, len: usize, mut buf: Option<&mut [u8]>) -> usize {
+        // println!("handle_read_into len {} buf {} offset {} size {}", len, buf.is_some(), self.offset, self.size);
         // EOF short-circuit
         if self.offset == self.size || len == 0 {
             return 0;
@@ -642,7 +654,12 @@ impl FilesystemCacheFileHandler {
             let dl_status_arc = download_status.clone();
             if let Some(download_status) = &*download_status.lock().await {
                 if let Receiver::Downloader(_) = download_status.receiver {
-                    let mut file = File::open(&file_path).await.unwrap();
+                    // let mut file = File::open(&file_path).await.unwrap();
+                    let file_res = File::open(&file_path).await;
+                    if let Err(e) = &file_res {
+                        println!("File error occurred! {}", e);
+                    }
+                    let mut file = file_res.unwrap();
                     if let Some(lru) = &self.lru {
                         if !self.write_hard_cache {
                             lru.touch_file(&self.data_id, chunk_start_offset).await;
@@ -733,7 +750,19 @@ impl FilesystemCacheFileHandler {
     ) -> CurrentChunk {
         let file_path = self.get_file_cache_chunk_path(is_hard_cache, chunk_start_offset);
 
-        let mut file = File::open(&file_path).await.unwrap();
+        // KTODO: debug when this fails due to a file not found
+        // Also do this for every other occurrence of File::open and OpenOptions w/ append
+        let file_res = File::open(&file_path).await;
+        if let Err(e) = &file_res {
+            println!("File error occurred!");
+            println!("{} {:?}", e, e);
+            println!("{}", file_path.display());
+            println!(
+                "chunk_start_offset {}, size {}, is_hard_cache: {}, self.write_hard_cache {}",
+                chunk_start_offset, size, is_hard_cache, self.write_hard_cache
+            );
+        }
+        let mut file = file_res.unwrap();
         if let Some(lru) = &self.lru {
             if !is_hard_cache {
                 lru.touch_file(&self.data_id, chunk_start_offset).await;
@@ -976,7 +1005,8 @@ impl FilesystemCacheFileHandler {
             read_data.is_hard_cache,
             read_data.chunk_start_offset,
             read_data.end_offset - read_data.chunk_start_offset,
-        ).await;
+        )
+        .await;
 
         Reader::Data(from_last_bytes.len())
     }
@@ -998,7 +1028,7 @@ fn get_file_cache_path(cache_root: &Path, data_id: &DataIdentifier) -> PathBuf {
             let hex_md5 = hex::encode(md5);
             let dir_1 = hex_md5.get(0..2).unwrap();
             let dir_2 = hex_md5.get(2..4).unwrap();
-            cache_root.join(dir_1).join(dir_2).join(hex_md5)
+            cache_root.join("global_md5").join(dir_1).join(dir_2).join(hex_md5)
         }
         #[cfg(feature = "sctest")]
         DataIdentifier::None => PathBuf::new(),

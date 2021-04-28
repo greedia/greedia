@@ -378,7 +378,7 @@ impl<T: Debug> ByteRanger<T> {
             return GetRange::PastFinalRange {
                 start_offset: last_start_offset,
                 size: last_size,
-                data: last_data.unwrap(),
+                data: last_data.expect("If we got this far, there should be data here"),
             };
         }
     }
@@ -640,10 +640,10 @@ mod tests {
         byte_ranger.add_range(50, 100, 2);
 
         println!("{:?}", byte_ranger);
-        let a = byte_ranger.get_data_mut(50).unwrap();
+        let a = byte_ranger.get_data_mut(50).expect("Should have data");
         *a = 5;
 
-        let b = byte_ranger.get_data(50).unwrap();
+        let b = byte_ranger.get_data(50).expect("Should have data");
         assert_eq!(b, &5);
     }
 }

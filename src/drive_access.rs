@@ -57,7 +57,6 @@ impl DriveAccess {
             cache_handler.get_drive_type(),
             &cache_handler.get_drive_id(),
         );
-        //let crypt = passwords.map(|(p1, p2)| CryptContext::new(&p1, &p2).unwrap());
         let inode_tree = db.tree(&tree_keys.inode_key);
         let lookup_tree = db.tree(&tree_keys.lookup_key);
         let root_inode = AtomicU64::new(u64::MAX);

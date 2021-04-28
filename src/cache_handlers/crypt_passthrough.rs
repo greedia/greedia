@@ -12,7 +12,8 @@ pub struct CryptPassthrough {
     cur_block: u64,
     /// The last block of decrypted bytes, if any.
     last_bytes: Option<Bytes>,
-    under_offset: u64,
+    /// Current offset of the crypted layer.
+    crypt_offset: u64,
 }
 
 impl CryptPassthrough {
@@ -33,12 +34,12 @@ impl CryptPassthrough {
             reader,
             cur_block,
             last_bytes,
-            under_offset: header.len() as u64,
+            crypt_offset: 0,
         })
     }
 
     async fn handle_read_into(&mut self, len: usize, mut buf: Option<&mut [u8]>) -> usize {
-        // println!("crypt handle_read_into len {} is_buf {}", len, buf.is_some());
+        // println!("crypt handle_read_into len {} buf {}", len, buf.is_some());
         // If data exists in last_bytes, read from there first
         if let Some(last_bytes) = &mut self.last_bytes {
             if last_bytes.is_empty() {
@@ -90,7 +91,8 @@ impl CacheFileHandler for CryptPassthrough {
     }
 
     async fn seek_to(&mut self, offset: u64) {
-        // println!("crypt seek_to {}", offset);
+        println!("crypt seek_to {}", offset);
+        self.crypt_offset = offset;
 
         // The block to start at - note the data may span more than one block.
         // For simplicity, each block is read and decrypted individually.
@@ -118,7 +120,6 @@ impl CacheFileHandler for CryptPassthrough {
 
         // Decrypt starting_block, and discard bytes up to the correct offset
         self.reader.seek_to(block_starting_offset as u64).await;
-        self.under_offset = block_starting_offset as u64;
 
         let mut block_buf = [0u8; decrypter::BLOCK_SIZE];
         let encrypted_block_len = self.reader.read_exact(&mut block_buf).await;

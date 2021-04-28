@@ -29,7 +29,7 @@ impl Db {
 
 #[derive(Clone)]
 pub struct Tree {
-    tree: sled::Tree,
+    pub tree: sled::Tree,
 }
 
 impl Tree {
@@ -65,6 +65,10 @@ impl Tree {
         NV: Into<IVec>,
     {
         Ok(Ok(())) == self.tree.compare_and_swap(key, old, new)
+    }
+
+    pub fn len(&self) -> usize {
+        self.tree.len()
     }
 
     pub fn iter(&self) -> Iter {

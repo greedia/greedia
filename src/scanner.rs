@@ -20,6 +20,7 @@ use std::{
 use chrono::{Duration, TimeZone, Utc};
 use flume::Receiver;
 use futures::{Stream, StreamExt, TryStreamExt};
+use futures::future::join_all;
 use itertools::Itertools;
 use rkyv::{de::deserializers::AllocDeserializer, Archive, Deserialize, Serialize};
 use sled::IVec;
@@ -280,18 +281,21 @@ async fn perform_scan(
 async fn perform_caching(trees: &ScanTrees, drive_access: Arc<DriveAccess>) {
     // Start 10 threads for caching
     let (send, recv) = flume::bounded(1);
-    for _ in 0..100 {
-        tokio::spawn(caching_thread(
+    let mut thread_joiners = vec![];
+    for _ in 0..1 {
+        thread_joiners.push(tokio::spawn(caching_thread(
             trees.clone(),
             drive_access.clone(),
             recv.clone(),
-        ));
+        )));
     }
 
     for item in trees.inode_tree.iter() {
         let (_, value) = item.unwrap();
         send.send_async(value).await.unwrap();
     }
+
+    join_all(thread_joiners).await;
 }
 
 async fn caching_thread(trees: ScanTrees, drive_access: Arc<DriveAccess>, recv: Receiver<IVec>) {
@@ -308,7 +312,8 @@ async fn caching_thread(trees: ScanTrees, drive_access: Arc<DriveAccess>, recv: 
     // println!("Caching thread for {} complete.", drive_access.name);
 }
 
-async fn perform_one_cache(trees: &ScanTrees, hard_cacher: &HardCacher, item: &ArchivedDriveItem) {
+/// Cache one single item. Returns true if successful, or false if attempt needs to be made later.
+async fn perform_one_cache(trees: &ScanTrees, hard_cacher: &HardCacher, item: &ArchivedDriveItem) -> bool {
     if let ArchivedDriveItemData::FileItem {
         file_name,
         data_id,
@@ -322,15 +327,27 @@ async fn perform_one_cache(trees: &ScanTrees, hard_cacher: &HardCacher, item: &A
             .as_deref()
             .map(|m| get_rkyv::<HardCacheMetadata>(m));
 
-        if let Some(meta) = hard_cacher
-            .process(item.access_id.as_str(), file_name, &data_id, *size, hc_meta)
-            .await
-        {
-            let meta_bytes = serialize_rkyv(&meta);
-            trees
-                .hc_meta_tree
-                .insert(data_id_key.as_slice(), meta_bytes);
+        // KTODO: handle CacheHandlerErrors here
+        match hard_cacher
+                    .process(item.access_id.as_str(), file_name, &data_id, *size, hc_meta)
+                    .await {
+            Ok(meta) => {
+                let meta_bytes = serialize_rkyv(&meta);
+                trees
+                    .hc_meta_tree
+                    .insert(data_id_key.as_slice(), meta_bytes);
+                true
+            }
+            Err(e) => {
+                println!("GOT AN ERROR!!!");
+                dbg!(&e);
+                println!("TODO: try again later");
+                false
+            }
         }
+    } else {
+        // Was a directory rather than a file, so accept and don't try again.
+        true
     }
 }
 

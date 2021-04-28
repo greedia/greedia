@@ -40,7 +40,7 @@ impl GDriveClient {
         refresh_token: &str,
     ) -> Result<GDriveClient> {
         let http_client = reqwest::Client::builder().referer(false).build().unwrap();
-        let rate_limiter = Arc::new(PrioLimit::new(1, 10, Duration::from_millis(120)));
+        let rate_limiter = Arc::new(PrioLimit::new(1, 5, Duration::from_millis(100)));
 
         let client_id = ClientId::new(client_id.to_owned());
         let client_secret = ClientSecret::new(client_secret.to_owned());
@@ -442,7 +442,7 @@ async fn open_request(
     let mut access_token = access_token_mutex.lock().await.clone();
     let mut retry = false;
 
-    for _ in 0..50 {
+    for _ in 0..5 {
         if bg_request {
             if retry {
                 rate_limiter.bg_retry_wait().await;
@@ -457,6 +457,7 @@ async fn open_request(
             }
         }
 
+        println!("MAKE REQUEST");
         let res = http_client
             .get(&url)
             .bearer_auth(access_token.secret())
@@ -483,9 +484,23 @@ async fn open_request(
                         )
                         .await;
                     }
+                    416 => {
+                        println!("416416416416416416416416416416416416416416416416 Range not satifiable: {}", range_string);
+                        // Probably best to return an empty stream here?
+                    }
+                    403 => {
+                        if let Ok(error_json) = r.json::<GErrorTop>().await {
+                            let errors = error_json.error.errors;
+                            for error in errors.iter() {
+                                if error.reason == "downloadQuotaExceeded" {
+                                    return Err(DownloaderError::QuotaExceeded)
+                                }
+                            }
+                        }
+                    }
                     // Rate limit or server error, retry request
-                    other => {
-                        println!("Other: {}", other);
+                    _ => {
+                        println!("Other: {}", r.status());
                     }
                 }
             }
@@ -650,6 +665,26 @@ pub struct GChangeFile {
     pub size: Option<String>,
     pub mime_type: Option<String>,
     pub trashed: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GErrorTop {
+    error: GErrorInner
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GErrorInner {
+    errors: Vec<GError>,
+    code: u64,
+    message: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GError {
+    domain: String,
+    reason: String,
+    message: String,
 }
 
 #[cfg(test)]

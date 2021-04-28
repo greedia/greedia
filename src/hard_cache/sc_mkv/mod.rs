@@ -108,26 +108,26 @@ impl SmartCacher for ScMkv {
                 }
                 ids::ATTACHMENTS => {
                     got_attachments = true;
-                    r.cache_bytes(size_1).await;
+                    r.cache_bytes(size_1).await?;
                 }
                 ids::CHAPTERS => {
                     got_chapters = true;
-                    r.cache_bytes(size_1).await;
+                    r.cache_bytes(size_1).await?;
                 }
                 ids::TRACKS => {
                     got_tracks = true;
-                    r.cache_bytes(size_1).await;
+                    r.cache_bytes(size_1).await?;
                 }
                 ids::CUES => {
                     got_cues = true;
-                    r.cache_bytes(size_1).await;
+                    r.cache_bytes(size_1).await?;
                 }
                 ids::TAGS => {
                     got_tags = true;
-                    r.cache_bytes(size_1).await;
+                    r.cache_bytes(size_1).await?;
                 }
                 ids::EBML_VOID => {
-                    r.cache_bytes(size_1).await;
+                    r.cache_bytes(size_1).await?;
                 }
                 ids::CLUSTER => {
                     let timecode_scale =
@@ -144,14 +144,14 @@ impl SmartCacher for ScMkv {
                         big_element_offset = Some(after_eid_offset + size_1);
                         break;
                     } else {
-                        r.cache_bytes_to(after_eid_offset + size_1).await;
+                        r.cache_bytes_to(after_eid_offset + size_1).await?;
                     }
                 }
                 _ => {
                     // Unknown ID
                     if size_1 < 100_000 {
                         // It's a small enough element, so just cache it.
-                        r.cache_bytes(size_1).await;
+                        r.cache_bytes(size_1).await?;
                     } else {
                         // TODO: handle downloading clusters if not downloaded at this point.
                         big_element_offset = Some(start_offset);
@@ -176,7 +176,7 @@ impl SmartCacher for ScMkv {
             for (item_off, item_id) in seek_items {
                 if !pre_tail_cached {
                     r.seek(segment_start + item_off - pre_tail_cache);
-                    r.cache_bytes(pre_tail_cache).await;
+                    r.cache_bytes(pre_tail_cache).await?;
                     pre_tail_cached = true;
                 }
 
@@ -190,7 +190,7 @@ impl SmartCacher for ScMkv {
                         let (id_1, size_1, _) =
                             ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
                         if id_1 == ids::INFO {
-                            r.cache_bytes(size_1).await;
+                            r.cache_bytes(size_1).await?;
                         }
                     }
                     ids::TRACKS => {
@@ -202,7 +202,7 @@ impl SmartCacher for ScMkv {
                         let (id_1, size_1, _) =
                             ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
                         if id_1 == ids::TRACKS {
-                            r.cache_bytes(size_1).await;
+                            r.cache_bytes(size_1).await?;
                         }
                     }
                     ids::CHAPTERS => {
@@ -214,7 +214,7 @@ impl SmartCacher for ScMkv {
                         let (id_1, size_1, _) =
                             ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
                         if id_1 == ids::CHAPTERS {
-                            r.cache_bytes(size_1).await;
+                            r.cache_bytes(size_1).await?;
                         }
                     }
                     ids::CUES => {
@@ -226,7 +226,7 @@ impl SmartCacher for ScMkv {
                         let (id_1, size_1, _) =
                             ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
                         if id_1 == ids::CUES {
-                            r.cache_bytes(size_1).await;
+                            r.cache_bytes(size_1).await?;
                         }
                     }
                     ids::ATTACHMENTS => {
@@ -238,7 +238,7 @@ impl SmartCacher for ScMkv {
                         let (id_1, size_1, _) =
                             ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
                         if id_1 == ids::ATTACHMENTS {
-                            r.cache_bytes(size_1).await;
+                            r.cache_bytes(size_1).await?;
                         }
                     }
                     ids::TAGS => {
@@ -250,7 +250,7 @@ impl SmartCacher for ScMkv {
                         let (id_1, size_1, _) =
                             ebml::read_element_id_size(&mut r).await.or(Err(Cancel))?;
                         if id_1 == ids::TAGS {
-                            r.cache_bytes(size_1).await;
+                            r.cache_bytes(size_1).await?;
                         }
                     }
                     _item_id => {}

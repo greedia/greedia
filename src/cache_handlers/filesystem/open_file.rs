@@ -10,12 +10,7 @@ use std::{
         Arc, Weak,
     },
 };
-use tokio::{
-    fs::DirEntry,
-    fs::{read_dir, File, OpenOptions},
-    io::AsyncSeekExt,
-    sync::Mutex,
-};
+use tokio::{fs::DirEntry, fs::{read_dir, File, OpenOptions}, io::{AsyncSeekExt, AsyncWriteExt}, sync::Mutex};
 
 use crate::{
     cache_handlers::CacheHandlerError,
@@ -76,6 +71,9 @@ impl OpenFile {
         // Scan for existing cache files
         let hc_chunks = Self::get_cache_files(hard_cache_root, data_id).await;
         let sc_chunks = Self::get_cache_files(soft_cache_root, data_id).await;
+
+        dbg!(&hc_chunks);
+        dbg!(&sc_chunks);
 
         let file_id = file_id.to_string();
         let revision = 0;
@@ -185,7 +183,7 @@ impl OpenFile {
         write_hard_cache: bool,
         file_path: &Path,
     ) -> Result<(File, DownloadHandle), CacheHandlerError> {
-        // println!("START DL {}", offset);
+        println!("START DL {}", offset);
 
         let next_chunk = self.get_next_chunk(
             offset,
@@ -209,7 +207,8 @@ impl OpenFile {
             tokio::fs::create_dir_all(parent).await?;
         }
 
-        let write_file = File::create(file_path).await?;
+        let mut write_file = File::create(file_path).await?;
+        write_file.flush().await?;
         if let Some(lru) = &self.lru {
             if !write_hard_cache {
                 lru.touch_file(&self.data_id, offset).await;
@@ -247,7 +246,12 @@ impl OpenFile {
             },
         );
 
-        let read_file = File::open(file_path).await?;
+        // let read_file = File::open(file_path).await?;
+        let read_file_res = File::open(file_path).await;
+        if let Err(e) = &read_file_res {
+            println!("File error occurred!");
+        }
+        let read_file = read_file_res?;
         let download_handle = DownloadHandle {
             dl_handle: download_status,
         };
@@ -294,7 +298,8 @@ impl OpenFile {
             tokio::fs::create_dir_all(parent).await?;
         }
 
-        let write_file = File::create(file_path).await?;
+        let mut write_file = File::create(file_path).await?;
+        write_file.flush().await?;
         if let Some(lru) = &self.lru {
             if !write_hard_cache {
                 lru.touch_file(&self.data_id, offset).await;
@@ -325,7 +330,13 @@ impl OpenFile {
             },
         );
 
-        let read_file = File::open(file_path).await?;
+        //let read_file = File::open(file_path).await?;
+        let read_file_res = File::open(file_path).await;
+        if let Err(e) = &read_file_res {
+            println!("File error occurred!");
+        }
+        let read_file = read_file_res?;
+        
         let download_handle = DownloadHandle {
             dl_handle: download_status,
         };
@@ -349,7 +360,7 @@ impl OpenFile {
         write_hard_cache: bool,
         file_path: &Path,
     ) -> Result<(File, DownloadHandle), CacheHandlerError> {
-        // println!("APPEND DL");
+        println!("APPEND DL");
 
         let next_chunk = self.get_next_chunk(
             start_offset,
@@ -367,6 +378,13 @@ impl OpenFile {
             chunk_start_offset + MAX_CHUNK_SIZE
         };
 
+        if !file_path.exists() {
+            println!("FILE NOT EXIST");
+            println!("{}", file_path.display());
+            dbg!(&self.hc_chunks);
+            dbg!(&self.sc_chunks);
+        }
+
         let chunks = if write_hard_cache {
             &mut self.hc_chunks
         } else {
@@ -375,7 +393,14 @@ impl OpenFile {
 
         // Check that the chunk actually exists
         if let Some(mut cache_data) = chunks.get_data_mut(chunk_start_offset) {
-            let mut write_file = OpenOptions::new().append(true).open(file_path).await?;
+            // KTODO: check that this file exists
+            let write_file_res = OpenOptions::new().append(true).open(file_path).await;
+            if let Err(e) = &write_file_res {
+                println!("File error occurred! {}", e);
+                println!("{}", file_path.display());
+                dbg!(e);
+            }
+            let mut write_file = write_file_res?;
             if let Some(lru) = &self.lru {
                 if !write_hard_cache {
                     lru.touch_file(&self.data_id, chunk_start_offset).await;
@@ -389,8 +414,7 @@ impl OpenFile {
             let downloader = self
                 .downloader_drive
                 .open_file(self.file_id.clone(), start_offset, write_hard_cache)
-                .await
-                .unwrap();
+                .await?;
 
             let receiver = Receiver::Downloader(downloader);
 
@@ -404,7 +428,12 @@ impl OpenFile {
             assert_eq!(start_offset, cache_data.end_offset.load(Ordering::Acquire));
             cache_data.download_status = Arc::downgrade(&download_status);
 
-            let mut read_file = File::open(file_path).await?;
+            // let mut read_file = File::open(file_path).await?;
+            let read_file_res = File::open(file_path).await;
+            if let Err(e) = &read_file_res {
+                println!("File error occurred!");
+            }
+            let mut read_file = read_file_res?;
 
             read_file.seek(SeekFrom::End(0)).await?;
 
@@ -445,9 +474,16 @@ impl OpenFile {
             tokio::fs::create_dir_all(parent).await?;
         }
 
-        let write_file = File::create(file_path).await?;
+        let mut write_file = File::create(file_path).await?;
+        write_file.flush().await?;
 
-        let mut cache_file = File::open(source_file_path).await?;
+        // let mut cache_file = File::open(source_file_path).await?;
+        let cache_file_res = File::open(file_path).await;
+        if let Err(e) = &cache_file_res {
+            println!("File error occurred!");
+        }
+        let mut cache_file = cache_file_res?;
+
         cache_file.seek(SeekFrom::Start(source_file_offset)).await?;
 
         let receiver = Receiver::CacheReader(cache_file, source_file_end_offset);
@@ -472,7 +508,12 @@ impl OpenFile {
             },
         );
 
-        let read_file = File::open(file_path).await?;
+        // let read_file = File::open(file_path).await?;
+        let read_file_res = File::open(file_path).await;
+        if let Err(e) = &read_file_res {
+            println!("File error occurred!");
+        }
+        let read_file = read_file_res?;
         let download_handle = DownloadHandle {
             dl_handle: download_status,
         };
@@ -545,12 +586,12 @@ impl OpenFile {
             let mut dirs = read_dir(cache_path).await.unwrap();
             while let Some(dir_entry) = dirs.next_entry().await.unwrap() {
                 if let Some((offset, len)) = Self::direntry_to_namelen(dir_entry).await {
-                    // println!("add_range {} {}", offset, len);
                     if len == 0 {
                         // Ignore zero-length chunks
                         continue;
                     }
                     let end_offset = Arc::new(AtomicU64::new(offset + len));
+                    println!("add_range {} {}", offset, len);
                     br.add_range(
                         offset,
                         len,

@@ -184,58 +184,58 @@ fn handle_cache_cleanup(
     size_limit: u64,
     space_usage: &mut u64,
 ) {
-    if ts_tree.is_empty() {
+    if ts_tree.is_empty() && *space_usage != 0 {
         // If we're over the size limit, but no items exist,
         // the LRU has become inconsistent, so re-scan.
         println!("LRU inconsistent; tree empty, but space_usage is {}", *space_usage);
         scan_soft_cache(ts_tree, data_tree, cache_root, space_usage);
-    } else {
-        for x in ts_tree.iter() {
-            let (key, val) = x.unwrap();
+    }
 
-            // Get the data_id
-            let ts_data = get_rkyv::<LruTimestampData>(&val);
-            let data_id = ts_data.data_id.deserialize(&mut AllocDeserializer).unwrap();
+    for x in ts_tree.iter() {
+        let (key, val) = x.unwrap();
 
-            // Skip any chunks in currently open files
-            if open_files.contains(&data_id) {
-                continue;
-            }
+        // Get the data_id
+        let ts_data = get_rkyv::<LruTimestampData>(&val);
+        let data_id = ts_data.data_id.deserialize(&mut AllocDeserializer).unwrap();
 
-            // Delete the file, ignoring any
-            let file_path = get_file_cache_chunk_path(cache_root, &data_id, ts_data.offset);
-            if let Err(_) = fs::remove_file(&file_path) {
-                // If we can't delete the file, just ignore the error.
-                // We've likely already recovered the space from it.
-            }
-
-            // Get the data_key to find the file size
-            let data_key = LruDataKey {
-                data_id,
-                offset: ts_data.offset,
-            }
-            .to_bytes();
-
-            // Get the size out of the lru_data entry.
-            // If the data_tree value doesn't exist, just ignore it.
-            if let Some(data_bytes) = data_tree.get(&data_key) {
-                let data_data = get_rkyv::<LruDataData>(&data_bytes);
-                // subtract from our space usage
-                *space_usage = space_usage.saturating_sub(data_data.size);
-            };
-
-            // Delete the lru_data and ts_data entries.
-            data_tree.remove(&data_key);
-            ts_tree.remove(&key);
-
-            if *space_usage < size_limit {
-                return;
-            }
+        // Skip any chunks in currently open files
+        if open_files.contains(&data_id) {
+            continue;
         }
 
-        // If we reach here, we've cleaned up everything we can but still aren't under the size limit.
-        // Unfortunately there isn't much we can do here.
+        // Delete the file, ignoring any
+        let file_path = get_file_cache_chunk_path(cache_root, &data_id, ts_data.offset);
+        if let Err(_) = fs::remove_file(&file_path) {
+            // If we can't delete the file, just ignore the error.
+            // We've likely already recovered the space from it.
+        }
+
+        // Get the data_key to find the file size
+        let data_key = LruDataKey {
+            data_id,
+            offset: ts_data.offset,
+        }
+        .to_bytes();
+
+        // Get the size out of the lru_data entry.
+        // If the data_tree value doesn't exist, just ignore it.
+        if let Some(data_bytes) = data_tree.get(&data_key) {
+            let data_data = get_rkyv::<LruDataData>(&data_bytes);
+            // subtract from our space usage
+            *space_usage = space_usage.saturating_sub(data_data.size);
+        };
+
+        // Delete the lru_data and ts_data entries.
+        data_tree.remove(&data_key);
+        ts_tree.remove(&key);
+
+        if *space_usage < size_limit {
+            return;
+        }
     }
+
+    // If we reach here, we've cleaned up everything we can but still aren't under the size limit.
+    // Unfortunately there isn't much we can do here.
 }
 
 /// Handle updating a file's timestamp or changing its reported size.

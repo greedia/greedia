@@ -207,9 +207,10 @@ impl OpenFile {
         };
         let end_offset = Arc::new(AtomicU64::new(offset));
 
-        let parent = file_path.parent().unwrap();
-        if !parent.exists() {
-            tokio::fs::create_dir_all(parent).await?;
+        if let Some(parent) = file_path.parent() {
+            if !parent.exists() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
         }
 
         let mut write_file = File::create(file_path).await?;
@@ -223,8 +224,7 @@ impl OpenFile {
         let downloader = self
             .downloader_drive
             .open_file(self.file_id.clone(), offset, write_hard_cache)
-            .await
-            .unwrap();
+            .await?;
 
         let receiver = Receiver::Downloader(downloader);
 

@@ -414,7 +414,10 @@ impl GreediaFS {
             // FUSE passes us explicit offsets, so if our offset isn't where we expected
             // the reader probably made a seek.
             if *f_offset != offset {
-                reader.seek_to(offset).await;
+                if reader.seek_to(offset).await.is_err() {
+                    req.reply_error(libc::EIO)?;
+                    return Ok(());
+                };
             }
 
             // FUSE requires us to give an exact size, so make sure the buffer is large
@@ -424,10 +427,13 @@ impl GreediaFS {
             }
 
             // Read, and push our expected offset forward.
-            let read_len = reader.read_exact(&mut buffer[..size]).await;
-            *f_offset = offset + read_len as u64;
+            if let Ok(read_len) = reader.read_exact(&mut buffer[..size]).await {
+                *f_offset = offset + read_len as u64;
 
-            req.reply(&buffer[..read_len])?;
+                req.reply(&buffer[..read_len])?
+            } else {
+                req.reply_error(libc::EIO)?
+            }
         } else {
             req.reply_error(libc::ENOENT)?
         }

@@ -92,14 +92,14 @@ impl DriveAccess {
                     .await?;
 
                 for cc in self.crypts.iter() {
-                    file.seek_to(0).await;
+                    file.seek_to(0).await?;
 
                     let mut header = [0u8; decrypter::FILE_HEADER_SIZE];
-                    file.read_exact(&mut header).await;
+                    file.read_exact(&mut header).await?;
                     if Decrypter::new(&cc.cipher.file_key, &header).is_ok() {
-                        file.seek_to(0).await;
+                        file.seek_to(0).await?;
                         return Ok(TypeResult::IsType(Box::new(
-                            CryptPassthrough::new(&cc, offset, file).await.ok_or(CacheHandlerError::CryptPassthroughError)?,
+                            CryptPassthrough::new(&cc, offset, file).await?,
                         )));
                     }
                 }

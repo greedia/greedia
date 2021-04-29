@@ -407,9 +407,7 @@ impl HcDownloadCacherItem {
                 )
                 .await?;
 
-            if let Some(reader) = CryptPassthrough::new(crypt_context, offset, reader).await {
-                return Ok(Box::new(reader));
-            }
+            return Ok(Box::new(CryptPassthrough::new(crypt_context, offset, reader).await?));
         }
 
         self.drive_access
@@ -432,11 +430,11 @@ impl HcCacherItem for HcDownloadCacherItem {
 
         let mut buf = vec![0u8; size as usize];
         if let Some(mut reader) = self.readers.remove(&offset) {
-            reader.read_exact(&mut buf).await;
+            reader.read_exact(&mut buf).await?;
             self.readers.insert(offset + size, reader);
         } else {
             let mut reader = self.open_reader(offset).await?;
-            reader.read_exact(&mut buf).await;
+            reader.read_exact(&mut buf).await?;
             self.readers.insert(offset + size, reader);
         }
 
@@ -461,18 +459,18 @@ impl HcCacherItem for HcDownloadCacherItem {
                 if bridge_len < max_bridge_len {
                     // Bridge up to current offset
                     if let Some(mut reader) = self.readers.remove(&prev_offset) {
-                        reader.cache_exact(bridge_len as usize).await;
+                        reader.cache_exact(bridge_len as usize).await?;
                         let mut buf = vec![0u8; size as usize];
-                        reader.read_exact(&mut buf).await;
+                        reader.read_exact(&mut buf).await?;
                         self.readers.insert(offset + size, reader);
                         return Ok(buf);
                     }
                 }
             } else {
                 if let Some(mut reader) = self.readers.remove(&prev_offset) {
-                    reader.cache_exact(bridge_len as usize).await;
+                    reader.cache_exact(bridge_len as usize).await?;
                     let mut buf = vec![0u8; size as usize];
-                    reader.read_exact(&mut buf).await;
+                    reader.read_exact(&mut buf).await?;
                     self.readers.insert(offset + size, reader);
                     return Ok(buf);
                 }
@@ -486,7 +484,7 @@ impl HcCacherItem for HcDownloadCacherItem {
         // println!("cache_data {} {}", offset, size);
 
         if let Some(mut reader) = self.readers.remove(&offset) {
-            reader.cache_exact(size as usize).await;
+            reader.cache_exact(size as usize).await?;
 
             self.readers.insert(offset + size, reader);
         } else {
@@ -503,7 +501,7 @@ impl HcCacherItem for HcDownloadCacherItem {
                 )
                 .await?;
 
-            reader.cache_exact(size as usize).await;
+            reader.cache_exact(size as usize).await?;
 
             self.readers.insert(offset + size, reader);
         }
@@ -529,7 +527,7 @@ impl HcCacherItem for HcDownloadCacherItem {
                 true,
             )
             .await?;
-        reader.cache_exact(offset as usize).await;
+        reader.cache_exact(offset as usize).await?;
 
         // Throw into readers, just in case we read from that section later
         if !self.readers.contains_key(&offset) {
@@ -551,7 +549,7 @@ impl HcCacherItem for HcDownloadCacherItem {
                 true,
             )
             .await?;
-        reader.cache_exact(self.item.size as usize).await;
+        reader.cache_exact(self.item.size as usize).await?;
 
         Ok(())
     }

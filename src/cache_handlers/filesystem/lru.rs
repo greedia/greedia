@@ -380,6 +380,10 @@ fn scan_soft_cache(
     data_tree.clear();
     *space_usage = 0;
 
+    if !soft_cache_root.exists() {
+        return;
+    }
+
     for entry in WalkDir::new(soft_cache_root)
         .into_iter()
         .filter_entry(is_chunk_file)

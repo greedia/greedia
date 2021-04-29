@@ -266,7 +266,7 @@ impl<T: Debug> ByteRanger<T> {
     }
 
     /// Extend the size of a range, returning the old size if successful.
-    /// Returns None if original offset didn't exist, or the new size is smaller than the old size.
+    /// Returns None if original offset didn't exist, or the old size.
     pub fn extend_range(&mut self, offset: u64, mut new_size: u64) -> Option<u64> {
         match self.byte_ranges.entry(offset) {
             Entry::Vacant(_) => None,

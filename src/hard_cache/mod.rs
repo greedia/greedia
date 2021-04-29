@@ -198,7 +198,6 @@ impl HardCacher {
             .and_then(|ext| self.cachers_by_ext.get(ext));
 
         let file_item = item.clone();
-        let file_item_temp = item.clone();
         let hex_md5 = if let DataIdentifier::GlobalMd5(x) = &file_item.data_id {
             hex::encode(x)
         } else {

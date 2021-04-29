@@ -528,7 +528,7 @@ impl OpenFile {
 
     /// Set a new chunk size as the chunk gets downloaded.
     pub async fn update_chunk_size(&mut self, hard_cache: bool, start_offset: u64, new_size: u64) {
-        if hard_cache {
+        let old_size = if hard_cache {
             &mut self.hc_chunks
         } else {
             &mut self.sc_chunks
@@ -538,7 +538,8 @@ impl OpenFile {
 
         if let Some(lru) = &self.lru {
             if !hard_cache {
-                lru.update_file_size(&self.data_id, start_offset, new_size).await;
+                // lru.update_file_size(&self.data_id, start_offset, new_size).await;
+                lru.add_space_usage(new_size.saturating_sub(old_size.unwrap_or(0))).await;
             }
         }
     }

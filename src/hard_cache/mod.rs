@@ -1,5 +1,3 @@
-use tokio::fs::OpenOptions;
-use tokio::io::AsyncWriteExt;
 use async_trait::async_trait;
 use futures::{Future, FutureExt, ready};
 use smart_cacher::{FileSpec, ScErr, ScOk, ScResult, SmartCacher};

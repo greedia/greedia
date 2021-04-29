@@ -1,18 +1,9 @@
 // Filesystem cache handler
 
-use std::{
-    cmp::min,
-    collections::HashMap,
-    io::SeekFrom,
-    mem,
-    path::Path,
-    path::PathBuf,
-    sync::Arc,
-    sync::{
+use std::{cmp::min, collections::HashMap, io::SeekFrom, mem, path::Path, path::PathBuf, sync::Arc, sync::{
         atomic::{AtomicU64, Ordering},
         Weak,
-    },
-};
+    }, time::Duration};
 
 use self::{
     lru::Lru,
@@ -26,11 +17,7 @@ use async_trait::async_trait;
 use byte_ranger::GetRange;
 use bytes::{Bytes, BytesMut};
 use futures::{Stream, StreamExt};
-use tokio::{
-    fs::{self, File},
-    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
-    sync::Mutex,
-};
+use tokio::{fs::{self, File}, io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt}, sync::Mutex, time::sleep};
 
 mod open_file;
 use open_file::OpenFile;
@@ -310,7 +297,11 @@ impl FilesystemCacheFileHandler {
 
         // dbg!(&self.current_chunk);
 
-        for _ in 0..4 {
+        for attempt in 0..100 {
+            if attempt > 20 {
+                sleep(Duration::from_millis(50 * attempt)).await;
+            }
+
             let handle_chunk_res = self.handle_chunk(len, &mut buf).await;
             // dbg!(&handle_chunk_res);
             match handle_chunk_res {

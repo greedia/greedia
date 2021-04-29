@@ -124,7 +124,7 @@ pub async fn scan_thread(drive_access: Arc<DriveAccess>) {
         count, size, name, drive_type, drive_id
     );
 
-    // perform_caching(&trees, drive_access).await;
+    perform_caching(&trees, drive_access).await;
 
     println!("Finished caching {} ({}:{}).", name, drive_type, drive_id);
 }

@@ -108,10 +108,13 @@ async fn run_background(
 
     let mut space_usage = get_space_usage(&lru_tree);
 
+    scan_soft_cache(&ts_tree, &data_tree, &soft_cache_root, &mut space_usage);
+
     let mut open_files = HashSet::new();
 
     while let Some(msg) = recv.recv().await {
-        let last_space_usage = space_usage;
+        // let last_space_usage = space_usage;
+        dbg!(&msg);
         match msg {
             LruInnerMsg::UpdateFile {
                 data_id,
@@ -126,6 +129,9 @@ async fn run_background(
             }
             LruInnerMsg::AddSpaceUsage { size } => {
                 space_usage += size;
+                // println!("space_usage {}, size_limit {}", space_usage, size_limit);
+
+
             }
             LruInnerMsg::OpenFile { data_id } => {
                 let hex_md5 = if let DataIdentifier::GlobalMd5(x) = &data_id {
@@ -158,9 +164,9 @@ async fn run_background(
             &mut space_usage,
         );
         // println!("Space usage is {}", space_usage);
-        if last_space_usage != space_usage {
-            lru_tree.insert("space_usage", &space_usage.to_be_bytes());
-        }
+        // if last_space_usage != space_usage {
+        //     lru_tree.insert("space_usage", &space_usage.to_be_bytes());
+        // }
     }
 }
 
@@ -314,10 +320,10 @@ fn add_new_ts_key(ts_tree: &Tree, data_id: &DataIdentifier, offset: u64) -> [u8;
     panic!("Failed to add LRU timestamp extra_val 256 times")
 }
 
-/// Check if a file is a chunk file.
+/// Check if a file is a chunk file or is dir.
 fn is_chunk_file(entry: &DirEntry) -> bool {
-    entry.file_type().is_file()
-        && entry
+    entry.file_type().is_dir()
+        || entry
             .file_name()
             .to_str()
             .map(|s| s.starts_with("chunk_"))
@@ -366,11 +372,13 @@ fn scan_soft_cache(
         return;
     }
 
-    for entry in WalkDir::new(soft_cache_root)
-        .into_iter()
-        .filter_entry(is_chunk_file)
+    let walker = WalkDir::new(soft_cache_root).into_iter().filter_entry(is_chunk_file).filter_map(|e| e.ok());
+    for entry in walker
     {
-        let entry = entry.unwrap();
+        if entry.file_type().is_dir() {
+            continue;
+        }
+
         if let Some((data_id, offset, size, ts)) = dir_entry_to_data_key(&entry) {
             let ts_data = LruTimestampData {
                 data_id: data_id.clone(),

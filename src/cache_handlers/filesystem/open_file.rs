@@ -539,6 +539,8 @@ impl OpenFile {
         if let Some(lru) = &self.lru {
             if !hard_cache {
                 // lru.update_file_size(&self.data_id, start_offset, new_size).await;
+                println!("update, old {} new {}, size {}", old_size.unwrap_or(0), new_size, new_size.saturating_sub(old_size.unwrap_or(0)));
+                // dbg!(&self.sc_chunks);
                 lru.add_space_usage(new_size.saturating_sub(old_size.unwrap_or(0))).await;
             }
         }

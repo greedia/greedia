@@ -194,6 +194,10 @@ fn handle_cache_cleanup(
         scan_soft_cache(ts_tree, data_tree, cache_root, space_usage);
     }
 
+    if *space_usage < size_limit {
+        return;
+    }
+
     for x in ts_tree.iter() {
         let (key, val) = x.unwrap();
 

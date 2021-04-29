@@ -10,7 +10,7 @@ use std::{
         Arc, Weak,
     },
 };
-use tokio::{fs::DirEntry, fs::{read_dir, File, OpenOptions}, io::{AsyncSeekExt, AsyncWriteExt}, sync::Mutex};
+use tokio::{fs::DirEntry, fs::{read_dir, File, OpenOptions}, io::{AsyncSeekExt, AsyncWriteExt}, sync::Mutex, task};
 
 use crate::{
     cache_handlers::CacheHandlerError,
@@ -72,11 +72,16 @@ impl OpenFile {
         let hc_chunks = Self::get_cache_files(hard_cache_root, data_id).await;
         let sc_chunks = Self::get_cache_files(soft_cache_root, data_id).await;
 
-        dbg!(&hc_chunks);
-        dbg!(&sc_chunks);
+        // dbg!(&hc_chunks);
+        // dbg!(&sc_chunks);
 
         let file_id = file_id.to_string();
         let revision = 0;
+
+        if let Some(lru) = &lru {
+            lru.open_file(&data_id).await;
+        }
+        println!("OPEN FILE {} {}", file_id, soft_cache_root.display());
 
         OpenFile {
             file_id,
@@ -183,7 +188,7 @@ impl OpenFile {
         write_hard_cache: bool,
         file_path: &Path,
     ) -> Result<(File, DownloadHandle), CacheHandlerError> {
-        println!("START DL {}", offset);
+        // println!("START DL {}", offset);
 
         let next_chunk = self.get_next_chunk(
             offset,
@@ -274,7 +279,7 @@ impl OpenFile {
         write_hard_cache: bool,
         file_path: &Path,
     ) -> Result<(File, DownloadHandle), CacheHandlerError> {
-        println!("TRANSFER DL {}", offset);
+        // println!("TRANSFER DL {}", offset);
 
         let next_chunk = self.get_next_chunk(
             offset,
@@ -360,7 +365,7 @@ impl OpenFile {
         write_hard_cache: bool,
         file_path: &Path,
     ) -> Result<(File, DownloadHandle), CacheHandlerError> {
-        println!("APPEND DL");
+        // println!("APPEND DL");
 
         let next_chunk = self.get_next_chunk(
             start_offset,
@@ -458,7 +463,7 @@ impl OpenFile {
         source_file_end_offset: u64,
         file_path: &Path,
     ) -> Result<(File, DownloadHandle), CacheHandlerError> {
-        println!("START COPY");
+        // println!("START COPY");
 
         let next_chunk = self.get_next_chunk(offset, Cache::Hard);
 
@@ -478,7 +483,7 @@ impl OpenFile {
         write_file.flush().await?;
 
         // let mut cache_file = File::open(source_file_path).await?;
-        let cache_file_res = File::open(file_path).await;
+        let cache_file_res = File::open(source_file_path).await;
         if let Err(e) = &cache_file_res {
             println!("File error occurred!");
         }
@@ -591,7 +596,7 @@ impl OpenFile {
                         continue;
                     }
                     let end_offset = Arc::new(AtomicU64::new(offset + len));
-                    println!("add_range {} {}", offset, len);
+                    // println!("add_range {} {}", offset, len);
                     br.add_range(
                         offset,
                         len,
@@ -621,6 +626,16 @@ impl OpenFile {
             Some((offset, len))
         } else {
             None
+        }
+    }
+}
+
+impl Drop for OpenFile {
+    fn drop(&mut self) {
+        if let Some(lru) = &self.lru {
+            let lru = lru.clone();
+            let data_id = self.data_id.clone();
+            task::spawn(lru.close_file(data_id));
         }
     }
 }
@@ -706,6 +721,7 @@ impl DownloadStatus {
 
 /// Handle that holds Arc pointer to nothing.
 /// Used to close downloaders when all threads are finished.
+#[derive(Debug)]
 pub struct DownloadHandle {
     pub dl_handle: Arc<Mutex<Option<DownloadStatus>>>,
 }

@@ -62,7 +62,7 @@ impl ScanTrees {
 
         let next_inode = scan_tree
             .get(b"next_inode")
-            .map(|i| u64::from_le_bytes(i.as_ref().try_into().unwrap()))
+            .map(|i| u64::from_le_bytes(i.as_ref().try_into().expect("try_into from_le_bytes failed")))
             .unwrap_or(1);
 
         let next_inode = Arc::new(AtomicU64::new(next_inode));
@@ -106,7 +106,7 @@ pub async fn scan_thread(drive_access: Arc<DriveAccess>) {
     let last_modified_date = trees
         .scan_tree
         .get(b"last_modified_date")
-        .map(|x| i64::from_le_bytes(x.as_ref().try_into().unwrap()))
+        .map(|x| i64::from_le_bytes(x.as_ref().try_into().expect("try_into from_le_bytes failed")))
         .map(|x| Utc.timestamp(x, 0));
 
     let scan_stream = drive_access
@@ -124,7 +124,7 @@ pub async fn scan_thread(drive_access: Arc<DriveAccess>) {
         count, size, name, drive_type, drive_id
     );
 
-    perform_caching(&trees, drive_access).await;
+    //perform_caching(&trees, drive_access).await;
 
     println!("Finished caching {} ({}:{}).", name, drive_type, drive_id);
 }
@@ -134,7 +134,7 @@ async fn watch_thread(trees: ScanTrees, drive_access: Arc<DriveAccess>) {
     let hard_cacher = HardCacher::new(drive_access.clone(), 1_000_000); // TODO: not hardcode min_size
 
     while let Some(changes) = change_stream.next().await {
-        dbg!(&changes);
+        // dbg!(&changes);
         let changes = changes.unwrap();
         let (additions, removals): (Vec<_>, _) = changes.into_iter().partition(|c| {
             if let Change::Added(_) = c {
@@ -282,7 +282,7 @@ async fn perform_caching(trees: &ScanTrees, drive_access: Arc<DriveAccess>) {
     // Start 10 threads for caching
     let (send, recv) = flume::bounded(1);
     let mut thread_joiners = vec![];
-    for _ in 0..1 {
+    for _ in 0..10 {
         thread_joiners.push(tokio::spawn(caching_thread(
             trees.clone(),
             drive_access.clone(),

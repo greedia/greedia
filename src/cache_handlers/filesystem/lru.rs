@@ -1,6 +1,7 @@
 use rkyv::de::deserializers::AllocDeserializer;
 use rkyv::{Archive, Deserialize, Serialize};
 use std::{
+    collections::HashSet,
     convert::TryInto,
     fs,
     ops::Neg,
@@ -8,6 +9,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::mpsc::{channel, Receiver, Sender};
+use walkdir::{DirEntry, WalkDir};
 
 use crate::cache_handlers::filesystem::get_file_cache_chunk_path;
 use crate::db::{get_rkyv, get_rkyv_mut, serialize_rkyv, Db, Tree};
@@ -26,12 +28,7 @@ impl Lru {
         let soft_cache_root = db_path.join("soft_cache");
         let db = db.clone();
         let (cmd_sender, recv) = channel(100);
-        tokio::spawn(run_background(
-            db,
-            size_limit,
-            soft_cache_root,
-            recv,
-        ));
+        tokio::spawn(run_background(db, size_limit, soft_cache_root, recv));
         Lru { cmd_sender }
     }
 
@@ -47,18 +44,33 @@ impl Lru {
             .unwrap();
     }
 
-    pub async fn update_file_size(
-        &self,
-        data_id: &DataIdentifier,
-        offset: u64,
-        size: u64,
-    ) {
+    pub async fn update_file_size(&self, data_id: &DataIdentifier, offset: u64, size: u64) {
         self.cmd_sender
             .clone()
             .send(LruInnerMsg::UpdateFile {
                 data_id: data_id.clone(),
                 offset,
                 size: Some(size),
+            })
+            .await
+            .unwrap();
+    }
+
+    pub async fn open_file(&self, data_id: &DataIdentifier) {
+        self.cmd_sender
+            .clone()
+            .send(LruInnerMsg::OpenFile {
+                data_id: data_id.clone(),
+            })
+            .await
+            .unwrap();
+    }
+
+    pub async fn close_file(self, data_id: DataIdentifier) {
+        self.cmd_sender
+            .clone()
+            .send(LruInnerMsg::CloseFile {
+                data_id,
             })
             .await
             .unwrap();
@@ -71,6 +83,12 @@ enum LruInnerMsg {
         data_id: DataIdentifier,
         offset: u64,
         size: Option<u64>,
+    },
+    OpenFile {
+        data_id: DataIdentifier,
+    },
+    CloseFile {
+        data_id: DataIdentifier,
     },
 }
 
@@ -91,6 +109,9 @@ async fn run_background(
     let data_tree = db.tree(b"lru_data");
 
     let mut space_usage = get_space_usage(&lru_tree);
+
+    let mut open_files = HashSet::new();
+
     while let Some(msg) = recv.recv().await {
         let last_space_usage = space_usage;
         match msg {
@@ -108,11 +129,33 @@ async fn run_background(
                     &mut space_usage,
                 );
             }
+            LruInnerMsg::OpenFile { data_id } => {
+                let hex_md5 = if let DataIdentifier::GlobalMd5(x) = &data_id {
+                    hex::encode(x)
+                } else {
+                    "".to_string()
+                };
+        
+                println!("OPEN  DATA_ID {} (count: {})", hex_md5, open_files.len());
+                open_files.insert(data_id);
+            }
+            LruInnerMsg::CloseFile { data_id } => {
+                let hex_md5 = if let DataIdentifier::GlobalMd5(x) = &data_id {
+                    hex::encode(x)
+                } else {
+                    "".to_string()
+                };
+        
+                println!("CLOSE DATA_ID {} (count: {})", hex_md5, open_files.len());
+
+                open_files.remove(&data_id);
+            }
         }
         handle_cache_cleanup(
             &ts_tree,
             &data_tree,
             &soft_cache_root,
+            &open_files,
             size_limit,
             &mut space_usage,
         );
@@ -136,59 +179,61 @@ fn get_space_usage(lru_tree: &Tree) -> u64 {
 fn handle_cache_cleanup(
     ts_tree: &Tree,
     data_tree: &Tree,
-    soft_cache_root: &Path,
+    cache_root: &Path,
+    open_files: &HashSet<DataIdentifier>,
     size_limit: u64,
     space_usage: &mut u64,
 ) {
-    // println!("space_usage: {}, size_limit: {}", *space_usage, size_limit);
-    // TODO: handle space_usage elsewhere too
-    while *space_usage > size_limit {
-        remove_one_file(ts_tree, data_tree, soft_cache_root, space_usage);
-        if ts_tree.len() == 0 {
-            // If we're over the size limit, but no items exist,
-            // the LRU has become inconsistent, so re-scan.
-            scan_soft_cache(soft_cache_root, space_usage);
+    if ts_tree.is_empty() {
+        // If we're over the size limit, but no items exist,
+        // the LRU has become inconsistent, so re-scan.
+        scan_soft_cache(ts_tree, data_tree, cache_root, space_usage);
+    } else {
+        for x in ts_tree.iter() {
+            let (key, val) = x.unwrap();
+
+            // Get the data_id
+            let ts_data = get_rkyv::<LruTimestampData>(&val);
+            let data_id = ts_data.data_id.deserialize(&mut AllocDeserializer).unwrap();
+
+            // Skip any chunks in currently open files
+            if open_files.contains(&data_id) {
+                continue;
+            }
+
+            // Delete the file, ignoring any
+            let file_path = get_file_cache_chunk_path(cache_root, &data_id, ts_data.offset);
+            if let Err(_) = fs::remove_file(&file_path) {
+                // If we can't delete the file, just ignore the error.
+                // We've likely already recovered the space from it.
+            }
+
+            // Get the data_key to find the file size
+            let data_key = LruDataKey {
+                data_id,
+                offset: ts_data.offset,
+            }
+            .to_bytes();
+
+            // Get the size out of the lru_data entry.
+            // If the data_tree value doesn't exist, just ignore it.
+            if let Some(data_bytes) = data_tree.get(&data_key) {
+                let data_data = get_rkyv::<LruDataData>(&data_bytes);
+                // subtract from our space usage
+                *space_usage = space_usage.saturating_sub(data_data.size);
+            };
+
+            // Delete the lru_data and ts_data entries.
+            data_tree.remove(&data_key);
+            ts_tree.remove(&key);
+
+            if *space_usage < size_limit {
+                return;
+            }
         }
-    }
-}
 
-/// Remove one file from the cache, returning the space saved.
-fn remove_one_file(
-    ts_tree: &Tree,
-    data_tree: &Tree,
-    cache_root: &Path,
-    space_usage: &mut u64,
-) {
-    if let Some((_, data)) = ts_tree.pop_min() {
-        // Get data_key
-        let ts_data = get_rkyv::<LruTimestampData>(&data);
-        let data_id = ts_data.data_id.deserialize(&mut AllocDeserializer).unwrap();
-
-        // Delete file
-        let file_path = get_file_cache_chunk_path(cache_root, &data_id, ts_data.offset);
-        if let Err(_) = fs::remove_file(&file_path) {
-            // If we can't delete the file, just ignore the error.
-            // We've likely already recovered the space from it.
-        }
-
-        let data_key = LruDataKey {
-            data_id,
-            offset: ts_data.offset,
-        }
-        .to_bytes();
-
-        // Get the size out of the lru_data entry.
-        let size = if let Some(data_bytes) = data_tree.get(&data_key) {
-            let data_data = get_rkyv::<LruDataData>(&data_bytes);
-            data_data.size
-        } else {
-            // We failed again. Again, if this happens, just ignore it.
-            0
-        };
-
-        // Delete the lru_data entry.
-        data_tree.remove(&data_key);
-        *space_usage = space_usage.saturating_sub(size);
+        // If we reach here, we've cleaned up everything we can but still aren't under the size limit.
+        // Unfortunately there isn't much we can do here.
     }
 }
 
@@ -205,14 +250,7 @@ fn handle_update_file(
     let ts_key = add_new_ts_key(ts_tree, &data_id, offset);
 
     // Update data key, returning the old ts_key if existed
-    let old_ts_key = update_data_key(
-        data_tree,
-        data_id,
-        offset,
-        ts_key,
-        size,
-        space_usage,
-    );
+    let old_ts_key = update_data_key(data_tree, data_id, offset, ts_key, size, space_usage);
 
     // Delete old_ts_key if existed
     if let Some(old_ts_key) = old_ts_key {
@@ -267,11 +305,7 @@ fn update_data_key(
 }
 
 /// Add a new key to the lru_timestamp tree, adding extra data to the key if needed.
-fn add_new_ts_key(
-    ts_tree: &Tree,
-    data_id: &DataIdentifier,
-    offset: u64,
-) -> [u8; 9] {
+fn add_new_ts_key(ts_tree: &Tree, data_id: &DataIdentifier, offset: u64) -> [u8; 9] {
     let data = LruTimestampData {
         data_id: data_id.clone(),
         offset,
@@ -298,8 +332,108 @@ fn add_new_ts_key(
     panic!("Failed to add LRU timestamp extra_val 256 times")
 }
 
+/// Check if a file is a chunk file.
+fn is_chunk_file(entry: &DirEntry) -> bool {
+    entry.file_type().is_file()
+        && entry
+            .file_name()
+            .to_str()
+            .map(|s| s.starts_with("chunk_"))
+            .unwrap_or(false)
+}
+
+/// From a path, get the DataIdentifier, offset, size, and timestamp of a chunk.
+fn dir_entry_to_data_key(entry: &DirEntry) -> Option<(DataIdentifier, u64, u64, u64)> {
+    // We're assuming only GlobalMd5 exists for now.
+    // This will break when DriveSpecific is added to DataIdentifier.
+    // TODO: make more generic.
+
+    let path = entry.path();
+
+    let file_name = path.file_name()?.to_str()?;
+
+    // Assume the file name starts with chunk_
+    let (_, offset) = file_name.split_at(6);
+    let offset = offset.parse().ok()?;
+    let meta = entry.metadata().ok()?;
+    let len = meta.len();
+    let ts = meta.created().ok()?;
+    let ts = ts.duration_since(UNIX_EPOCH).ok()?.as_millis() as u64;
+
+    // Get the DataIdentifier (TODO: handle more than GlobalMd5)
+    let md5_hex = path.parent()?.file_name()?.to_str()?;
+    let md5_bytes = hex::decode(md5_hex).ok()?;
+    let data_id = DataIdentifier::GlobalMd5(md5_bytes);
+
+    Some((data_id, offset, len, ts))
+}
+
 /// Scan all files in the soft cache, to rebuild the LRU from scratch.
-fn scan_soft_cache(soft_cache_root: &Path, space_usage: &mut u64) {
+fn scan_soft_cache(
+    ts_tree: &Tree,
+    data_tree: &Tree,
+    soft_cache_root: &Path,
+    space_usage: &mut u64,
+) {
+    // Clear ts_tree and data_tree, and start from scratch
+    ts_tree.clear();
+    data_tree.clear();
+    *space_usage = 0;
+
+    for entry in WalkDir::new(soft_cache_root)
+        .into_iter()
+        .filter_entry(is_chunk_file)
+    {
+        let entry = entry.unwrap();
+        if let Some((data_id, offset, size, ts)) = dir_entry_to_data_key(&entry) {
+            let ts_data = LruTimestampData {
+                data_id: data_id.clone(),
+                offset,
+            }
+            .to_bytes();
+
+            // Add a ts key and data
+            let mut res_ts_key = None;
+            for extra_val in 0..u8::MAX {
+                let ts_key = LruTimestampKey {
+                    timestamp: ts,
+                    extra_val,
+                }
+                .to_bytes();
+
+                if ts_tree.compare_and_swap(
+                    &ts_key,
+                    None as Option<&[u8]>,
+                    Some(ts_data.as_slice()),
+                ) {
+                    res_ts_key = Some(ts_key);
+                    break;
+                }
+            }
+
+            if let Some(ts_key) = res_ts_key {
+                // Add data key and data
+                let data_key = LruDataKey {
+                    data_id: data_id.clone(),
+                    offset,
+                }
+                .to_bytes();
+
+                let data_data = LruDataData {
+                    timestamp_key: ts_key,
+                    size,
+                }
+                .to_bytes();
+
+                data_tree.insert(data_key, data_data);
+                *space_usage += size;
+            } else {
+                // Got >255 millisecond-matching timestamps, so just skip this chunk.
+                continue;
+            }
+        }
+    }
+
     todo!()
 }
 

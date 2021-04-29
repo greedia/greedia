@@ -13,9 +13,7 @@ use rclone_crypt::decrypter::{self, Decrypter};
 use rkyv::de::deserializers::AllocDeserializer;
 use rkyv::Deserialize;
 
-use crate::{
-    cache_handlers::crypt_passthrough::CryptPassthrough, db::get_rkyv, types::DataIdentifier,
-};
+use crate::{cache_handlers::{CacheHandlerError, crypt_passthrough::CryptPassthrough}, db::get_rkyv, types::DataIdentifier};
 use crate::{
     cache_handlers::{CacheDriveHandler, CacheFileHandler},
     crypt_context::CryptContext,
@@ -77,8 +75,8 @@ impl DriveAccess {
         &self,
         inode: u64,
         offset: u64,
-    ) -> TypeResult<Box<dyn CacheFileHandler>> {
-        if let Some(drive_item_bytes) = self.inode_tree.get(inode.to_le_bytes()) {
+    ) -> Result<TypeResult<Box<dyn CacheFileHandler>>, CacheHandlerError> {
+        Ok(if let Some(drive_item_bytes) = self.inode_tree.get(inode.to_le_bytes()) {
             let drive_item = get_rkyv::<DriveItem>(&drive_item_bytes);
             if let ArchivedDriveItemData::FileItem {
                 file_name: _,
@@ -87,12 +85,11 @@ impl DriveAccess {
             } = &drive_item.data
             {
                 let access_id = drive_item.access_id.to_string();
-                let data_id = data_id.deserialize(&mut AllocDeserializer).unwrap();
+                let data_id = data_id.deserialize(&mut AllocDeserializer).map_err(|_| CacheHandlerError::DeserializeError)?;
                 let mut file = self
                     .cache_handler
                     .open_file(access_id, data_id, *size, offset, false)
-                    .await
-                    .unwrap();
+                    .await?;
 
                 for cc in self.crypts.iter() {
                     file.seek_to(0).await;
@@ -101,9 +98,9 @@ impl DriveAccess {
                     file.read_exact(&mut header).await;
                     if Decrypter::new(&cc.cipher.file_key, &header).is_ok() {
                         file.seek_to(0).await;
-                        return TypeResult::IsType(Box::new(
-                            CryptPassthrough::new(&cc, file).await.unwrap(),
-                        ));
+                        return Ok(TypeResult::IsType(Box::new(
+                            CryptPassthrough::new(&cc, offset, file).await.ok_or(CacheHandlerError::CryptPassthroughError)?,
+                        )));
                     }
                 }
 
@@ -113,7 +110,7 @@ impl DriveAccess {
             }
         } else {
             TypeResult::DoesNotExist
-        }
+        })
     }
 
     // Clear an item from the cache, if exists
@@ -123,9 +120,9 @@ impl DriveAccess {
 
     /// Check if a directory exists and is a directory.
     /// If it is, return bool that states if scanning is in progress.
-    pub fn check_dir(&self, inode: u64) -> TypeResult<bool> {
+    pub fn check_dir(&self, inode: u64) -> Result<TypeResult<bool>, CacheHandlerError> {
         let scanning = true; // TODO: not hardcode scanning
-        if let Some(inode_data) = self.inode_tree.get(inode.to_le_bytes()) {
+        Ok(if let Some(inode_data) = self.inode_tree.get(inode.to_le_bytes()) {
             let item = get_rkyv::<DriveItem>(&inode_data);
             if let ArchivedDriveItemData::Dir { items: _ } = item.data {
                 TypeResult::IsType(scanning)
@@ -134,7 +131,7 @@ impl DriveAccess {
             }
         } else {
             TypeResult::DoesNotExist
-        }
+        })
     }
 
     pub fn lookup_item<T>(
@@ -159,6 +156,7 @@ impl DriveAccess {
                         .map(|s| Cow::Owned(s))
                 })
                 .unwrap_or_else(|| Cow::Borrowed(file_name))
+            // TODO: report crypted size as well
         } else {
             Cow::Borrowed(file_name)
         };
@@ -247,6 +245,6 @@ impl DriveAccess {
     fn lookup_inode(&self, parent_inode: u64, file_name: &str) -> Option<u64> {
         let lookup_bytes = make_lookup_key(parent_inode, file_name);
         let inode_bytes = self.lookup_tree.get(lookup_bytes.as_slice())?;
-        Some(u64::from_le_bytes(inode_bytes.as_ref().try_into().unwrap()))
+        Some(u64::from_le_bytes(inode_bytes.as_ref().try_into().ok()?))
     }
 }

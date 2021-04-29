@@ -77,12 +77,16 @@ pub struct GdriveFileInfo {
     pub size: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Archive, RkyvSerialize, RkyvDeserialize)]
+/// Identifier used to find the cache storage on disk for a particular file.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Archive, RkyvSerialize, RkyvDeserialize)]
 pub enum DataIdentifier {
+    /// Data is referred to globally within Greedia by an md5 hash.
+    GlobalMd5(Vec<u8>),
+    // /// Data is referred to by a drive-specific ID.
+    // DriveUnique(Vec<u8>, Vec<u8>), // probably needed for future S3, etc support
+    /// The sctest functionality doesn't store cache data, so it can use None.
     #[cfg(feature = "sctest")]
     None,
-    GlobalMd5(Vec<u8>),
-    //DriveUnique(Vec<u8>, Vec<u8>), // probably needed for future S3, etc support
 }
 
 #[derive(Debug, PartialEq, Archive, RkyvSerialize, RkyvDeserialize)]

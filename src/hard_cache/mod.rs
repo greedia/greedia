@@ -408,12 +408,12 @@ impl HcDownloadCacherItem {
                     self.item.access_id.clone(),
                     self.item.data_id.clone(),
                     self.item.size,
-                    offset,
+                    0,
                     true,
                 )
                 .await?;
 
-            if let Some(reader) = CryptPassthrough::new(crypt_context, reader).await {
+            if let Some(reader) = CryptPassthrough::new(crypt_context, offset, reader).await {
                 return Ok(Box::new(reader));
             }
         }

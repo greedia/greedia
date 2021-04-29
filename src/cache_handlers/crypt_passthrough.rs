@@ -12,13 +12,12 @@ pub struct CryptPassthrough {
     cur_block: u64,
     /// The last block of decrypted bytes, if any.
     last_bytes: Option<Bytes>,
-    /// Current offset of the crypted layer.
-    crypt_offset: u64,
 }
 
 impl CryptPassthrough {
     pub async fn new(
         ctx: &CryptContext,
+        offset: u64,
         mut reader: Box<dyn CacheFileHandler>,
     ) -> Option<CryptPassthrough> {
         reader.seek_to(0).await;
@@ -29,13 +28,16 @@ impl CryptPassthrough {
         let cur_block = 0;
         let last_bytes = None;
 
-        Some(CryptPassthrough {
+        let mut cpt = CryptPassthrough {
             decrypter,
             reader,
             cur_block,
             last_bytes,
-            crypt_offset: 0,
-        })
+        };
+
+        cpt.seek_to(offset).await;
+
+        Some(cpt)
     }
 
     async fn handle_read_into(&mut self, len: usize, mut buf: Option<&mut [u8]>) -> usize {
@@ -91,8 +93,7 @@ impl CacheFileHandler for CryptPassthrough {
     }
 
     async fn seek_to(&mut self, offset: u64) {
-        println!("crypt seek_to {}", offset);
-        self.crypt_offset = offset;
+        // println!("crypt seek_to {}", offset);
 
         // The block to start at - note the data may span more than one block.
         // For simplicity, each block is read and decrypted individually.

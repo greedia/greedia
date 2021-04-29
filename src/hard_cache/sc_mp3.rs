@@ -43,7 +43,6 @@ impl SmartCacher for ScMp3 {
         // Next, try to scan for the MP3 header.
 
         // Get a decently-sized buffer for scanning.
-        println!("mp3 scan header, starting at {}", header_scan_offset);
         let header_scan_buffer = action
             .read_data_bridged(header_scan_offset, 65536, None)
             .await?;
@@ -51,19 +50,15 @@ impl SmartCacher for ScMp3 {
         // Now, look for the actual MP3 header.
         let (mp3_header_offset, mp3_header_data) =
             find_mp3_header(&header_scan_buffer).ok_or(Cancel)?;
-        println!("found mp3_header at {}", mp3_header_offset + header_scan_offset);
 
         let mp3_header_offset = mp3_header_offset + header_scan_offset;
 
         // Get the bitrate out of the header.
         // TODO: handle VBR. For now this assumes CBR.
         let mp3_header = get_mp3_header(mp3_header_data).ok_or(Cancel)?;
-        println!("bitrate {}, seconds {}", mp3_header.bitrate, config.seconds);
 
         // Using the bitrate, estimate how many bytes are needed to download.
         let data_length = mp3_header.bitrate * config.seconds;
-        println!("data_length {}", data_length);
-        println!("cache to {}", mp3_header_offset + data_length);
 
         // Download up to that offset.
         action.cache_data_to(mp3_header_offset + data_length).await?;

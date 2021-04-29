@@ -14,7 +14,9 @@ pub enum DownloaderError {
     #[error("Reqwest error")]
     Reqwest(#[from] reqwest::Error),
     #[error("Download quota for this file has been exceeded")]
-    QuotaExceeded
+    QuotaExceeded,
+    #[error("Range not satisfiable ({})", _0)]
+    RangeNotSatisfiable(String)
 }
 
 pub trait DownloaderClient {

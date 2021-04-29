@@ -442,7 +442,7 @@ async fn open_request(
     let mut access_token = access_token_mutex.lock().await.clone();
     let mut retry = false;
 
-    for _ in 0..5 {
+    for _ in 0..10 {
         if bg_request {
             if retry {
                 rate_limiter.bg_retry_wait().await;
@@ -457,7 +457,6 @@ async fn open_request(
             }
         }
 
-        println!("MAKE REQUEST");
         let res = http_client
             .get(&url)
             .bearer_auth(access_token.secret())
@@ -485,8 +484,7 @@ async fn open_request(
                         .await;
                     }
                     416 => {
-                        println!("416416416416416416416416416416416416416416416416 Range not satifiable: {}", range_string);
-                        // Probably best to return an empty stream here?
+                        return Err(DownloaderError::RangeNotSatisfiable(range_string));
                     }
                     403 => {
                         if let Ok(error_json) = r.json::<GErrorTop>().await {
@@ -501,6 +499,19 @@ async fn open_request(
                     // Rate limit or server error, retry request
                     _ => {
                         println!("Other: {}", r.status());
+                        if bg_request {
+            if retry {
+                rate_limiter.bg_retry_wait().await;
+            } else {
+                rate_limiter.bg_wait().await;
+            }
+        } else {
+            if retry {
+                rate_limiter.retry_wait().await;
+            } else {
+                rate_limiter.wait().await;
+            }
+        }
                     }
                 }
             }

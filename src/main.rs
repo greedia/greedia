@@ -107,11 +107,20 @@ async fn run(config_path: &Path) -> Result<()> {
     // Initialize cache handlers
     let mut drives = Vec::new();
     if let Some(gdrives) = cfg.gdrive {
-        drives.extend(get_gdrive_drives(&cfg.caching.db_path, lru.clone(), db.clone(), gdrives).await?);
+        drives.extend(
+            get_gdrive_drives(&cfg.caching.db_path, lru.clone(), db.clone(), gdrives).await?,
+        );
     }
     if let Some(timecode_drives) = cfg.timecode {
-        drives
-            .extend(get_timecode_drives(&cfg.caching.db_path, lru.clone(), db.clone(), timecode_drives).await?);
+        drives.extend(
+            get_timecode_drives(
+                &cfg.caching.db_path,
+                lru.clone(),
+                db.clone(),
+                timecode_drives,
+            )
+            .await?,
+        );
     }
 
     // Start a scanner for each cache handler
@@ -250,8 +259,15 @@ async fn sctest(
     fill_byte: Option<String>,
     fill_random: bool,
 ) -> Result<()> {
-    let meta = input.metadata().unwrap();
-    let file_name = input.file_name().unwrap().to_str().unwrap().to_string();
+    let meta = input
+        .metadata()
+        .expect("sctest could not get metadata for file");
+    let file_name = input
+        .file_name()
+        .expect("sctest could not get input file name")
+        .to_str()
+        .expect("sctest could not convert file name to string")
+        .to_string();
     let size = meta.len();
 
     let hard_cacher = HardCacher::new_sctest(input, output, seconds, fill_byte, fill_random);

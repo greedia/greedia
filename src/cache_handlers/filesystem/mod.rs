@@ -61,6 +61,7 @@ struct ReadData {
     chunk_start_offset: u64,
 }
 
+#[derive(Debug)]
 enum CurrentChunk {
     /// Currently downloading data from download provider.
     /// This can also be used to "download" from soft_cache to hard_cache.
@@ -281,6 +282,7 @@ impl CacheFileHandler for FilesystemCacheFileHandler {
     }
 
     async fn seek_to(&mut self, offset: u64) {
+        // println!("reader seek_to {}", offset);
         if offset == self.offset {
             return;
         }
@@ -293,7 +295,8 @@ impl CacheFileHandler for FilesystemCacheFileHandler {
 impl FilesystemCacheFileHandler {
     /// Handle the read_into and cache_data methods
     async fn handle_read_into(&mut self, len: usize, mut buf: Option<&mut [u8]>) -> usize {
-        // println!("handle_read_into len {} buf {} offset {} size {}", len, buf.is_some(), self.offset, self.size);
+        // println!("handle_read_into len {} buf {} offset {} size {}, hc {}", len, buf.is_some(), self.offset, self.size, self.write_hard_cache);
+        // dbg!(&self.current_chunk);
         // EOF short-circuit
         if self.offset == self.size || len == 0 {
             return 0;
@@ -305,8 +308,11 @@ impl FilesystemCacheFileHandler {
             self.current_chunk = Some(new_chunk);
         }
 
-        for _ in 0..3 {
+        // dbg!(&self.current_chunk);
+
+        for _ in 0..4 {
             let handle_chunk_res = self.handle_chunk(len, &mut buf).await;
+            // dbg!(&handle_chunk_res);
             match handle_chunk_res {
                 Reader::Data(data_read) => {
                     return data_read;
@@ -317,6 +323,7 @@ impl FilesystemCacheFileHandler {
                 }
                 Reader::NeedsNewChunk => {
                     let new_chunk = self.new_current_chunk(None).await;
+                    // dbg!(&new_chunk);
                     self.current_chunk = Some(new_chunk);
                 }
                 Reader::DowngradeToReader => {
@@ -355,6 +362,7 @@ impl FilesystemCacheFileHandler {
                     } else {
                         // Otherwise, lock the OpenFile and try to read/download from there
                         let mut of = self.handle.lock().await;
+                        // dbg!();
                         Self::downloader_read(read_data, &mut of, buf, len, self.offset).await
                     }
                 }
@@ -395,6 +403,7 @@ impl FilesystemCacheFileHandler {
         // then simplify this function a bunch
         let (chunk, is_hard_cache) = of.get_chunk_at(self.offset, Cache::Any);
 
+        // dbg!(&chunk, is_hard_cache);
         // Where are we?
         match chunk {
             // We're in the middle of a data chunk
@@ -885,6 +894,7 @@ impl FilesystemCacheFileHandler {
                             // Luckily this code isn't called very often, but there's definitely a
                             // cleaner way to do this.
                             let mut temp_buf = vec![0u8; 65536];
+                            // dbg!(&cache_reader);
                             let read_len = cache_reader.read(&mut temp_buf).await.unwrap();
                             if read_len == 0 {
                                 Reader::NeedsNewChunk
@@ -1028,7 +1038,11 @@ fn get_file_cache_path(cache_root: &Path, data_id: &DataIdentifier) -> PathBuf {
             let hex_md5 = hex::encode(md5);
             let dir_1 = hex_md5.get(0..2).unwrap();
             let dir_2 = hex_md5.get(2..4).unwrap();
-            cache_root.join("global_md5").join(dir_1).join(dir_2).join(hex_md5)
+            cache_root
+                .join("global_md5")
+                .join(dir_1)
+                .join(dir_2)
+                .join(hex_md5)
         }
         #[cfg(feature = "sctest")]
         DataIdentifier::None => PathBuf::new(),
@@ -1045,10 +1059,10 @@ pub fn get_file_cache_chunk_path(
 
 #[cfg(test)]
 mod test {
+    use std::env;
+
     use super::*;
-    use crate::{
-        cache_handlers::filesystem::FilesystemCacheHandler, downloaders::timecode::TimecodeDrive,
-    };
+    use crate::{cache_handlers::{crypt_passthrough::CryptPassthrough, filesystem::FilesystemCacheHandler}, crypt_context::CryptContext, downloaders::{gdrive::GDriveClient, timecode::TimecodeDrive, DownloaderClient}};
 
     use proptest::{
         arbitrary::any,
@@ -1061,7 +1075,7 @@ mod test {
 
     const MAX_FILE_SIZE: u64 = 1024u64.pow(2) * 100; // 100MB
     const MAX_OFFSET: u64 = MAX_FILE_SIZE - 11;
-    const NUM_ACTIONS: usize = 10000; // Number of actions to run per test
+    const NUM_ACTIONS: usize = 10; // Number of actions to run per test
     const MAX_READ_LEN: u64 = 65535;
     const MAX_READ_EXACT_LEN: u64 = 65535;
     const MAX_CACHE_LEN: u64 = 65535;
@@ -1149,8 +1163,20 @@ mod test {
         }
     }
 
+    proptest! {
+        #![proptest_config(ProptestConfig {
+            max_shrink_iters: 0,
+            fork: false,
+            .. ProptestConfig::default()
+        })]
+        #[test]
+        fn prop_test_crypt_actions(init_offsets in gen_init_offsets(), init_hard_caches in gen_init_hard_caches(), actions in gen_vec_of_test_action()) {
+            Runtime::new().unwrap().block_on(tester_crypt(&init_offsets, &init_hard_caches, actions))
+        }
+    }
+
     async fn tester(init_offsets: &[u64], init_hard_cache: &[bool], actions: Vec<TestAction>) {
-        let d = Arc::new(TimecodeDrive {
+        let d = Box::new(TimecodeDrive {
             root_name: "test".to_string(),
         });
 
@@ -1158,6 +1184,66 @@ mod test {
         let data_id = DataIdentifier::GlobalMd5(vec![0, 0, 0, 0]);
         let file_size = MAX_FILE_SIZE;
 
+        tester_inner(
+            init_offsets,
+            init_hard_cache,
+            actions,
+            d,
+            file_id,
+            data_id,
+            file_size,
+            None,
+        )
+        .await
+    }
+
+    async fn tester_crypt(
+        init_offsets: &[u64],
+        init_hard_cache: &[bool],
+        actions: Vec<TestAction>,
+    ) {
+        let client_id = env::var("TEST_CLIENT_ID").unwrap();
+        let client_secret = env::var("TEST_CLIENT_SECRET").unwrap();
+        let refresh_token = env::var("TEST_REFRESH_TOKEN").unwrap();
+        let drive_id = env::var("TEST_DRIVE_ID").unwrap();
+        let file_id = env::var("TEST_FILE_ID").unwrap();
+        let data_id_hex = env::var("TEST_DATA_ID").unwrap();
+        let password1 = env::var("TEST_PASSWORD").unwrap();
+        let password2 = env::var("TEST_PASSWORD2").unwrap();
+        let data_id = DataIdentifier::GlobalMd5(hex::decode(data_id_hex).unwrap());
+        let file_size = 1073741824;
+
+        let crypt_context = CryptContext::new(&password1, &password2).unwrap();
+
+        let c = GDriveClient::new(&client_id, &client_secret, &refresh_token)
+            .await
+            .unwrap();
+
+        let d = c.open_drive(&drive_id);
+
+        tester_inner(
+            init_offsets,
+            init_hard_cache,
+            actions,
+            d,
+            &file_id,
+            data_id,
+            file_size,
+            Some(crypt_context),
+        )
+        .await
+    }
+
+    async fn tester_inner(
+        init_offsets: &[u64],
+        init_hard_cache: &[bool],
+        actions: Vec<TestAction>,
+        d: Box<dyn DownloaderDrive>,
+        file_id: &str,
+        data_id: DataIdentifier,
+        file_size: u64,
+        crypt_context: Option<CryptContext>,
+    ) {
         let keep_path = false;
         let test_path = tempfile::tempdir().unwrap();
         let (hard_cache_root, soft_cache_root) = if keep_path {
@@ -1170,13 +1256,31 @@ mod test {
             )
         };
 
-        let fsch = FilesystemCacheHandler::new("main", None, &hard_cache_root, &soft_cache_root, d);
+        let fsch = FilesystemCacheHandler::new(
+            "main",
+            None,
+            &hard_cache_root,
+            &soft_cache_root,
+            Arc::from(d),
+        );
 
         let mut offsets = init_offsets.to_vec();
         let mut files = vec![];
         for f in 0..3 {
-            files.push(
-                fsch.open_file(
+            if let Some(ctx) = &crypt_context {
+                let reader = fsch.open_file(
+                    file_id.to_owned(),
+                    data_id.clone(),
+                    file_size,
+                    0,
+                    init_hard_cache[f],
+                )
+                .await
+                .unwrap();
+                let file: Box<dyn CacheFileHandler> = Box::new(CryptPassthrough::new(ctx, offsets[f], reader).await.unwrap());
+                files.push(file)
+            } else {
+                files.push(fsch.open_file(
                     file_id.to_owned(),
                     data_id.clone(),
                     file_size,
@@ -1184,10 +1288,14 @@ mod test {
                     init_hard_cache[f],
                 )
                 .await
-                .unwrap(),
-            )
+                .unwrap())
+            }
         }
 
+        dbg!(&init_offsets);
+        dbg!(&init_hard_cache);
+
+        println!("BEGIN TEST");
         for action in actions {
             println!("\n\n\n\n\n\nACTION: {:?}", action);
             match action {
@@ -1201,7 +1309,21 @@ mod test {
                         File1 => 1,
                         File2 => 2,
                     };
-                    files[f] = fsch
+                    files[f] = if let Some(ctx) = &crypt_context {
+                        let reader = fsch
+                        .open_file(
+                            file_id.to_owned(),
+                            data_id.clone(),
+                            file_size,
+                            0,
+                            hard_cache,
+                        )
+                        .await
+                        .unwrap();
+
+                        Box::new(CryptPassthrough::new(ctx, offset, reader).await.unwrap())
+                    } else {
+                        fsch
                         .open_file(
                             file_id.to_owned(),
                             data_id.clone(),
@@ -1210,7 +1332,8 @@ mod test {
                             hard_cache,
                         )
                         .await
-                        .unwrap();
+                        .unwrap()
+                    };
                     offsets[f] = offset;
                 }
                 TestAction::ReadData { file, len } => {
@@ -1259,6 +1382,7 @@ mod test {
                 }
             }
         }
+        println!("END TEST");
     }
 
     /// Test cache chunk splitting with download

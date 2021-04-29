@@ -18,6 +18,10 @@ pub enum CacheHandlerError {
     DownloaderError(#[from] DownloaderError),
     #[error("AppendChunkError at start_offset: {start_offset}")]
     AppendChunkError { start_offset: u64 },
+    #[error("Could not deserialize DataID")]
+    DeserializeError,
+    #[error("Could not build CryptPassthrough")]
+    CryptPassthroughError,
 }
 
 impl CacheHandlerError {

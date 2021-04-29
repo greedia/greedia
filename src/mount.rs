@@ -1,9 +1,4 @@
-use crate::{
-    cache_handlers::CacheFileHandler,
-    drive_access::{DriveAccess, TypeResult},
-    fh_map::FhMap,
-    types::ArchivedDriveItemData,
-};
+use crate::{cache_handlers::{CacheFileHandler, CacheHandlerError}, drive_access::{DriveAccess, TypeResult}, fh_map::FhMap, types::ArchivedDriveItemData};
 use anyhow::Result;
 use polyfuse::{
     op,
@@ -33,11 +28,11 @@ pub async fn mount_thread(drives: Vec<Arc<DriveAccess>>, mountpoint: PathBuf) {
     config.mount_option("ro");
     config.mount_option("allow_other");
 
-    let session = AsyncSession::mount(mountpoint, config).await.unwrap();
+    let session = AsyncSession::mount(mountpoint, config).await.expect("Could not mount FUSE filesystem");
 
     let fs = Arc::new(GreediaFS::new(drives));
 
-    while let Some(req) = session.next_request().await.unwrap() {
+    while let Some(req) = session.next_request().await.expect("Could not process FUSE request") {
         let fs = fs.clone();
 
         let _: JoinHandle<Result<()>> = task::spawn(async move {
@@ -81,7 +76,7 @@ struct GreediaFS {
 impl GreediaFS {
     pub fn new(drives: Vec<Arc<DriveAccess>>) -> GreediaFS {
         let start = SystemTime::now();
-        let start_time = start.duration_since(UNIX_EPOCH).unwrap();
+        let start_time = start.duration_since(UNIX_EPOCH).expect("Could not get duration since unix epoch");
         let file_handles = FhMap::new();
         GreediaFS {
             drives,
@@ -249,9 +244,9 @@ impl GreediaFS {
         Some(reply_entry)
     }
 
-    async fn open_drive(&self, drive: u16, local_inode: u64) -> TypeResult<OpenOut> {
-        if let Some(drive_access) = self.drives.get(drive as usize) {
-            match drive_access.open_file(local_inode, 0).await {
+    async fn open_drive(&self, drive: u16, local_inode: u64) -> Result<TypeResult<OpenOut>, CacheHandlerError> {
+        Ok(if let Some(drive_access) = self.drives.get(drive as usize) {
+            match drive_access.open_file(local_inode, 0).await? {
                 TypeResult::IsType(reader) => {
                     let fh = self
                         .file_handles
@@ -272,7 +267,7 @@ impl GreediaFS {
             }
         } else {
             TypeResult::DoesNotExist
-        }
+        })
     }
 
     async fn opendir_root(&self) -> OpenOut {
@@ -282,9 +277,9 @@ impl GreediaFS {
         open_out
     }
 
-    async fn opendir_drive(&self, drive: u16, local_inode: u64) -> TypeResult<OpenOut> {
-        if let Some(drive_access) = self.drives.get(drive as usize) {
-            match drive_access.check_dir(local_inode) {
+    async fn opendir_drive(&self, drive: u16, local_inode: u64) -> Result<TypeResult<OpenOut>, CacheHandlerError> {
+        Ok(if let Some(drive_access) = self.drives.get(drive as usize) {
+            match drive_access.check_dir(local_inode)? {
                 TypeResult::IsType(scanning) => {
                     let mut open_out = OpenOut::default();
                     open_out.fh(0);
@@ -297,7 +292,7 @@ impl GreediaFS {
             }
         } else {
             TypeResult::DoesNotExist
-        }
+        })
     }
 
     async fn do_getattr(&self, req: &Request, op: op::Getattr<'_>) -> io::Result<()> {
@@ -367,13 +362,17 @@ impl GreediaFS {
         let inode = op.ino();
         let open = match self.map_inode(inode) {
             Inode::Drive(drive, local_inode) => self.open_drive(drive, local_inode).await,
-            _ => TypeResult::DoesNotExist,
+            _ => Ok(TypeResult::DoesNotExist),
         };
 
         match open {
-            TypeResult::IsType(open_out) => req.reply(open_out)?,
-            TypeResult::IsNotType => req.reply_error(libc::EISDIR)?,
-            TypeResult::DoesNotExist => req.reply_error(libc::ENOENT)?,
+            Ok(TypeResult::IsType(open_out)) => req.reply(open_out)?,
+            Ok(TypeResult::IsNotType) => req.reply_error(libc::EISDIR)?,
+            Ok(TypeResult::DoesNotExist) => req.reply_error(libc::ENOENT)?,
+            Err(_) => {
+                // TODO: log error here
+                req.reply_error(libc::EIO)?
+            }
         }
 
         Ok(())
@@ -382,15 +381,16 @@ impl GreediaFS {
     async fn do_opendir(&self, req: &Request, op: op::Opendir<'_>) -> io::Result<()> {
         let inode = op.ino();
         let opendir = match self.map_inode(inode) {
-            Inode::Root => TypeResult::IsType(self.opendir_root().await),
+            Inode::Root => Ok(TypeResult::IsType(self.opendir_root().await)),
             Inode::Drive(drive, local_inode) => self.opendir_drive(drive, local_inode).await,
-            _ => TypeResult::DoesNotExist,
+            _ => Ok(TypeResult::DoesNotExist),
         };
 
         match opendir {
-            TypeResult::IsType(open_out) => req.reply(open_out)?,
-            TypeResult::IsNotType => req.reply_error(libc::ENOTDIR)?,
-            TypeResult::DoesNotExist => req.reply_error(libc::ENOENT)?,
+            Ok(TypeResult::IsType(open_out)) => req.reply(open_out)?,
+            Ok(TypeResult::IsNotType) => req.reply_error(libc::ENOTDIR)?,
+            Ok(TypeResult::DoesNotExist) => req.reply_error(libc::ENOENT)?,
+            Err(_) => req.reply_error(libc::EIO)?,
         }
 
         Ok(())

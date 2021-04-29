@@ -47,11 +47,6 @@ impl Tree {
         self.tree.insert(key, value).unwrap()
     }
 
-    /// Get the minimum key and value from the DB tree.
-    pub fn pop_min(&self) -> Option<(IVec, IVec)> {
-        self.tree.pop_min().unwrap()
-    }
-
     /// Remove a value from the DB tree.
     pub fn remove<K: AsRef<[u8]>>(&self, key: K) -> Option<IVec> {
         self.tree.remove(key).unwrap()
@@ -67,8 +62,12 @@ impl Tree {
         Ok(Ok(())) == self.tree.compare_and_swap(key, old, new)
     }
 
-    pub fn len(&self) -> usize {
-        self.tree.len()
+    pub fn is_empty(&self) -> bool {
+        self.tree.is_empty()
+    }
+
+    pub fn clear(&self) {
+        self.tree.clear().unwrap()
     }
 
     pub fn iter(&self) -> Iter {

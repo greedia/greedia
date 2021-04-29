@@ -59,7 +59,7 @@ impl Matroska {
                         if val != "matroska" && val != "webm" {
                             return Err(MatroskaError::NotMatroska);
                         }
-                        println!("We have file type {}", val);
+                        // println!("We have file type {}", val);
                     }
                 }
             }

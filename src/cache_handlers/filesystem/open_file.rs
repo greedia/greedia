@@ -81,7 +81,7 @@ impl OpenFile {
         if let Some(lru) = &lru {
             lru.open_file(&data_id).await;
         }
-        println!("OPEN FILE {} {}", file_id, soft_cache_root.display());
+        // println!("OPEN FILE {} {}", file_id, soft_cache_root.display());
 
         OpenFile {
             file_id,

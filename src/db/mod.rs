@@ -44,7 +44,6 @@ impl Tree {
         K: AsRef<[u8]>,
         V: Into<IVec>,
     {
-        println!("db insert");
         self.tree.insert(key, value).unwrap()
     }
 

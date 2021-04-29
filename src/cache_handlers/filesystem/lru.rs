@@ -139,7 +139,7 @@ async fn run_background(
                     "".to_string()
                 };
         
-                println!("OPEN  DATA_ID {} (count: {})", hex_md5, open_files.len());
+                // println!("OPEN  DATA_ID {} (count: {})", hex_md5, open_files.len());
                 open_files.insert(data_id);
             }
             LruInnerMsg::CloseFile { data_id } => {
@@ -149,7 +149,7 @@ async fn run_background(
                     "".to_string()
                 };
         
-                println!("CLOSE DATA_ID {} (count: {})", hex_md5, open_files.len());
+                // println!("CLOSE DATA_ID {} (count: {})", hex_md5, open_files.len());
 
                 open_files.remove(&data_id);
             }

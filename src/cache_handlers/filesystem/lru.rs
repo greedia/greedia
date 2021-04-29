@@ -187,6 +187,7 @@ fn handle_cache_cleanup(
     if ts_tree.is_empty() {
         // If we're over the size limit, but no items exist,
         // the LRU has become inconsistent, so re-scan.
+        println!("LRU inconsistent; tree empty, but space_usage is {}", *space_usage);
         scan_soft_cache(ts_tree, data_tree, cache_root, space_usage);
     } else {
         for x in ts_tree.iter() {
@@ -437,8 +438,6 @@ fn scan_soft_cache(
             }
         }
     }
-
-    todo!()
 }
 
 /// Key used for the LruData database tree.

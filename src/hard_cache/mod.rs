@@ -249,9 +249,6 @@ impl HardCacher {
                 }
                 Err(ScErr::Cancel) => {
                     println!("Preferred cacher {} failed, trying next...", spec.name);
-                    let mut fp = OpenOptions::new().append(true).open("/home/main/failed_preferred.txt").await.unwrap();
-                    let out_str = format!("{}\n", &file_item_temp.file_name);
-                    fp.write_all(out_str.as_bytes()).await.unwrap();
                 }
                 Err(ScErr::CacheHandlerError(e)) => {
                     Err(e)?

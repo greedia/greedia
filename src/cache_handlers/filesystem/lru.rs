@@ -114,7 +114,6 @@ async fn run_background(
 
     while let Some(msg) = recv.recv().await {
         // let last_space_usage = space_usage;
-        dbg!(&msg);
         match msg {
             LruInnerMsg::UpdateFile {
                 data_id,

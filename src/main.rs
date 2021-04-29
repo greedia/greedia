@@ -35,6 +35,11 @@ mod types;
 
 use config::{validate_config, Config, ConfigGoogleDrive, ConfigTimecodeDrive};
 
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
+
 #[derive(Debug, StructOpt)]
 #[structopt(name = "greedia", about = "Greedily cache media and serve it up fast.")]
 enum Greedia {

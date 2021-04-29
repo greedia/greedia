@@ -133,21 +133,21 @@ async fn run_background(
 
             }
             LruInnerMsg::OpenFile { data_id } => {
-                let hex_md5 = if let DataIdentifier::GlobalMd5(x) = &data_id {
-                    hex::encode(x)
-                } else {
-                    "".to_string()
-                };
+                // let hex_md5 = if let DataIdentifier::GlobalMd5(x) = &data_id {
+                //     hex::encode(x)
+                // } else {
+                //     "".to_string()
+                // };
         
                 // println!("OPEN  DATA_ID {} (count: {})", hex_md5, open_files.len());
                 open_files.insert(data_id);
             }
             LruInnerMsg::CloseFile { data_id } => {
-                let hex_md5 = if let DataIdentifier::GlobalMd5(x) = &data_id {
-                    hex::encode(x)
-                } else {
-                    "".to_string()
-                };
+                // let hex_md5 = if let DataIdentifier::GlobalMd5(x) = &data_id {
+                //     hex::encode(x)
+                // } else {
+                //     "".to_string()
+                // };
         
                 // println!("CLOSE DATA_ID {} (count: {})", hex_md5, open_files.len());
 

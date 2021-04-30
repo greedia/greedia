@@ -10,7 +10,7 @@ use oauth2::{
     RefreshToken, TokenResponse, TokenUrl,
 };
 use reqwest::{self, Client};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, sync::Arc, time::Duration};
 use tokio::sync::{
     mpsc::{self, Sender},
@@ -488,9 +488,10 @@ async fn open_request(
                     }
                     403 => {
                         if let Ok(error_json) = r.json::<GErrorTop>().await {
-                            let errors = error_json.error.errors;
+                            let errors = &error_json.error.errors;
                             for error in errors.iter() {
                                 if error.reason == "downloadQuotaExceeded" {
+                                    println!("{:?}", &error_json);
                                     return Err(DownloaderError::QuotaExceeded)
                                 }
                             }
@@ -698,13 +699,43 @@ pub struct GError {
     message: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ServiceAccount {
+    project_id: String,
+    private_key_id: String,
+    private_key: String,
+    client_email: String,
+    client_id: String,
+    auth_uri: String,
+    token_uri: String,
+    auth_provider_x509_cert_url: String,
+    client_x509_cert_url: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SaJwtClaims {
+    iss: String,
+    scope: String,
+    aud: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SaJwtResponse {
+    access_token: String,
+    expires_in: u64,
+    token_type: String,
+}
+
 #[cfg(test)]
 mod test {
     use std::env;
 
+    use crate::downloaders::gdrive::{SaJwtClaims, SaJwtResponse, ServiceAccount};
+
     use super::{DownloaderClient, GDriveClient};
 
     use futures::StreamExt;
+    use jwt_simple::prelude::{Claims, Duration, RS256KeyPair, RSAKeyPairLike};
     #[tokio::test]
     async fn do_gdrive_stuff() {
         let client_id = env::var("TEST_CLIENT_ID").unwrap();
@@ -723,5 +754,52 @@ mod test {
         while let Some(Ok(change_list)) = changes.next().await {
             dbg!(&change_list);
         }
+    }
+
+    #[tokio::test]
+    async fn test_service_accounts() {
+        let sa_path = env::var("TEST_SA_PATH").unwrap();
+        let file_id = env::var("TEST_FILE_ID").unwrap();
+        let sa_bytes = tokio::fs::read(sa_path).await.unwrap();
+        let sa: ServiceAccount = serde_json::from_slice(&sa_bytes).unwrap();
+        dbg!(&sa);
+
+        let key_pair = RS256KeyPair::from_pem(&sa.private_key).unwrap();
+        let scope = "https://www.googleapis.com/auth/drive.readonly";
+
+        let claim_data = SaJwtClaims {
+            iss: sa.client_email,
+            scope: scope.to_string(),
+            aud: sa.token_uri.clone(),
+        };
+        let claims = Claims::with_custom_claims(claim_data, Duration::from_hours(1));
+        dbg!(&claims);
+        let token = key_pair.sign(claims).unwrap();
+        println!("token: {}", token);
+
+        let rclient = reqwest::Client::new();
+        let res = rclient.post("https://oauth2.googleapis.com/token")
+            .form(&[
+                ("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"),
+                ("assertion", &token),
+            ])
+            .send()
+            .await
+            .unwrap();
+        dbg!(&res.status());
+        let res_data = res.json::<SaJwtResponse>().await.unwrap();
+        dbg!(&res_data);
+        
+        let url = format!("https://www.googleapis.com/drive/v3/files/{}", file_id);
+        let res = rclient
+            .get(&url)
+            .bearer_auth(res_data.access_token)
+            //.header("Range", &range_string)
+            .query(&[("alt", "media")])
+            .send()
+            .await
+            .unwrap();
+
+        dbg!(&res.status());
     }
 }

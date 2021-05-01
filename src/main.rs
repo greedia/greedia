@@ -6,8 +6,7 @@ use std::{
 use std::{fs, path::Path};
 
 use anyhow::{bail, Result};
-use cache_handlers::filesystem::{lru::Lru, FilesystemCacheHandler};
-use crypt_context::CryptContext;
+use cache_handlers::{crypt_context::CryptContext, filesystem::{lru::Lru, FilesystemCacheHandler}};
 use db::Db;
 use downloaders::{gdrive::GDriveClient, timecode::TimecodeDrive, DownloaderClient};
 use drive_access::DriveAccess;
@@ -22,7 +21,6 @@ use hard_cache::HardCacher;
 // New stuff
 mod cache_handlers;
 mod config;
-mod crypt_context;
 mod db;
 mod downloaders;
 mod drive_access;
@@ -177,12 +175,16 @@ async fn get_gdrive_drives(
         let client = if let Some(client) = clients.get(&cfg_drive.client_id) {
             client.clone()
         } else {
+
+            let service_accounts = cfg_drive.service_accounts.unwrap_or_else(|| Vec::new());
+            let sa_refs: Vec<_> = service_accounts.iter().map(|sa| sa.as_path()).collect();
+
             let new_client = Arc::new(
                 GDriveClient::new(
                     &cfg_drive.client_id,
                     &cfg_drive.client_secret,
                     &cfg_drive.refresh_token,
-                    &[],
+                    &sa_refs,
                 )
                 .await?,
             );

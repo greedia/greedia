@@ -1,15 +1,17 @@
-use anyhow::Result;
 use rclone_crypt::{cipher::Cipher, decrypter, obscure};
+
+use super::CacheHandlerError;
+
 #[derive(Clone)]
 pub struct CryptContext {
     pub cipher: Cipher,
 }
 
 impl CryptContext {
-    pub fn new(password1: &str, password2: &str) -> Result<CryptContext> {
-        let password = obscure::reveal(password1)?;
-        let salt = obscure::reveal(password2)?;
-        let cipher = Cipher::new(password, salt)?;
+    pub fn new(password1: &str, password2: &str) -> Result<CryptContext, CacheHandlerError> {
+        let password = obscure::reveal(password1).map_err(|_| CacheHandlerError::CryptPassthroughError)?;
+        let salt = obscure::reveal(password2).map_err(|_| CacheHandlerError::CryptPassthroughError)?;
+        let cipher = Cipher::new(password, salt).map_err(|_| CacheHandlerError::CryptPassthroughError)?;
         Ok(CryptContext { cipher })
     }
 

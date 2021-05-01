@@ -13,10 +13,9 @@ use rclone_crypt::decrypter::{self, Decrypter};
 use rkyv::de::deserializers::AllocDeserializer;
 use rkyv::Deserialize;
 
-use crate::{cache_handlers::{CacheHandlerError, crypt_passthrough::CryptPassthrough}, db::get_rkyv, types::DataIdentifier};
+use crate::{cache_handlers::{CacheHandlerError, crypt_context::CryptContext, crypt_passthrough::CryptPassthrough}, db::get_rkyv, types::DataIdentifier};
 use crate::{
     cache_handlers::{CacheDriveHandler, CacheFileHandler},
-    crypt_context::CryptContext,
     db::{Db, Tree},
     types::{make_lookup_key, ArchivedDirItem, DriveItem},
     types::{ArchivedDriveItem, ArchivedDriveItemData, TreeKeys},

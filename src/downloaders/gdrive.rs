@@ -1,10 +1,10 @@
 use super::{Change, DownloaderClient, DownloaderDrive, DownloaderError, FileInfo, Page, PageItem};
 use crate::{prio_limit::PrioLimit, types::DataIdentifier};
-use anyhow::{format_err, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{Stream, TryStreamExt};
+use jwt_simple::prelude::{Claims, Duration as JwtDuration, RS256KeyPair, RSAKeyPairLike};
 use oauth2::{
     basic::BasicClient, reqwest::async_http_client, AccessToken, AuthUrl, ClientId, ClientSecret,
     RefreshToken, TokenResponse, TokenUrl,
@@ -48,7 +48,10 @@ impl AccessInstanceHandler {
 
     pub fn next<'a>(&'a self) -> &'a AccessInstance {
         let index = self.index.fetch_add(1, Ordering::AcqRel) % self.access_instances.len() as u64;
-        self.access_instances.get(index as usize).unwrap()
+        
+        let access_instance = self.access_instances.get(index as usize).unwrap();
+        println!("next {}/{}: {:?}", index, self.access_instances.len(), access_instance);
+        access_instance
     }
 }
 
@@ -65,26 +68,27 @@ impl AccessInstance {
                 c.access_token.lock().await.clone()
             }
             AccessInstance::ServiceAccount(sa) => {
-                todo!()
+                sa.access_token.lock().await.clone()
             }
         }
     }
 
-    pub async fn refresh_access_token(&self, old_access_token: AccessToken) {
+    pub async fn refresh_access_token(&self, http_client: &Client) -> Result<(), DownloaderError> {
         match self {
             AccessInstance::Client(c) => {
-                let access_token = refresh_access_token(
-                    &c.access_token,
-                    &c.rate_limiter,
-                    &c.conn_info,
-                    old_access_token,
-                ).await;
+                let access_token = get_new_token(&c.conn_info, &c.rate_limiter).await.ok_or_else(|| DownloaderError::AccessTokenError)?;
                 *c.access_token.lock().await = access_token;
             }
             AccessInstance::ServiceAccount(sa) => {
-                todo!()
+                let access_token = ServiceAccountInstance::get_new_token(
+                    http_client,
+                    &sa.service_account,
+                ).await?;
+                *sa.access_token.lock().await = access_token;
             }
         }
+
+        Ok(())
     }
 
     pub async fn rate_limit(&self, bg_request: bool, retry: bool) {
@@ -93,7 +97,7 @@ impl AccessInstance {
                 &c.rate_limiter
             }
             AccessInstance::ServiceAccount(sa) => {
-                todo!()
+                &sa.rate_limiter
             }
         };
 
@@ -121,7 +125,7 @@ pub struct ClientInstance {
 }
 
 impl ClientInstance {
-    pub async fn new(client_id: &str, client_secret: &str, refresh_token: &str) -> Result<ClientInstance> {
+    pub async fn new(client_id: &str, client_secret: &str, refresh_token: &str) -> Result<ClientInstance, DownloaderError> {
         let rate_limiter = PrioLimit::new(1, 5, Duration::from_millis(100));
 
         let client_id = ClientId::new(client_id.to_owned());
@@ -138,10 +142,7 @@ impl ClientInstance {
             get_new_token(&conn_info, &rate_limiter)
                 .await
                 .ok_or_else(|| {
-                    format_err!(
-                        "Could not initiate access token for gdrive client {}",
-                        conn_info.client_id.as_str(),
-                    )
+                    DownloaderError::AccessTokenError
                 })?;
         let access_token = Mutex::new(initial_access_token);
 
@@ -155,9 +156,55 @@ impl ClientInstance {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ServiceAccountInstance {
+    rate_limiter: PrioLimit,
+    access_token: Mutex<AccessToken>,
+    service_account: ServiceAccount,
+}
 
+impl ServiceAccountInstance {
+    pub async fn new(http_client: &Client, path: &Path) -> Result<ServiceAccountInstance, DownloaderError> {
+        let rate_limiter = PrioLimit::new(1, 5, Duration::from_millis(100));
+
+        let sa_bytes = tokio::fs::read(path).await.unwrap();
+        let service_account: ServiceAccount = serde_json::from_slice(&sa_bytes).unwrap();
+
+        let initial_access_token = Self::get_new_token(http_client, &service_account).await?;
+        let access_token = Mutex::new(initial_access_token);
+
+        Ok(ServiceAccountInstance {
+            rate_limiter,
+            access_token,
+            service_account,
+        })
+    }
+
+
+
+    async fn get_new_token(http_client: &Client, service_account: &ServiceAccount) -> Result<AccessToken, DownloaderError> {
+        let key_pair = RS256KeyPair::from_pem(&service_account.private_key).unwrap();
+        let scope = "https://www.googleapis.com/auth/drive.readonly";
+
+        let claim_data = SaJwtClaims {
+            iss: service_account.client_email.clone(),
+            scope: scope.to_string(),
+            aud: service_account.token_uri.clone(),
+        };
+        let claims = Claims::with_custom_claims(claim_data, JwtDuration::from_hours(1));
+        let token = key_pair.sign(claims).map_err(|_| DownloaderError::AccessTokenError)?;
+
+        let res = http_client.post("https://oauth2.googleapis.com/token")
+            .form(&[
+                ("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"),
+                ("assertion", &token),
+            ])
+            .send()
+            .await?;
+
+        let res_data = res.json::<SaJwtResponse>().await?;
+        Ok(AccessToken::new(res_data.access_token))
+    }
 }
 
 impl GDriveClient {
@@ -166,16 +213,20 @@ impl GDriveClient {
         client_secret: &str,
         refresh_token: &str,
         service_account_files: &[&Path],
-    ) -> Result<GDriveClient> {
+    ) -> Result<GDriveClient, DownloaderError> {
         let http_client = reqwest::Client::builder().referer(false).build().unwrap();
 
         // Create the client instance
         let client_instance = ClientInstance::new(client_id, client_secret, refresh_token).await?;
 
         // Create all service account instances
-        // TODO
+        let mut access_instances = vec![AccessInstance::Client(client_instance)];
+        for sa in service_account_files {
+            let service_account_instance = AccessInstance::ServiceAccount(ServiceAccountInstance::new(&http_client, *sa).await?);
+            access_instances.push(service_account_instance);
+        }
 
-        let access_instances = Arc::new(AccessInstanceHandler::new(vec![AccessInstance::Client(client_instance)]));
+        let access_instances = Arc::new(AccessInstanceHandler::new(access_instances));
 
         Ok(GDriveClient {
             http_client,
@@ -241,7 +292,7 @@ async fn scanner_bg_thread(
                     200 => (),
                     // Bad access token, refresh it and retry request
                     401 => {
-                        access_instance.refresh_access_token(access_token).await;
+                        access_instance.refresh_access_token(&state.http_client).await.unwrap();
                         continue;
                     }
                     // Rate limit or server error, retry request
@@ -363,7 +414,7 @@ async fn watcher_bg_thread(
                     200 => (),
                     // Bad access token, refresh it and retry request
                     401 => {
-                        access_instance.refresh_access_token(access_token).await;
+                        access_instance.refresh_access_token(&state.http_client).await.unwrap();
                         continue;
                     }
                     // Rate limit or server error, retry request
@@ -534,7 +585,7 @@ async fn open_request(
                     // Bad access token, refresh it and retry request
                     401 => {
                         println!("access token needs refresh");
-                        access_instance.refresh_access_token(access_token).await;
+                        access_instance.refresh_access_token(&http_client).await?;
                     }
                     416 => {
                         return Err(DownloaderError::RangeNotSatisfiable(range_string));
@@ -566,23 +617,6 @@ async fn open_request(
 
     // KTODO: 5 tries failed, return error
     todo!()
-}
-
-async fn refresh_access_token(
-    access_token_mutex: &Mutex<AccessToken>,
-    rate_limiter: &PrioLimit,
-    conn_info: &ConnInfo,
-    old_access_token: AccessToken,
-) -> AccessToken {
-    let mut current_access_token_lock = access_token_mutex.lock().await;
-    let current_access_token = current_access_token_lock.clone();
-    if old_access_token.secret() != current_access_token.secret() {
-        current_access_token
-    } else {
-        let new_access_token = get_new_token(conn_info, rate_limiter).await.unwrap();
-        *current_access_token_lock = new_access_token.clone();
-        new_access_token
-    }
 }
 
 async fn get_new_token(conn_info: &ConnInfo, rate_limiter: &PrioLimit) -> Option<AccessToken> {

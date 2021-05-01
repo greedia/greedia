@@ -16,7 +16,9 @@ pub enum DownloaderError {
     #[error("Download quota for this file has been exceeded")]
     QuotaExceeded,
     #[error("Range not satisfiable ({})", _0)]
-    RangeNotSatisfiable(String)
+    RangeNotSatisfiable(String),
+    #[error("Could not initialize or renew access token")]
+    AccessTokenError,
 }
 
 pub trait DownloaderClient {

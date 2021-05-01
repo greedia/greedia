@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use rkyv::{de::deserializers::AllocDeserializer, Archive, Deserialize, Serialize};
 
 use self::smart_cacher::SMART_CACHER_VERSION;
-use crate::{cache_handlers::{CacheFileHandler, CacheHandlerError, crypt_passthrough::CryptPassthrough}, config::{DownloadAmount, SmartCacherConfig}, crypt_context::CryptContext, drive_access::DriveAccess, types::DataIdentifier};
+use crate::{cache_handlers::{CacheFileHandler, CacheHandlerError, crypt_context::CryptContext, crypt_passthrough::CryptPassthrough}, config::{DownloadAmount, SmartCacherConfig}, drive_access::DriveAccess, types::DataIdentifier};
 
 #[cfg(feature = "sctest")]
 mod sctest;

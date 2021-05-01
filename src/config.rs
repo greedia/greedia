@@ -73,6 +73,8 @@ pub struct ConfigGoogleDrive {
     pub refresh_token: String,
     pub drive_id: String,
     pub root_path: Option<String>,
+    /// service account json files that can access the drive
+    pub service_accounts: Option<Vec<PathBuf>>,
     /// rclone crypt passwords used for encrypting names and files
     pub password: Option<String>,
     pub password2: Option<String>,

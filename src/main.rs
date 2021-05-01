@@ -182,6 +182,7 @@ async fn get_gdrive_drives(
                     &cfg_drive.client_id,
                     &cfg_drive.client_secret,
                     &cfg_drive.refresh_token,
+                    &[],
                 )
                 .await?,
             );

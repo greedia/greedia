@@ -11,7 +11,7 @@ use oauth2::{
 };
 use reqwest::{self, Client};
 use serde::{Deserialize, Serialize};
-use std::{borrow::Cow, sync::Arc, time::Duration};
+use std::{borrow::Cow, path::Path, sync::{Arc, atomic::{AtomicU64, Ordering}}, time::Duration};
 use tokio::sync::{
     mpsc::{self, Sender},
     Mutex,
@@ -28,19 +28,101 @@ struct ConnInfo {
 #[derive(Debug)]
 pub struct GDriveClient {
     http_client: reqwest::Client,
-    rate_limiter: Arc<PrioLimit>,
-    access_token: Arc<Mutex<AccessToken>>,
+    access_instances: Arc<AccessInstanceHandler>,
+}
+
+#[derive(Debug)]
+pub struct AccessInstanceHandler {
+    index: AtomicU64,
+    access_instances: Vec<AccessInstance>,
+}
+
+impl AccessInstanceHandler {
+    pub fn new(access_instances: Vec<AccessInstance>) -> AccessInstanceHandler {
+        let index = AtomicU64::new(0);
+        AccessInstanceHandler {
+            index,
+            access_instances,
+        }
+    }
+
+    pub fn next<'a>(&'a self) -> &'a AccessInstance {
+        let index = self.index.fetch_add(1, Ordering::AcqRel) % self.access_instances.len() as u64;
+        self.access_instances.get(index as usize).unwrap()
+    }
+}
+
+#[derive(Debug)]
+pub enum AccessInstance {
+    Client(ClientInstance),
+    ServiceAccount(ServiceAccountInstance),
+}
+
+impl AccessInstance {
+    pub async fn access_token(&self) -> AccessToken {
+        match self {
+            AccessInstance::Client(c) => {
+                c.access_token.lock().await.clone()
+            }
+            AccessInstance::ServiceAccount(sa) => {
+                todo!()
+            }
+        }
+    }
+
+    pub async fn refresh_access_token(&self, old_access_token: AccessToken) {
+        match self {
+            AccessInstance::Client(c) => {
+                let access_token = refresh_access_token(
+                    &c.access_token,
+                    &c.rate_limiter,
+                    &c.conn_info,
+                    old_access_token,
+                ).await;
+                *c.access_token.lock().await = access_token;
+            }
+            AccessInstance::ServiceAccount(sa) => {
+                todo!()
+            }
+        }
+    }
+
+    pub async fn rate_limit(&self, bg_request: bool, retry: bool) {
+        let rate_limiter = match self {
+            AccessInstance::Client(c) => {
+                &c.rate_limiter
+            }
+            AccessInstance::ServiceAccount(sa) => {
+                todo!()
+            }
+        };
+
+        if bg_request {
+            if retry {
+                rate_limiter.bg_retry_wait().await;
+            } else {
+                rate_limiter.bg_wait().await;
+            }
+        } else {
+            if retry {
+                rate_limiter.retry_wait().await;
+            } else {
+                rate_limiter.wait().await;
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ClientInstance {
+    rate_limiter: PrioLimit,
+    access_token: Mutex<AccessToken>,
     conn_info: ConnInfo,
 }
 
-impl GDriveClient {
-    pub async fn new(
-        client_id: &str,
-        client_secret: &str,
-        refresh_token: &str,
-    ) -> Result<GDriveClient> {
-        let http_client = reqwest::Client::builder().referer(false).build().unwrap();
-        let rate_limiter = Arc::new(PrioLimit::new(1, 5, Duration::from_millis(100)));
+impl ClientInstance {
+    pub async fn new(client_id: &str, client_secret: &str, refresh_token: &str) -> Result<ClientInstance> {
+        let rate_limiter = PrioLimit::new(1, 5, Duration::from_millis(100));
 
         let client_id = ClientId::new(client_id.to_owned());
         let client_secret = ClientSecret::new(client_secret.to_owned());
@@ -61,12 +143,43 @@ impl GDriveClient {
                         conn_info.client_id.as_str(),
                     )
                 })?;
-        let access_token = Arc::new(Mutex::new(initial_access_token));
-        Ok(GDriveClient {
-            http_client,
+        let access_token = Mutex::new(initial_access_token);
+
+        let client_instance = ClientInstance{
             rate_limiter,
             access_token,
             conn_info,
+        };
+
+        Ok(client_instance)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ServiceAccountInstance {
+
+}
+
+impl GDriveClient {
+    pub async fn new(
+        client_id: &str,
+        client_secret: &str,
+        refresh_token: &str,
+        service_account_files: &[&Path],
+    ) -> Result<GDriveClient> {
+        let http_client = reqwest::Client::builder().referer(false).build().unwrap();
+
+        // Create the client instance
+        let client_instance = ClientInstance::new(client_id, client_secret, refresh_token).await?;
+
+        // Create all service account instances
+        // TODO
+
+        let access_instances = Arc::new(AccessInstanceHandler::new(vec![AccessInstance::Client(client_instance)]));
+
+        Ok(GDriveClient {
+            http_client,
+            access_instances,
         })
     }
 }
@@ -75,9 +188,7 @@ impl DownloaderClient for GDriveClient {
     fn open_drive(&self, drive_id: &str) -> Box<dyn DownloaderDrive> {
         Box::new(GDriveDrive {
             http_client: self.http_client.clone(),
-            rate_limiter: self.rate_limiter.clone(),
-            access_token: self.access_token.clone(),
-            conn_info: self.conn_info.clone(),
+            access_instances: self.access_instances.clone(),
             drive_id: drive_id.to_owned(),
         })
     }
@@ -85,20 +196,15 @@ impl DownloaderClient for GDriveClient {
 
 pub struct GDriveDrive {
     http_client: reqwest::Client,
-    rate_limiter: Arc<PrioLimit>,
-    access_token: Arc<Mutex<AccessToken>>,
-    conn_info: ConnInfo,
     drive_id: String,
+    access_instances: Arc<AccessInstanceHandler>,
 }
 
 pub struct GDriveStreamState {
-    access_token_mutex: Arc<Mutex<AccessToken>>,
     root_query: Vec<(&'static str, Cow<'static, str>)>,
-    rate_limiter: Arc<PrioLimit>,
     http_client: Client,
-    conn_info: ConnInfo,
-    access_token: Option<AccessToken>,
     last_page_token: Option<String>,
+    access_instances: Arc<AccessInstanceHandler>,
 }
 
 /// Background task for sending new pages to a scan_pages Stream.
@@ -108,19 +214,17 @@ async fn scanner_bg_thread(
     mut state: GDriveStreamState,
     sender: Sender<Result<Page, DownloaderError>>,
 ) {
-    if state.access_token.is_none() {
-        state.access_token = Some(state.access_token_mutex.lock().await.clone());
-    }
-
-    let mut access_token = state.access_token.unwrap();
-
-    state.rate_limiter.bg_wait().await;
 
     loop {
         let mut query = state.root_query.clone();
         if let Some(page_token) = state.last_page_token.as_deref() {
             query.push(("pageToken", Cow::Borrowed(page_token)));
         }
+
+        let access_instance = state.access_instances.next();
+        access_instance.rate_limit(true, false).await;
+
+        let access_token = access_instance.access_token().await;
 
         let res = state
             .http_client
@@ -137,13 +241,7 @@ async fn scanner_bg_thread(
                     200 => (),
                     // Bad access token, refresh it and retry request
                     401 => {
-                        access_token = refresh_access_token(
-                            &state.access_token_mutex,
-                            &state.rate_limiter,
-                            &state.conn_info,
-                            access_token,
-                        )
-                        .await;
+                        access_instance.refresh_access_token(access_token).await;
                         continue;
                     }
                     // Rate limit or server error, retry request
@@ -181,27 +279,16 @@ async fn scanner_bg_thread(
 }
 
 pub struct GDriveWatchState {
-    access_token_mutex: Arc<Mutex<AccessToken>>,
-    rate_limiter: Arc<PrioLimit>,
     http_client: Client,
-    conn_info: ConnInfo,
     drive_id: String,
-    access_token: Option<AccessToken>,
     last_page_token: Option<String>,
+    access_instances: Arc<AccessInstanceHandler>,
 }
 
 async fn watcher_bg_thread(
     mut state: GDriveWatchState,
     sender: Sender<Result<Vec<Change>, DownloaderError>>,
 ) {
-    if state.access_token.is_none() {
-        state.access_token = Some(state.access_token_mutex.lock().await.clone());
-    }
-
-    let mut access_token = state.access_token.unwrap();
-
-    state.rate_limiter.bg_wait().await;
-
     let mut start_page_token: Option<String> = None;
 
     let root_query = vec![
@@ -221,10 +308,16 @@ async fn watcher_bg_thread(
     ];
 
     loop {
+        let access_instance = state.access_instances.next();
+        access_instance.rate_limit(true, false).await;
+
+        let access_token = access_instance.access_token().await;
+        
         let res = if let Some(start_page_token) = &start_page_token {
             // If we wanted to get extra fancy, we could get a 10-second deadline, bg_wait,
             // then sleep for whatever time's left. This is probably good enough for now, though.
-            state.rate_limiter.bg_wait().await;
+
+            // state.rate_limiter.bg_wait().await;
             tokio::time::sleep(Duration::from_secs(10)).await;
 
             // If we have a last_page_token, use that
@@ -270,13 +363,7 @@ async fn watcher_bg_thread(
                     200 => (),
                     // Bad access token, refresh it and retry request
                     401 => {
-                        access_token = refresh_access_token(
-                            &state.access_token_mutex,
-                            &state.rate_limiter,
-                            &state.conn_info,
-                            access_token,
-                        )
-                        .await;
+                        access_instance.refresh_access_token(access_token).await;
                         continue;
                     }
                     // Rate limit or server error, retry request
@@ -326,10 +413,6 @@ impl DownloaderDrive for GDriveDrive {
         last_modified_date: Option<DateTime<Utc>>,
     ) -> Box<dyn Stream<Item = Result<Page, DownloaderError>> + Send + Sync + Unpin> {
         let drive_id = self.drive_id.to_string();
-        let access_token_mutex = self.access_token.clone();
-        let rate_limiter = self.rate_limiter.clone();
-        let http_client = self.http_client.clone();
-        let conn_info = self.conn_info.clone();
 
         let mut query = "trashed = false".to_string();
 
@@ -360,12 +443,9 @@ impl DownloaderDrive for GDriveDrive {
         ];
 
         let state = GDriveStreamState {
-            access_token_mutex,
             root_query,
-            rate_limiter,
-            http_client,
-            conn_info,
-            access_token: None,
+            http_client: self.http_client.clone(),
+            access_instances: self.access_instances.clone(),
             last_page_token: last_page_token.clone(),
         };
 
@@ -378,19 +458,13 @@ impl DownloaderDrive for GDriveDrive {
         &self,
     ) -> Box<dyn Stream<Item = Result<Vec<Change>, DownloaderError>> + Send + Sync + Unpin> {
         let drive_id = self.drive_id.to_string();
-        let access_token_mutex = self.access_token.clone();
-        let rate_limiter = self.rate_limiter.clone();
         let http_client = self.http_client.clone();
-        let conn_info = self.conn_info.clone();
 
         let state = GDriveWatchState {
-            access_token_mutex,
-            rate_limiter,
             http_client,
-            conn_info,
             drive_id,
-            access_token: None,
             last_page_token: None,
+            access_instances: self.access_instances.clone(),
         };
 
         let (sender, recv) = mpsc::channel(1);
@@ -407,14 +481,13 @@ impl DownloaderDrive for GDriveDrive {
         Box<dyn Stream<Item = Result<Bytes, DownloaderError>> + Unpin + Send + Sync>,
         DownloaderError,
     > {
+        let access_instance = self.access_instances.next();
         let res = open_request(
             file_id,
             offset,
             bg_request,
             &self.http_client,
-            &self.access_token,
-            &self.rate_limiter,
-            &self.conn_info,
+            access_instance,
         )
         .await?;
 
@@ -432,30 +505,16 @@ async fn open_request(
     offset: u64,
     bg_request: bool,
     http_client: &reqwest::Client,
-    access_token_mutex: &Arc<Mutex<AccessToken>>,
-    rate_limiter: &Arc<PrioLimit>,
-    conn_info: &ConnInfo,
+    access_instance: &AccessInstance,
 ) -> Result<reqwest::Response, DownloaderError> {
     let url = format!("https://www.googleapis.com/drive/v3/files/{}", file_id);
     let range_string = format!("bytes={}-", offset);
 
-    let mut access_token = access_token_mutex.lock().await.clone();
     let mut retry = false;
 
     for _ in 0..10 {
-        if bg_request {
-            if retry {
-                rate_limiter.bg_retry_wait().await;
-            } else {
-                rate_limiter.bg_wait().await;
-            }
-        } else {
-            if retry {
-                rate_limiter.retry_wait().await;
-            } else {
-                rate_limiter.wait().await;
-            }
-        }
+        access_instance.rate_limit(bg_request, retry).await;
+        let access_token = access_instance.access_token().await;
 
         let res = http_client
             .get(&url)
@@ -475,13 +534,7 @@ async fn open_request(
                     // Bad access token, refresh it and retry request
                     401 => {
                         println!("access token needs refresh");
-                        access_token = refresh_access_token(
-                            access_token_mutex,
-                            rate_limiter,
-                            &conn_info,
-                            access_token,
-                        )
-                        .await;
+                        access_instance.refresh_access_token(access_token).await;
                     }
                     416 => {
                         return Err(DownloaderError::RangeNotSatisfiable(range_string));
@@ -500,19 +553,6 @@ async fn open_request(
                     // Rate limit or server error, retry request
                     _ => {
                         println!("Other: {}", r.status());
-                        if bg_request {
-            if retry {
-                rate_limiter.bg_retry_wait().await;
-            } else {
-                rate_limiter.bg_wait().await;
-            }
-        } else {
-            if retry {
-                rate_limiter.retry_wait().await;
-            } else {
-                rate_limiter.wait().await;
-            }
-        }
                     }
                 }
             }
@@ -529,8 +569,8 @@ async fn open_request(
 }
 
 async fn refresh_access_token(
-    access_token_mutex: &Arc<Mutex<AccessToken>>,
-    rate_limiter: &Arc<PrioLimit>,
+    access_token_mutex: &Mutex<AccessToken>,
+    rate_limiter: &PrioLimit,
     conn_info: &ConnInfo,
     old_access_token: AccessToken,
 ) -> AccessToken {
@@ -743,7 +783,7 @@ mod test {
         let refresh_token = env::var("TEST_REFRESH_TOKEN").unwrap();
         let drive_id = env::var("TEST_DRIVE_ID").unwrap();
 
-        let c = GDriveClient::new(&client_id, &client_secret, &refresh_token)
+        let c = GDriveClient::new(&client_id, &client_secret, &refresh_token, &[])
             .await
             .unwrap();
 

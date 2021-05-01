@@ -1201,7 +1201,7 @@ mod test {
 
         let crypt_context = CryptContext::new(&password1, &password2).unwrap();
 
-        let c = GDriveClient::new(&client_id, &client_secret, &refresh_token)
+        let c = GDriveClient::new(&client_id, &client_secret, &refresh_token, &[])
             .await
             .unwrap();
 

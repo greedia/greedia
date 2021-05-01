@@ -50,7 +50,7 @@ impl AccessInstanceHandler {
         let index = self.index.fetch_add(1, Ordering::AcqRel) % self.access_instances.len() as u64;
         
         let access_instance = self.access_instances.get(index as usize).unwrap();
-        println!("next {}/{}: {:?}", index, self.access_instances.len(), access_instance);
+        println!("access_instance_handler next {}/{}", index, self.access_instances.len());
         access_instance
     }
 }

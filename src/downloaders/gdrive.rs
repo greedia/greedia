@@ -53,6 +53,10 @@ impl AccessInstanceHandler {
         println!("access_instance_handler next {}/{}", index, self.access_instances.len());
         access_instance
     }
+
+    pub fn len(&self) -> usize {
+        self.access_instances.len()
+    }
 }
 
 #[derive(Debug)]
@@ -532,18 +536,29 @@ impl DownloaderDrive for GDriveDrive {
         Box<dyn Stream<Item = Result<Bytes, DownloaderError>> + Unpin + Send + Sync>,
         DownloaderError,
     > {
-        let access_instance = self.access_instances.next();
-        let res = open_request(
-            file_id,
-            offset,
-            bg_request,
-            &self.http_client,
-            access_instance,
-        )
-        .await?;
+        for _ in 0..self.access_instances.len() {
+            let access_instance = self.access_instances.next();
+            let res = open_request(
+                &file_id,
+                offset,
+                bg_request,
+                &self.http_client,
+                access_instance,
+            )
+            .await;
+            match res {
+                Ok(res) => {
+                    let stream = res.bytes_stream().map_err(|e| e.into());
+                    return Ok(Box::new(stream))
+                }
+                Err(DownloaderError::QuotaExceeded) => {
+                    continue;
+                }
+                Err(e) => return Err(e)
+            }
+        }
 
-        let stream = res.bytes_stream().map_err(|e| e.into());
-        Ok(Box::new(stream))
+        Err(DownloaderError::QuotaExceeded)
     }
 
     fn get_downloader_type(&self) -> &'static str {
@@ -552,7 +567,7 @@ impl DownloaderDrive for GDriveDrive {
 }
 
 async fn open_request(
-    file_id: String,
+    file_id: &str,
     offset: u64,
     bg_request: bool,
     http_client: &reqwest::Client,
@@ -615,7 +630,7 @@ async fn open_request(
         retry = true
     }
 
-    // KTODO: 5 tries failed, return error
+    // KTODO: 10 tries failed, return error
     todo!()
 }
 

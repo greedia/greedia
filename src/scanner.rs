@@ -30,6 +30,9 @@ use crate::{
     db::{get_rkyv, serialize_rkyv, Db, Tree},
 };
 
+/// Convenience struct that holds pointers to database trees.
+///
+/// Also handles sequential inode creation.
 #[derive(Clone)]
 struct ScanTrees {
     drive_id: String,
@@ -50,6 +53,7 @@ struct ScanTrees {
 }
 
 impl ScanTrees {
+    /// Create a new scan tree instance, given a drive type and ID.
     fn new(db: Db, drive_type: &str, drive_id: &str) -> ScanTrees {
         let tree_keys = TreeKeys::new(drive_type, drive_id);
 
@@ -62,7 +66,7 @@ impl ScanTrees {
 
         let next_inode = scan_tree
             .get(b"next_inode")
-            .map(|i| u64::from_le_bytes(i.as_ref().try_into().expect("try_into from_le_bytes failed")))
+            .map(|i| u64::from_le_bytes(i.as_ref().try_into().expect("try_into from_le_bytes failed. DB might be corrupt.")))
             .unwrap_or(1);
 
         let next_inode = Arc::new(AtomicU64::new(next_inode));
@@ -93,6 +97,7 @@ pub async fn scan_thread(drive_access: Arc<DriveAccess>) {
     let drive_type = drive_access.cache_handler.get_drive_type();
     let drive_id = drive_access.cache_handler.get_drive_id().clone();
     println!("Scanning {} ({}:{})...", name, drive_type, drive_id);
+    drive_access.scanning.store(true, Ordering::Release);
 
     let trees = ScanTrees::new(drive_access.db.clone(), drive_type, &drive_id);
 
@@ -116,6 +121,7 @@ pub async fn scan_thread(drive_access: Arc<DriveAccess>) {
     perform_scan(&trees, scan_stream).await;
 
     println!("Finished scanning {} ({}:{}).", name, drive_type, drive_id);
+    drive_access.scanning.store(false, Ordering::Release);
 
     let (count, size) = get_drive_size(&trees.inode_tree).await;
 
@@ -129,13 +135,14 @@ pub async fn scan_thread(drive_access: Arc<DriveAccess>) {
     println!("Finished caching {} ({}:{}).", name, drive_type, drive_id);
 }
 
+/// Async task that watches for changes to this drive.
 async fn watch_thread(trees: ScanTrees, drive_access: Arc<DriveAccess>) {
     let mut change_stream = drive_access.cache_handler.watch_changes();
     let hard_cacher = HardCacher::new(drive_access.clone(), 1_000_000); // TODO: not hardcode min_size
 
     while let Some(changes) = change_stream.next().await {
-        // dbg!(&changes);
         let changes = changes.unwrap();
+        // Split this list of changes into additions and removals.
         let (additions, removals): (Vec<_>, _) = changes.into_iter().partition(|c| {
             if let Change::Added(_) = c {
                 true
@@ -144,7 +151,7 @@ async fn watch_thread(trees: ScanTrees, drive_access: Arc<DriveAccess>) {
             }
         });
 
-        // Handle the additions
+        // Handle the additions.
         let page_items = &additions
             .into_iter()
             .filter_map(|c| {
@@ -156,10 +163,10 @@ async fn watch_thread(trees: ScanTrees, drive_access: Arc<DriveAccess>) {
             })
             .collect();
 
-        // Add to DB
+        // Add new additions to database.
         handle_one_page(&trees, page_items).await;
 
-        // Hard cache files
+        // Hard cache the added files.
         for page_item in page_items {
             if let Some(inode) = trees.access_tree.get(page_item.id.as_bytes()) {
                 if let Some(drive_item_bytes) = trees.inode_tree.get(inode) {
@@ -169,15 +176,15 @@ async fn watch_thread(trees: ScanTrees, drive_access: Arc<DriveAccess>) {
             }
         }
 
-        // Handle the removals
+        // Handle the removals.
         for r in removals {
             if let Change::Removed(id) = r {
-                // Lookup inode and remove it
+                // Lookup inode and remove it.
                 if let Some(inode) = trees.access_tree.get(id.as_bytes()) {
                     if let Some(drive_item_bytes) = trees.inode_tree.get(&inode) {
                         let drive_item = get_rkyv::<DriveItem>(&drive_item_bytes);
 
-                        // Remove from hard_cache and hc_meta_tree
+                        // Remove from hard_cache and hc_meta_tree.
                         if let ArchivedDriveItemData::FileItem {
                             file_name: _,
                             data_id,
@@ -193,14 +200,15 @@ async fn watch_thread(trees: ScanTrees, drive_access: Arc<DriveAccess>) {
                     }
                     trees.inode_tree.remove(inode);
                 }
-                // Lookup raccess_tree entry and remove item from lookup_tree and parent dir
+                // Lookup raccess_tree entry and remove item from lookup_tree and parent directory.
                 if let Some(raccess_data) = trees.raccess_tree.get(id.as_bytes()) {
                     let raccess = get_rkyv::<ReverseAccess>(&raccess_data);
 
-                    // Remove from parent dir
+                    // Remove from parent directory.
                     if let Some(parent_drive_item_bytes) =
                         trees.inode_tree.get(raccess.parent_inode.to_le_bytes())
                     {
+                        // Create new parent directory, copy all but removed items to it.
                         let parent_drive_item = get_rkyv::<DriveItem>(&parent_drive_item_bytes);
                         let mut new_items = vec![];
                         if let ArchivedDriveItemData::Dir { items } = &parent_drive_item.data {
@@ -225,15 +233,15 @@ async fn watch_thread(trees: ScanTrees, drive_access: Arc<DriveAccess>) {
                         );
                     }
 
-                    // Remove from lookup tree
+                    // Remove from lookup tree.
                     let lookup_key = make_lookup_key(raccess.parent_inode, &raccess.name);
                     trees.lookup_tree.remove(lookup_key.as_slice());
                 }
 
-                // Remove raccess_tree entry
+                // Remove raccess_tree entry.
                 trees.raccess_tree.remove(id.as_bytes());
 
-                // Remove access_tree entry
+                // Remove access_tree entry.
                 trees.access_tree.remove(id.as_bytes());
             }
         }
@@ -299,17 +307,12 @@ async fn perform_caching(trees: &ScanTrees, drive_access: Arc<DriveAccess>) {
 }
 
 async fn caching_thread(trees: ScanTrees, drive_access: Arc<DriveAccess>, recv: Receiver<IVec>) {
-    //println!("Starting caching thread for {}", drive_access.name);
-    {
-        let hard_cacher = HardCacher::new(drive_access.clone(), 1_000_000); // TODO: not hardcode min_size
-        let mut stream = recv.into_stream();
-        while let Some(item) = stream.next().await {
-            let item = get_rkyv::<DriveItem>(&item);
-            perform_one_cache(&trees, &hard_cacher, item).await;
-        }
+    let hard_cacher = HardCacher::new(drive_access.clone(), 1_000_000); // TODO: not hardcode min_size
+    let mut stream = recv.into_stream();
+    while let Some(item) = stream.next().await {
+        let item = get_rkyv::<DriveItem>(&item);
+        perform_one_cache(&trees, &hard_cacher, item).await;
     }
-
-    // println!("Caching thread for {} complete.", drive_access.name);
 }
 
 /// Cache one single item. Returns true if successful, or false if attempt needs to be made later.
@@ -338,10 +341,7 @@ async fn perform_one_cache(trees: &ScanTrees, hard_cacher: &HardCacher, item: &A
                     .insert(data_id_key.as_slice(), meta_bytes);
                 true
             }
-            Err(e) => {
-                println!("GOT AN ERROR!!!");
-                dbg!(&e);
-                println!("TODO: try again later");
+            Err(_) => {
                 false
             }
         }
@@ -351,6 +351,9 @@ async fn perform_one_cache(trees: &ScanTrees, hard_cacher: &HardCacher, item: &A
     }
 }
 
+/// Handle adding one page of scanned items to the database.
+///
+/// Groups items into their respective parents, and merges everything.
 async fn handle_one_page(trees: &ScanTrees, page_items: &Vec<PageItem>) {
     for (p, i) in page_items
         .iter()
@@ -449,9 +452,6 @@ fn handle_add_items(trees: &ScanTrees, parent: &str, items: &Vec<&PageItem>) {
             .insert(item.id.as_bytes(), raccess_data.as_slice());
     }
 
-    // println!("items had {} len", items.len());
-    // println!("item_inodes had {} len", item_inodes.len());
-
     // Merge items into parent
     let items = items
         .iter()
@@ -492,6 +492,7 @@ fn handle_add_items(trees: &ScanTrees, parent: &str, items: &Vec<&PageItem>) {
         .insert(parent.as_bytes(), &parent_inode.to_le_bytes());
 }
 
+/// Update the last modified time for a parent.
 fn handle_update_parent(trees: &ScanTrees, parent: &str, modified_time: i64) {
     // Get the inode for the parent
     if let Some(existing_inode) = trees.access_tree.get(&parent.as_bytes()) {
@@ -557,6 +558,7 @@ async fn get_drive_size(inode_tree: &Tree) -> (u64, u64) {
         .unwrap()
 }
 
+/// Get the number of items in, and total size of, a drive.
 fn inner_get_drive_size(inode_tree: Tree) -> (u64, u64) {
     let mut total_count = 0;
     let mut total_size = 0;

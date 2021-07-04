@@ -516,6 +516,7 @@ impl AsyncSession {
     async fn mount(mountpoint: PathBuf, config: KernelConfig) -> io::Result<Self> {
         tokio::task::spawn_blocking(move || {
             let session = Session::mount(mountpoint, config)?;
+            //session.notifier()
             Ok(Self {
                 inner: AsyncFd::with_interest(session, Interest::READABLE)?,
             })

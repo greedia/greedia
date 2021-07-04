@@ -253,7 +253,7 @@ impl OpenFile {
 
         // let read_file = File::open(file_path).await?;
         let read_file_res = File::open(file_path).await;
-        if let Err(e) = &read_file_res {
+        if let Err(_) = &read_file_res {
             println!("File error occurred!");
         }
         let read_file = read_file_res?;
@@ -337,7 +337,7 @@ impl OpenFile {
 
         //let read_file = File::open(file_path).await?;
         let read_file_res = File::open(file_path).await;
-        if let Err(e) = &read_file_res {
+        if let Err(_) = &read_file_res {
             println!("File error occurred!");
         }
         let read_file = read_file_res?;
@@ -435,7 +435,7 @@ impl OpenFile {
 
             // let mut read_file = File::open(file_path).await?;
             let read_file_res = File::open(file_path).await;
-            if let Err(e) = &read_file_res {
+            if let Err(_) = &read_file_res {
                 println!("File error occurred!");
             }
             let mut read_file = read_file_res?;
@@ -484,7 +484,7 @@ impl OpenFile {
 
         // let mut cache_file = File::open(source_file_path).await?;
         let cache_file_res = File::open(source_file_path).await;
-        if let Err(e) = &cache_file_res {
+        if let Err(_) = &cache_file_res {
             println!("File error occurred!");
         }
         let mut cache_file = cache_file_res?;
@@ -515,7 +515,7 @@ impl OpenFile {
 
         // let read_file = File::open(file_path).await?;
         let read_file_res = File::open(file_path).await;
-        if let Err(e) = &read_file_res {
+        if let Err(_) = &read_file_res {
             println!("File error occurred!");
         }
         let read_file = read_file_res?;

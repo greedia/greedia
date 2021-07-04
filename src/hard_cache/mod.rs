@@ -198,10 +198,13 @@ impl HardCacher {
             .and_then(|ext| self.cachers_by_ext.get(ext));
 
         let file_item = item.clone();
-        let hex_md5 = if let DataIdentifier::GlobalMd5(x) = &file_item.data_id {
-            hex::encode(x)
-        } else {
-            "(not md5)".to_string()
+        
+        // The compiler complains that _ is unreachable, however
+        // this is needed in sctest mode, so squelch the warning.
+        #[allow(unreachable_patterns)]
+        let hex_md5 = match &file_item.data_id {
+            DataIdentifier::GlobalMd5(x) => hex::encode(x),
+            _ => "(not md5)".to_string(),
         };
         let cache_item = self.cacher.get_item(item).await;
         let mut hcd = HardCacheDownloader::new(cache_item, file_item).await;

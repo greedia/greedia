@@ -79,6 +79,7 @@ pub struct GdriveFileInfo {
 
 /// Identifier used to find the cache storage on disk for a particular file.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Archive, RkyvSerialize, RkyvDeserialize)]
+#[non_exhaustive]
 pub enum DataIdentifier {
     /// Data is referred to globally within Greedia by an md5 hash.
     GlobalMd5(Vec<u8>),

@@ -23,9 +23,9 @@ impl SmartCacher for ScFlac {
 
     async fn cache(
         &self,
-        config: &SmartCacherConfig,
-        file_spec: &FileSpec,
-        action: &mut HardCacheDownloader,
+        _config: &SmartCacherConfig,
+        _file_spec: &FileSpec,
+        _action: &mut HardCacheDownloader,
     ) -> ScResult {
         // FLAC files start with "fLaC"
         // The interesting data will be:

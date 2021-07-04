@@ -18,7 +18,7 @@ impl Db {
     }
 
     pub fn open(path: &Path) -> Result<Db, sled::Error> {
-        sled::open(path).map(|db| Self::new(db))
+        sled::open(path).map(Self::new)
     }
 
     pub fn tree(&self, name: &[u8]) -> Tree {
@@ -86,14 +86,14 @@ pub fn serialize_rkyv<T: Serialize<WriteSerializer<Vec<u8>>>>(data: &T) -> Vec<u
 }
 
 /// Read the position from the end of a slice, and use it to get the archive'd variant of a struct.
-pub fn get_rkyv<'a, T: Archive>(data: &'a [u8]) -> &'a T::Archived {
+pub fn get_rkyv<T: Archive>(data: &[u8]) -> &'_ T::Archived {
     let tag_pos = data.len().saturating_sub(size_of::<usize>());
     let pos = usize::from_ne_bytes(data[tag_pos..].try_into().unwrap());
     unsafe { archived_value::<T>(&data[..tag_pos], pos) }
 }
 
 /// Read the position from the end of a slice, and use it to get the mutable archive'd variant of a struct.
-pub fn get_rkyv_mut<'a, T: Archive>(data: &'a mut [u8]) -> Pin<&'a mut T::Archived> {
+pub fn get_rkyv_mut<T: Archive>(data: &mut [u8]) -> Pin<&'_ mut T::Archived> {
     let tag_pos = data.len().saturating_sub(size_of::<usize>());
     let pos = usize::from_ne_bytes(data[tag_pos..].try_into().unwrap());
     let data_pin = Pin::new(&mut data[..tag_pos]);

@@ -105,9 +105,9 @@ static IDS_FLOAT: Set<u32> = phf_set! {
 };
 
 impl Element {
-    pub fn parse<'a, R: AsyncRead + Send + Sync + Unpin>(
-        r: &'a mut R,
-    ) -> BoxFuture<'a, MResult<Element>> {
+    pub fn parse<R: AsyncRead + Send + Sync + Unpin>(
+        r: &mut R,
+    ) -> BoxFuture<'_, MResult<Element>> {
         async move {
             let (id, size, header_len) = read_element_id_size(r).await?;
             let val = Element::parse_body(r, id, size).await?;
@@ -120,11 +120,11 @@ impl Element {
         .boxed()
     }
 
-    pub fn parse_body<'a, R: AsyncRead + Send + Sync + Unpin>(
-        r: &'a mut R,
+    pub fn parse_body<R: AsyncRead + Send + Sync + Unpin>(
+        r: &mut R,
         id: u32,
         size: u64,
-    ) -> BoxFuture<'a, MResult<ElementType>> {
+    ) -> BoxFuture<'_, MResult<ElementType>> {
         async move {
             match id {
                 id if IDS_MASTER.contains(&id) => Element::parse_master(r, size)
@@ -145,10 +145,10 @@ impl Element {
         .boxed()
     }
 
-    pub fn parse_master<'a, R: AsyncRead + Send + Sync + Unpin>(
-        r: &'a mut R,
+    pub fn parse_master<R: AsyncRead + Send + Sync + Unpin>(
+        r: &mut R,
         mut size: u64,
-    ) -> BoxFuture<'a, MResult<Vec<Element>>> {
+    ) -> BoxFuture<'_, MResult<Vec<Element>>> {
         async move {
             let mut elements = Vec::new();
             while size > 0 {

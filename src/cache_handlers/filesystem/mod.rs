@@ -74,7 +74,7 @@ enum Reader {
     LastData(usize),
     /// DownloadStatus in chunk disappeared but there's some data left,
     /// so downgrade to a reader until we get to the next chunk.
-    DowngradeToReader,
+    Downgrade,
     /// Continue downloading a new chunk from one that reached MAX_CHUNK_SIZE.
     ContinueDownloading(Arc<Mutex<Option<DownloadStatus>>>),
     /// No data could be found, but we're not at EOF, so current chunk needs
@@ -89,18 +89,18 @@ impl FilesystemCacheHandler {
         hard_cache_root: &Path,
         soft_cache_root: &Path,
         downloader_drive: Arc<dyn DownloaderDrive>,
-    ) -> Box<dyn CacheDriveHandler> {
+    ) -> FilesystemCacheHandler {
         let open_files = Mutex::new(HashMap::new());
         let hard_cache_root = hard_cache_root.to_path_buf();
         let soft_cache_root = soft_cache_root.to_path_buf();
-        Box::new(FilesystemCacheHandler {
+        FilesystemCacheHandler {
             drive_id: drive_id.to_owned(),
             lru,
             hard_cache_root,
             soft_cache_root,
             open_files,
             downloader_drive,
-        })
+        }
     }
 
     async fn get_open_handle(
@@ -319,7 +319,7 @@ impl FilesystemCacheFileHandler {
                     // dbg!(&new_chunk);
                     self.current_chunk = Some(new_chunk);
                 }
-                Reader::DowngradeToReader => {
+                Reader::Downgrade => {
                     let mut new_chunk = None;
                     mem::swap(&mut new_chunk, &mut self.current_chunk);
                     if let Some(CurrentChunk::Downloading { read_data, _dl }) = new_chunk {
@@ -774,8 +774,8 @@ impl FilesystemCacheFileHandler {
         let read_data = ReadData {
             file,
             end_offset,
-            chunk_start_offset,
             is_hard_cache,
+            chunk_start_offset,
         };
 
         Ok(if let Some(download_status) = download_status {
@@ -854,7 +854,7 @@ impl FilesystemCacheFileHandler {
                             let next_chunk: Result<Option<Bytes>, CacheHandlerError> =
                                 downloader.next().await.transpose().map_err(|e| e.into());
                             if let Ok(Some(next_chunk)) = next_chunk {
-                                if next_chunk.len() == 0 {
+                                if next_chunk.is_empty() {
                                     Reader::NeedsNewChunk
                                 } else {
                                     *last_bytes = next_chunk;
@@ -923,7 +923,7 @@ impl FilesystemCacheFileHandler {
         Ok(if cur_end_offset > read_data.end_offset {
             // This chunk has finished downloading, but there's more we can read.
             read_data.end_offset = cur_end_offset;
-            Reader::DowngradeToReader
+            Reader::Downgrade
         } else {
             // We need to get a new chunk.
             Reader::NeedsNewChunk
@@ -931,6 +931,7 @@ impl FilesystemCacheFileHandler {
     }
 
     /// Read data from the last_bytes object in the downloader.
+    #[allow(clippy::too_many_arguments)]
     async fn read_from_last_bytes(
         // Read details stored in the OpenFile.
         read_data: &mut ReadData,

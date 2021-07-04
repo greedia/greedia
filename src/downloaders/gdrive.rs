@@ -46,7 +46,7 @@ impl AccessInstanceHandler {
         }
     }
 
-    pub fn next<'a>(&'a self) -> &'a AccessInstance {
+    pub fn next(&self) -> &'_ AccessInstance {
         let index = self.index.fetch_add(1, Ordering::AcqRel) % self.access_instances.len() as u64;
         
         let access_instance = self.access_instances.get(index as usize).unwrap();
@@ -80,7 +80,7 @@ impl AccessInstance {
     pub async fn refresh_access_token(&self, http_client: &Client) -> Result<(), DownloaderError> {
         match self {
             AccessInstance::Client(c) => {
-                let access_token = get_new_token(&c.conn_info, &c.rate_limiter).await.ok_or_else(|| DownloaderError::AccessTokenError)?;
+                let access_token = get_new_token(&c.conn_info, &c.rate_limiter).await.ok_or(DownloaderError::AccessTokenError)?;
                 *c.access_token.lock().await = access_token;
             }
             AccessInstance::ServiceAccount(sa) => {
@@ -111,12 +111,10 @@ impl AccessInstance {
             } else {
                 rate_limiter.bg_wait().await;
             }
+        } else if retry {
+            rate_limiter.retry_wait().await;
         } else {
-            if retry {
-                rate_limiter.retry_wait().await;
-            } else {
-                rate_limiter.wait().await;
-            }
+            rate_limiter.wait().await;
         }
     }
 }
@@ -145,9 +143,7 @@ impl ClientInstance {
         let initial_access_token =
             get_new_token(&conn_info, &rate_limiter)
                 .await
-                .ok_or_else(|| {
-                    DownloaderError::AccessTokenError
-                })?;
+                .ok_or(DownloaderError::AccessTokenError)?;
         let access_token = Mutex::new(initial_access_token);
 
         let client_instance = ClientInstance{
@@ -442,10 +438,8 @@ async fn watcher_bg_thread(
                         .filter_map(to_change_item)
                         .collect();
 
-                    if !items.is_empty() {
-                        if sender.send(Ok(items)).await.is_err() {
-                            break;
-                        }
+                    if !items.is_empty() && sender.send(Ok(items)).await.is_err() {
+                        break;
                     }
                 } else {
                     let change_start = r.json::<GChangeStart>().await.unwrap();
@@ -501,7 +495,7 @@ impl DownloaderDrive for GDriveDrive {
             root_query,
             http_client: self.http_client.clone(),
             access_instances: self.access_instances.clone(),
-            last_page_token: last_page_token.clone(),
+            last_page_token,
         };
 
         let (sender, recv) = mpsc::channel(1);

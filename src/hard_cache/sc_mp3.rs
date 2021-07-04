@@ -90,7 +90,7 @@ fn read_id3_len(data: &[u8]) -> Option<u32> {
     }
 }
 
-fn find_mp3_header<'a>(data: &'a [u8]) -> Option<(u64, &'a [u8])> {
+fn find_mp3_header(data: &[u8]) -> Option<(u64, &'_ [u8])> {
     let header_offset = data.iter().position(|x| *x == 0xff)?;
     if data.get(header_offset + 1)? & 0xE0 == 0xE0 {
         Some((
@@ -122,6 +122,7 @@ fn get_mp3_header(data: &[u8]) -> Option<Mp3Header> {
         None?
     }
 
+    #[allow(clippy::unusual_byte_groupings)]
     let version = match vl_byte & 0b0001_1000 {
         0b00_000 => MpegVersion::Mpeg2_5,
         0b10_000 => MpegVersion::Mpeg2,

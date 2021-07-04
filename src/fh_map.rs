@@ -33,7 +33,7 @@ impl<T> FhMap<T> {
 
     pub async fn get(&self, fh: u64) -> Option<Arc<Mutex<T>>> {
         let inner_r = self.0.read().await;
-        inner_r.map.get(&fh).map(|file| file.clone())
+        inner_r.map.get(&fh).cloned()
     }
 
     pub async fn close(&self, fh: u64) {

@@ -144,15 +144,11 @@ async fn watch_thread(trees: ScanTrees, drive_access: Arc<DriveAccess>) {
         let changes = changes.unwrap();
         // Split this list of changes into additions and removals.
         let (additions, removals): (Vec<_>, _) = changes.into_iter().partition(|c| {
-            if let Change::Added(_) = c {
-                true
-            } else {
-                false
-            }
+            matches!(c, Change::Added(_))
         });
 
         // Handle the additions.
-        let page_items = &additions
+        let page_items: Vec<PageItem> = additions
             .into_iter()
             .filter_map(|c| {
                 if let Change::Added(page_item) = c {
@@ -164,7 +160,7 @@ async fn watch_thread(trees: ScanTrees, drive_access: Arc<DriveAccess>) {
             .collect();
 
         // Add new additions to database.
-        handle_one_page(&trees, page_items).await;
+        handle_one_page(&trees, &page_items).await;
 
         // Hard cache the added files.
         for page_item in page_items {
@@ -259,19 +255,15 @@ async fn perform_scan(
         .scan_tree
         .insert(b"last_scan_start", &recent_now.to_le_bytes());
 
-    loop {
-        if let Some(page) = scan_stream.try_next().await.unwrap() {
-            handle_one_page(trees, &page.items).await;
+    while let Some(page) = scan_stream.try_next().await.unwrap() {
+        handle_one_page(trees, &page.items).await;
 
-            if let Some(next_page_token) = page.next_page_token.as_deref() {
-                // println!("NEXT PAGE TOKEN: {}", next_page_token);
-                let next_page_token_bytes = serialize_rkyv(&next_page_token.to_string());
-                trees
-                    .scan_tree
-                    .insert(b"last_page_token", next_page_token_bytes.as_slice());
-            }
-        } else {
-            break;
+        if let Some(next_page_token) = page.next_page_token.as_deref() {
+            // println!("NEXT PAGE TOKEN: {}", next_page_token);
+            let next_page_token_bytes = serialize_rkyv(&next_page_token.to_string());
+            trees
+                .scan_tree
+                .insert(b"last_page_token", next_page_token_bytes.as_slice());
         }
     }
 
@@ -354,12 +346,12 @@ async fn perform_one_cache(trees: &ScanTrees, hard_cacher: &HardCacher, item: &A
 /// Handle adding one page of scanned items to the database.
 ///
 /// Groups items into their respective parents, and merges everything.
-async fn handle_one_page(trees: &ScanTrees, page_items: &Vec<PageItem>) {
+async fn handle_one_page(trees: &ScanTrees, page_items: &[PageItem]) {
     for (p, i) in page_items
         .iter()
         .group_by(|f| f.parent.clone())
         .into_iter()
-        .map(|(s, d)| (s, d.collect()))
+        .map(|(s, d)| (s, d.collect::<Vec<&PageItem>>()))
     {
         tokio::task::block_in_place(|| handle_add_items(trees, p.as_ref(), &i))
     }
@@ -372,7 +364,7 @@ async fn handle_one_page(trees: &ScanTrees, page_items: &Vec<PageItem>) {
 
 /// Add items shared within a parent. First, add the items individually, then
 /// create the parent with these items, or merge the items into an existing parent.
-fn handle_add_items(trees: &ScanTrees, parent: &str, items: &Vec<&PageItem>) {
+fn handle_add_items(trees: &ScanTrees, parent: &str, items: &[&PageItem]) {
     // If not set, 1 is set as the next available inode. Inode 0 is reserved for the root of the drive.
     // Stored as a u64, but shouldn't have a value that goes over 2^48.
     // That's 281 trillion though, which should never be reached even in extreme circumstances.
@@ -386,8 +378,7 @@ fn handle_add_items(trees: &ScanTrees, parent: &str, items: &Vec<&PageItem>) {
         u64::from_le_bytes(ei.as_ref().try_into().unwrap())
     } else {
         // Directory doesn't exist, so allocate a new inode
-        let parent_inode = trees.next_inode();
-        parent_inode
+        trees.next_inode()
     };
 
     // Keep a hashmap if ID -> inode, to map items in the parent
@@ -468,7 +459,7 @@ fn handle_add_items(trees: &ScanTrees, parent: &str, items: &Vec<&PageItem>) {
     let (parent_modified_time, new_items) =
         if let Some(existing_parent) = trees.inode_tree.get(&parent_inode.to_le_bytes()) {
             let existing_parent = get_rkyv::<DriveItem>(&existing_parent);
-            let mut new_items = items.clone();
+            let mut new_items = items;
             let parent_modified_time = merge_parent(existing_parent, &mut new_items);
             (parent_modified_time, new_items)
         } else {

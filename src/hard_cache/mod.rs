@@ -251,7 +251,7 @@ impl HardCacher {
                     println!("Preferred cacher {} failed, trying next...", spec.name);
                 }
                 Err(ScErr::CacheHandlerError(e)) => {
-                    Err(e)?
+                    return Err(e)
                 }
             }
         } else {
@@ -291,7 +291,7 @@ impl HardCacher {
                     // println!("Smart cacher {} failed, trying next...", spec.name);
                 }
                 Err(ScErr::CacheHandlerError(e)) => {
-                    Err(e)?
+                    return Err(e)
                 }
             }
         }
@@ -469,14 +469,12 @@ impl HcCacherItem for HcDownloadCacherItem {
                         return Ok(buf);
                     }
                 }
-            } else {
-                if let Some(mut reader) = self.readers.remove(&prev_offset) {
-                    reader.cache_exact(bridge_len as usize).await?;
-                    let mut buf = vec![0u8; size as usize];
-                    reader.read_exact(&mut buf).await?;
-                    self.readers.insert(offset + size, reader);
-                    return Ok(buf);
-                }
+            } else if let Some(mut reader) = self.readers.remove(&prev_offset) {
+                reader.cache_exact(bridge_len as usize).await?;
+                let mut buf = vec![0u8; size as usize];
+                reader.read_exact(&mut buf).await?;
+                self.readers.insert(offset + size, reader);
+                return Ok(buf);
             }
         }
         // If we can't bridge, just do read_data instead
@@ -533,9 +531,7 @@ impl HcCacherItem for HcDownloadCacherItem {
         reader.cache_exact(offset as usize).await?;
 
         // Throw into readers, just in case we read from that section later
-        if !self.readers.contains_key(&offset) {
-            self.readers.insert(offset, reader);
-        }
+        self.readers.entry(offset).or_insert(reader);
 
         Ok(())
     }
@@ -634,7 +630,7 @@ impl HardCacheDownloader {
         self.item.save().await
     }
 
-    pub fn reader<'a>(&'a mut self, offset: u64) -> HardCacheReader<'a> {
+    pub fn reader(&mut self, offset: u64) -> HardCacheReader<'_> {
         let size = self.file_item.size;
         HardCacheReader {
             dl_ptr: self,
@@ -646,12 +642,14 @@ impl HardCacheDownloader {
     }
 }
 
+type LastFut<T> = Option<Pin<Box<dyn Future<Output = T> + Send + 'static>>>;
+
 pub struct HardCacheReader<'a> {
     dl_ptr: *mut HardCacheDownloader,
     dl: &'a mut HardCacheDownloader,
     size: u64,
     offset: u64,
-    last_fut: Option<Pin<Box<dyn Future<Output = Result<Vec<u8>, CacheHandlerError>> + Send + 'static>>>, // references HardCacheDownloader, must not escape
+    last_fut: LastFut<Result<Vec<u8>, CacheHandlerError>>, // references HardCacheDownloader, must not escape
 }
 
 unsafe impl<'a> Send for HardCacheReader<'a> {}

@@ -162,7 +162,7 @@ impl DriveAccess {
     /// Check if a directory exists and is a directory.
     /// If it is, return bool that states if scanning is in progress.
     pub fn check_dir(&self, inode: u64) -> Result<TypeResult<bool>, CacheHandlerError> {
-        let scanning = self.scanning.load(Ordering::Release);
+        let scanning = self.scanning.load(Ordering::Acquire);
         Ok(if let Some(inode_data) = self.inode_tree.get(inode.to_le_bytes()) {
             let item = get_rkyv::<DriveItem>(&inode_data);
             if let ArchivedDriveItemData::Dir { items: _ } = item.data {
@@ -198,9 +198,9 @@ impl DriveAccess {
                     cc.cipher
                         .encrypt_segment(file_name)
                         .ok()
-                        .map(|s| Cow::Owned(s))
+                        .map(Cow::Owned)
                 })
-                .unwrap_or_else(|| Cow::Borrowed(file_name))
+                .unwrap_or(Cow::Borrowed(file_name))
         } else {
             Cow::Borrowed(file_name)
         };

@@ -99,11 +99,11 @@ impl OpenFile {
     /// cache: Which cache to get chunk from. If Any, check hard_cache then soft_cache.
     ///
     /// Returns chunk data, as well as a bool that's true if the chunk is in hard_cache, or false if in soft_cache.
-    pub fn get_chunk_at<'a>(
-        &'a self,
+    pub fn get_chunk_at(
+        &self,
         offset: u64,
         cache: Cache,
-    ) -> (GetRange<&'a ChunkData>, bool) {
+    ) -> (GetRange<&'_ ChunkData>, bool) {
         match cache {
             Cache::Hard => (self.hc_chunks.get_range_at(offset), true),
             Cache::Any => {
@@ -253,7 +253,7 @@ impl OpenFile {
 
         // let read_file = File::open(file_path).await?;
         let read_file_res = File::open(file_path).await;
-        if let Err(_) = &read_file_res {
+        if read_file_res.is_err() {
             println!("File error occurred!");
         }
         let read_file = read_file_res?;
@@ -313,7 +313,7 @@ impl OpenFile {
 
         self.revision += 1;
 
-        let download_status = Arc::new(Mutex::new(Some(DownloadStatus::from_prev(
+        let download_status = Arc::new(Mutex::new(Some(DownloadStatus::chain_from_prev(
             prev_download_status,
             write_file,
             split_offset,
@@ -337,7 +337,7 @@ impl OpenFile {
 
         //let read_file = File::open(file_path).await?;
         let read_file_res = File::open(file_path).await;
-        if let Err(_) = &read_file_res {
+        if read_file_res.is_err() {
             println!("File error occurred!");
         }
         let read_file = read_file_res?;
@@ -435,7 +435,7 @@ impl OpenFile {
 
             // let mut read_file = File::open(file_path).await?;
             let read_file_res = File::open(file_path).await;
-            if let Err(_) = &read_file_res {
+            if read_file_res.is_err() {
                 println!("File error occurred!");
             }
             let mut read_file = read_file_res?;
@@ -484,7 +484,7 @@ impl OpenFile {
 
         // let mut cache_file = File::open(source_file_path).await?;
         let cache_file_res = File::open(source_file_path).await;
-        if let Err(_) = &cache_file_res {
+        if cache_file_res.is_err() {
             println!("File error occurred!");
         }
         let mut cache_file = cache_file_res?;
@@ -515,7 +515,7 @@ impl OpenFile {
 
         // let read_file = File::open(file_path).await?;
         let read_file_res = File::open(file_path).await;
-        if let Err(_) = &read_file_res {
+        if read_file_res.is_err() {
             println!("File error occurred!");
         }
         let read_file = read_file_res?;
@@ -547,6 +547,7 @@ impl OpenFile {
     }
 
     /// Get the end_offset and DownloadStatus of a particular chunk.
+    #[allow(clippy::type_complexity)]
     pub fn get_download_status(
         &self,
         hard_cache: bool,
@@ -690,6 +691,9 @@ impl fmt::Debug for DownloadStatus {
 }
 
 impl DownloadStatus {
+    /// Create new DownloadStatus from a receiver.
+    ///
+    /// The Receiver can be a downloader or a soft cache reader.
     pub fn new(
         receiver: Receiver,
         write_file: File,
@@ -706,7 +710,10 @@ impl DownloadStatus {
         }
     }
 
-    pub fn from_prev(
+    /// Create a new DownloadStatus, chained from a previous one.
+    /// This is used when we want to use the same receiver,
+    /// but need to write to a new file.
+    pub fn chain_from_prev(
         prev: DownloadStatus,
         write_file: File,
         split_offset: u64,

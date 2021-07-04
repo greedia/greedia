@@ -214,7 +214,7 @@ fn handle_cache_cleanup(
         // Get the file size from stat.
         let file_path = get_file_cache_chunk_path(cache_root, &data_id, ts_data.offset);
         let file_len = file_path.metadata().ok().map(|x| x.len()).unwrap_or(0);
-        if let Err(_) = fs::remove_file(&file_path) {
+        if fs::remove_file(&file_path).is_err() {
             // If we can't delete the file, just ignore the error.
             // We've likely already recovered the space from it.
         }

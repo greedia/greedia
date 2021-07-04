@@ -160,7 +160,7 @@ async fn get_gdrive_drives(
     let mut drive_set: HashSet<String> = HashSet::new();
     let mut da_out = Vec::new();
 
-    for (_, cfg_drive) in &gdrives {
+    for cfg_drive in gdrives.values() {
         if let (Some(password), Some(password2)) = (&cfg_drive.password, &cfg_drive.password2) {
             let cc = CryptContext::new(password, password2)?;
             if let Some(v) = client_crypts.get_mut(&cfg_drive.drive_id) {
@@ -176,7 +176,7 @@ async fn get_gdrive_drives(
             client.clone()
         } else {
 
-            let service_accounts = cfg_drive.service_accounts.unwrap_or_else(|| Vec::new());
+            let service_accounts = cfg_drive.service_accounts.unwrap_or_else(Vec::new);
             let sa_refs: Vec<_> = service_accounts.iter().map(|sa| sa.as_path()).collect();
 
             let new_client = Arc::new(
@@ -196,15 +196,15 @@ async fn get_gdrive_drives(
 
         let drive = client.open_drive(&cfg_drive.drive_id);
 
-        let cache_handler = FilesystemCacheHandler::new(
+        let cache_handler = Box::new(FilesystemCacheHandler::new(
             &cfg_drive.drive_id,
             Some(lru.clone()),
             &hard_cache_root,
             &soft_cache_root,
             drive.into(),
-        );
+        ));
 
-        let root_path = cfg_drive.root_path.map(|x| PathBuf::from(x));
+        let root_path = cfg_drive.root_path.map(PathBuf::from);
 
         let da = DriveAccess::new(
             name.clone(),
@@ -215,7 +215,7 @@ async fn get_gdrive_drives(
             client_crypts
                 .get(&cfg_drive.drive_id)
                 .cloned()
-                .unwrap_or(vec![]),
+                .unwrap_or_else(Vec::new),
         );
 
         da_out.push((Arc::new(da), do_scan));
@@ -238,13 +238,13 @@ async fn get_timecode_drives(
         let drive = Arc::new(TimecodeDrive {
             root_name: cfg_drive.drive_id.clone(),
         });
-        let cache_handler = FilesystemCacheHandler::new(
+        let cache_handler = Box::new(FilesystemCacheHandler::new(
             &cfg_drive.drive_id,
             Some(lru.clone()),
             &hard_cache_root,
             &soft_cache_root,
             drive,
-        );
+        ));
 
         let da = DriveAccess::new(name.clone(), cache_handler, db.clone(), None, false, vec![]);
 

@@ -197,7 +197,7 @@ impl GreediaFS {
             // File name overrides are typically used when a file is encrypted.
             // Items are stored in a read-only manner, so this allows us to use
             // the unencrypted file name, without having to clone and modify the item.
-            let file_name = file_name_override.unwrap_or(item.name.as_str());
+            let file_name = file_name_override.unwrap_or_else(|| item.name.as_str());
             let name = OsStr::new(file_name);
             let ino = self.rev_inode(Inode::Drive(drive, item.inode));
             let off = off + 1;
@@ -372,7 +372,10 @@ impl GreediaFS {
         let mut readdir_out = ReaddirOut::new(size as usize);
 
         let dir = match self.map_inode(op.ino()) {
-            Inode::Root => Some(self.readdir_root(offset, &mut readdir_out)),
+            Inode::Root => {
+                self.readdir_root(offset, &mut readdir_out);
+                Some(())
+            }
             Inode::Unknown => None,
             Inode::Drive(drive, local_inode) => {
                 self.readdir_drive(drive, local_inode, offset, &mut readdir_out)
@@ -467,11 +470,9 @@ impl GreediaFS {
 
             // FUSE passes us explicit offsets, so if our offset isn't where we expected
             // the reader probably made a seek.
-            if *f_offset != offset {
-                if reader.seek_to(offset).await.is_err() {
-                    req.reply_error(libc::EIO)?;
-                    return Ok(());
-                };
+            if *f_offset != offset && reader.seek_to(offset).await.is_err() {
+                req.reply_error(libc::EIO)?;
+                return Ok(());
             }
 
             // FUSE requires us to give an exact size, so make sure the buffer is large

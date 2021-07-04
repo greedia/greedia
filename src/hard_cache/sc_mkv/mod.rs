@@ -1,8 +1,9 @@
 // Matroska files use an encoding format called EBML to encode all the data in the headers.
 //
 // Since it is meant to be a very flexible format that takes pretty much any type of video or audio streams,
-// MKV files don't appear to have bitrates in their metadata. Instead, they just have seek tables, which should
-// be enough to figure out approximately how far to download.
+// MKV files don't appear to have bitrates in their metadata. Instead, they have "clusters" which contain a
+// starting timestamp in each. We can use this to figure out how far to download. We can also use the
+// seek table to find other components within the mkv file, such as tags and attachments.
 //
 // I have (somewhat shamefully) stolen and modified ebml.rs from the rust `matroska` library
 // (https://github.com/tuffy/matroska/blob/master/src/ebml.rs).
@@ -87,7 +88,6 @@ impl SmartCacher for ScMkv {
         let mut got_tracks = false;
         let mut got_cues = false;
         let mut got_tags = false;
-        //let mut got_clusters = false;
 
         // Loop to get the sequential headers
         loop {
@@ -132,7 +132,6 @@ impl SmartCacher for ScMkv {
                 ids::CLUSTER => {
                     let timecode_scale =
                         info.as_ref().ok_or(Cancel)?.timecode_scale.ok_or(Cancel)?;
-                    //got_clusters = true; // TODO: find clusters afterwards if they weren't found after header
 
                     // Get the starting timecode of this cluster
                     let (_, size_2, _) =
@@ -153,7 +152,6 @@ impl SmartCacher for ScMkv {
                         // It's a small enough element, so just cache it.
                         r.cache_bytes(size_1).await?;
                     } else {
-                        // TODO: handle downloading clusters if not downloaded at this point.
                         big_element_offset = Some(start_offset);
                         break;
                     }
@@ -169,7 +167,7 @@ impl SmartCacher for ScMkv {
                 seek_table.seek.range(..)
             };
 
-            // ffmpeg grabs a bunch of bytes before the tail, so lets get 10kb just in case.
+            // ffmpeg grabs a bunch of bytes before the tail for some reason, so lets get 10kb just in case.
             let pre_tail_cache = 10_000;
             let mut pre_tail_cached = false;
 

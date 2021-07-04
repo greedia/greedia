@@ -9,7 +9,7 @@ use crate::config::SmartCacherConfig;
 use async_trait::async_trait;
 
 static SPEC: SmartCacherSpec = SmartCacherSpec {
-    name: "flac_alpha",
+    name: "flac_testing",
     exts: &["flac"],
 };
 

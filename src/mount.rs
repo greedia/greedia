@@ -85,11 +85,15 @@ impl GreediaFS {
         }
     }
 
+    /// Maps a u64 incode to an internal inode representation.
+    ///
+    /// Each drive has its own "set" of inodes, and external FUSE inodes combine these,
+    /// along with a drive number.
+    ///
+    /// The first 16 bits in an inode are the drive_id, and the last 48 bits are the item_id.
+    /// drive_id 0 is reserved for the root, so drives start at drive_id 1.
+    /// Within drive_id 0, item_id 1 is the mount root, and item_id 2 is an "unknown" entry that always returns ENOENT.
     fn map_inode(&self, inode: u64) -> Inode {
-        // The first 16 bytes in an inode are the drive_id, and the last 48 bytes are the item_id.
-        // drive_id 0 is reserved, so drives start at drive_id 1.
-        // Within drive_id 0, item_id 1 is the mount root, and item_id 2 is an "unknown" entry that always returns ENOENT.
-
         match inode {
             inode if inode == 1 => Inode::Root,
             inode if inode >= DRIVE_OFFSET => {
@@ -99,6 +103,9 @@ impl GreediaFS {
         }
     }
 
+    /// Maps an internal Inode into a u64 FUSE inode.
+    ///
+    /// Performs the reverse of `map_inode`.
     fn rev_inode(&self, inode: Inode) -> u64 {
         match inode {
             Inode::Root => 1,
@@ -108,6 +115,7 @@ impl GreediaFS {
         }
     }
 
+    /// Fill in the file attribute for a `getattr()` call to the root mount.
     fn getattr_root(&self, file_attr: &mut FileAttr) -> Duration {
         file_attr.mode(libc::S_IFDIR as u32 | 0o555);
         file_attr.ino(1);
@@ -118,6 +126,7 @@ impl GreediaFS {
         TTL_LONG
     }
 
+    /// Fill in the file attribute for a `getattr()` call to a drive directory within the root mount.
     fn getattr_drive(&self, drive: u16, file_attr: &mut FileAttr) -> Option<Duration> {
         if self.drives.len() <= drive as usize {
             None
@@ -130,6 +139,7 @@ impl GreediaFS {
         }
     }
 
+    /// Fill in the file attribute for a `getattr()` call to any file or directory within a drive.
     fn getattr_item(&self, drive: u16, inode: u64, file_attr: &mut FileAttr) -> Option<Duration> {
         let drive_access = self.drives.get(drive as usize)?;
         drive_access.getattr_item(inode, |item| {
@@ -152,6 +162,12 @@ impl GreediaFS {
         Some(TTL_LONG)
     }
 
+    /// Read the root directory for a `readdir()` call.
+    ///
+    /// Returns every drive as a directory in the root mount.
+    ///
+    /// As the root directory should never change during runtime,
+    /// the kernel is instructed to always cache the root.
     fn readdir_root(&self, offset: u64, readdir_out: &mut ReaddirOut) {
         for (num, drive) in self.drives.iter().skip(offset as usize).enumerate() {
             let name = OsStr::new(&drive.name);
@@ -164,6 +180,10 @@ impl GreediaFS {
         }
     }
 
+    /// Read a directory in a drive for a `readdir()` call.
+    ///
+    /// Takes an inode as a pointer to a directory to read.
+    /// If the inode is 0, read the root directory of the drive.
     async fn readdir_drive(
         &self,
         drive: u16,
@@ -174,6 +194,9 @@ impl GreediaFS {
         let drive_access = self.drives.get(drive as usize)?;
 
         drive_access.readdir(inode, offset, |off, item, file_name_override| {
+            // File name overrides are typically used when a file is encrypted.
+            // Items are stored in a read-only manner, so this allows us to use
+            // the unencrypted file name, without having to clone and modify the item.
             let file_name = file_name_override.unwrap_or(item.name.as_str());
             let name = OsStr::new(file_name);
             let ino = self.rev_inode(Inode::Drive(drive, item.inode));
@@ -188,6 +211,9 @@ impl GreediaFS {
         })
     }
 
+    /// Looks up a filename within a directory for a `lookup()` call.
+    ///
+    /// Returns an entry if a drive name within the root mount exists.
     fn lookup_root(&self, name: &OsStr) -> Option<EntryOut> {
         let name = name.to_str()?;
         let drive_num = self
@@ -209,6 +235,10 @@ impl GreediaFS {
         Some(entry_out)
     }
 
+    /// Looks up a filename within a drive directory for a `lookup()` call.
+    ///
+    /// Takes an inode as a pointer to a directory to look up a file inside.
+    /// If the inode is 0, look up in the root directory of the drive.
     fn lookup_drive(&self, drive: u16, inode: u64, name: &OsStr) -> Option<EntryOut> {
         let drive_access = self.drives.get(drive as usize)?;
         let file_name = name.to_str()?;
@@ -244,6 +274,10 @@ impl GreediaFS {
         Some(reply_entry)
     }
 
+    /// Open a file within a drive from an `open()` call.
+    ///
+    /// There is no root version of this, as the root only contains
+    /// drives, which are all represented as directories.
     async fn open_drive(&self, drive: u16, local_inode: u64) -> Result<TypeResult<OpenOut>, CacheHandlerError> {
         Ok(if let Some(drive_access) = self.drives.get(drive as usize) {
             match drive_access.open_file(local_inode, 0).await? {
@@ -270,6 +304,9 @@ impl GreediaFS {
         })
     }
 
+    /// Open a directory within the root from an `opendir()` call.
+    ///
+    /// No parameters are taken, as there's only one root directory that can be opened.
     async fn opendir_root(&self) -> OpenOut {
         let mut open_out = OpenOut::default();
         open_out.fh(0);
@@ -277,6 +314,10 @@ impl GreediaFS {
         open_out
     }
 
+    /// Open a directory within a drive from an `opendir()` call.
+    ///
+    /// This only returns an entry if an item exists at a local_inode,
+    /// and that item is a directory.
     async fn opendir_drive(&self, drive: u16, local_inode: u64) -> Result<TypeResult<OpenOut>, CacheHandlerError> {
         Ok(if let Some(drive_access) = self.drives.get(drive as usize) {
             match drive_access.check_dir(local_inode)? {
@@ -295,6 +336,11 @@ impl GreediaFS {
         })
     }
 
+    /// Pass a FUSE `getattr()` call to the correct sub-method (root, drive, item).
+    ///
+    /// This function splits the FUSE inode apart using `map_inode` to figure out
+    /// if we're requesting the attributes for the root mount, a drive directory,
+    /// or an item within a drive directory.
     async fn do_getattr(&self, req: &Request, op: op::Getattr<'_>) -> io::Result<()> {
         let mut attr_out = AttrOut::default();
         let file_attr = attr_out.attr();
@@ -318,6 +364,7 @@ impl GreediaFS {
         Ok(())
     }
 
+    /// Pass a FUSE `readdir()` call to the correct sub-method (root, drive).
     async fn do_readdir(&self, req: &Request, op: op::Readdir<'_>) -> io::Result<()> {
         let offset = op.offset();
         let size = op.size();
@@ -341,6 +388,7 @@ impl GreediaFS {
         Ok(())
     }
 
+    /// Pass a FUSE `lookup()` call to the correct sub-method (root, drive).
     async fn do_lookup(&self, req: &Request, op: op::Lookup<'_>) -> io::Result<()> {
         let inode = op.parent();
         let name = op.name();
@@ -358,6 +406,8 @@ impl GreediaFS {
         Ok(())
     }
 
+    /// Pass a FUSE `open()` call to the correct sub-method. In this case it must be an
+    /// item within a drive, or it must not exist, as the root only consists of directories.
     async fn do_open(&self, req: &Request, op: op::Open<'_>) -> io::Result<()> {
         let inode = op.ino();
         let open = match self.map_inode(inode) {
@@ -378,6 +428,7 @@ impl GreediaFS {
         Ok(())
     }
 
+    /// Pass a FUSE `opendir()` call to the correct sub-method (root, drive).
     async fn do_opendir(&self, req: &Request, op: op::Opendir<'_>) -> io::Result<()> {
         let inode = op.ino();
         let opendir = match self.map_inode(inode) {
@@ -396,7 +447,10 @@ impl GreediaFS {
         Ok(())
     }
 
-    /// Perform a FUSE read() operation.
+    /// Handle a FUSE `read()` call.
+    ///
+    /// This uses a file handle successfully retrieved from a previous `open()` call.
+    /// The calls are passed through a `CacheFileHandler` reader, which does all the fun stuff.
     async fn do_read(&self, req: &Request, op: op::Read<'_>) -> io::Result<()> {
         let fh = op.fh();
         let offset = op.offset();
@@ -441,6 +495,9 @@ impl GreediaFS {
         Ok(())
     }
 
+    /// Handle a FUSE `release()` call.
+    ///
+    /// This is usually called when a file is closed.
     async fn do_release(&self, req: &Request, op: op::Release<'_>) -> io::Result<()> {
         let fh = op.fh();
         self.file_handles.close(fh).await;

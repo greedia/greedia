@@ -19,8 +19,8 @@ use std::{
 
 use chrono::{Duration, TimeZone, Utc};
 use flume::Receiver;
-use futures::{Stream, StreamExt, TryStreamExt};
 use futures::future::join_all;
+use futures::{Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use rkyv::{de::deserializers::AllocDeserializer, Archive, Deserialize, Serialize};
 use sled::IVec;
@@ -66,7 +66,13 @@ impl ScanTrees {
 
         let next_inode = scan_tree
             .get(b"next_inode")
-            .map(|i| u64::from_le_bytes(i.as_ref().try_into().expect("try_into from_le_bytes failed. DB might be corrupt.")))
+            .map(|i| {
+                u64::from_le_bytes(
+                    i.as_ref()
+                        .try_into()
+                        .expect("try_into from_le_bytes failed. DB might be corrupt."),
+                )
+            })
             .unwrap_or(1);
 
         let next_inode = Arc::new(AtomicU64::new(next_inode));
@@ -111,7 +117,13 @@ pub async fn scan_thread(drive_access: Arc<DriveAccess>) {
     let last_modified_date = trees
         .scan_tree
         .get(b"last_modified_date")
-        .map(|x| i64::from_le_bytes(x.as_ref().try_into().expect("try_into from_le_bytes failed")))
+        .map(|x| {
+            i64::from_le_bytes(
+                x.as_ref()
+                    .try_into()
+                    .expect("try_into from_le_bytes failed"),
+            )
+        })
         .map(|x| Utc.timestamp(x, 0));
 
     let scan_stream = drive_access
@@ -143,9 +155,9 @@ async fn watch_thread(trees: ScanTrees, drive_access: Arc<DriveAccess>) {
     while let Some(changes) = change_stream.next().await {
         let changes = changes.unwrap();
         // Split this list of changes into additions and removals.
-        let (additions, removals): (Vec<_>, _) = changes.into_iter().partition(|c| {
-            matches!(c, Change::Added(_))
-        });
+        let (additions, removals): (Vec<_>, _) = changes
+            .into_iter()
+            .partition(|c| matches!(c, Change::Added(_)));
 
         // Handle the additions.
         let page_items: Vec<PageItem> = additions
@@ -308,7 +320,11 @@ async fn caching_thread(trees: ScanTrees, drive_access: Arc<DriveAccess>, recv: 
 }
 
 /// Cache one single item. Returns true if successful, or false if attempt needs to be made later.
-async fn perform_one_cache(trees: &ScanTrees, hard_cacher: &HardCacher, item: &ArchivedDriveItem) -> bool {
+async fn perform_one_cache(
+    trees: &ScanTrees,
+    hard_cacher: &HardCacher,
+    item: &ArchivedDriveItem,
+) -> bool {
     if let ArchivedDriveItemData::FileItem {
         file_name,
         data_id,
@@ -324,8 +340,9 @@ async fn perform_one_cache(trees: &ScanTrees, hard_cacher: &HardCacher, item: &A
 
         // KTODO: handle CacheHandlerErrors here
         match hard_cacher
-                    .process(item.access_id.as_str(), file_name, &data_id, *size, hc_meta)
-                    .await {
+            .process(item.access_id.as_str(), file_name, &data_id, *size, hc_meta)
+            .await
+        {
             Ok(meta) => {
                 let meta_bytes = serialize_rkyv(&meta);
                 trees
@@ -333,9 +350,7 @@ async fn perform_one_cache(trees: &ScanTrees, hard_cacher: &HardCacher, item: &A
                     .insert(data_id_key.as_slice(), meta_bytes);
                 true
             }
-            Err(_) => {
-                false
-            }
+            Err(_) => false,
         }
     } else {
         // Was a directory rather than a file, so accept and don't try again.

@@ -105,9 +105,7 @@ static IDS_FLOAT: Set<u32> = phf_set! {
 };
 
 impl Element {
-    pub fn parse<R: AsyncRead + Send + Sync + Unpin>(
-        r: &mut R,
-    ) -> BoxFuture<'_, MResult<Element>> {
+    pub fn parse<R: AsyncRead + Send + Sync + Unpin>(r: &mut R) -> BoxFuture<'_, MResult<Element>> {
         async move {
             let (id, size, header_len) = read_element_id_size(r).await?;
             let val = Element::parse_body(r, id, size).await?;

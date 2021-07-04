@@ -61,7 +61,9 @@ impl SmartCacher for ScMp3 {
         let data_length = mp3_header.bitrate * config.seconds;
 
         // Download up to that offset.
-        action.cache_data_to(mp3_header_offset + data_length).await?;
+        action
+            .cache_data_to(mp3_header_offset + data_length)
+            .await?;
 
         // Cache the ID3v1 tag location, just in case it exists.
         action.cache_data(file_spec.size - 128, 128).await?;

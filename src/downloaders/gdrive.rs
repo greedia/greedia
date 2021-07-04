@@ -11,7 +11,15 @@ use oauth2::{
 };
 use reqwest::{self, Client};
 use serde::{Deserialize, Serialize};
-use std::{borrow::Cow, path::Path, sync::{Arc, atomic::{AtomicU64, Ordering}}, time::Duration};
+use std::{
+    borrow::Cow,
+    path::Path,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 use tokio::sync::{
     mpsc::{self, Sender},
     Mutex,
@@ -48,9 +56,13 @@ impl AccessInstanceHandler {
 
     pub fn next(&self) -> &'_ AccessInstance {
         let index = self.index.fetch_add(1, Ordering::AcqRel) % self.access_instances.len() as u64;
-        
+
         let access_instance = self.access_instances.get(index as usize).unwrap();
-        println!("access_instance_handler next {}/{}", index, self.access_instances.len());
+        println!(
+            "access_instance_handler next {}/{}",
+            index,
+            self.access_instances.len()
+        );
         access_instance
     }
 
@@ -68,26 +80,22 @@ pub enum AccessInstance {
 impl AccessInstance {
     pub async fn access_token(&self) -> AccessToken {
         match self {
-            AccessInstance::Client(c) => {
-                c.access_token.lock().await.clone()
-            }
-            AccessInstance::ServiceAccount(sa) => {
-                sa.access_token.lock().await.clone()
-            }
+            AccessInstance::Client(c) => c.access_token.lock().await.clone(),
+            AccessInstance::ServiceAccount(sa) => sa.access_token.lock().await.clone(),
         }
     }
 
     pub async fn refresh_access_token(&self, http_client: &Client) -> Result<(), DownloaderError> {
         match self {
             AccessInstance::Client(c) => {
-                let access_token = get_new_token(&c.conn_info, &c.rate_limiter).await.ok_or(DownloaderError::AccessTokenError)?;
+                let access_token = get_new_token(&c.conn_info, &c.rate_limiter)
+                    .await
+                    .ok_or(DownloaderError::AccessTokenError)?;
                 *c.access_token.lock().await = access_token;
             }
             AccessInstance::ServiceAccount(sa) => {
-                let access_token = ServiceAccountInstance::get_new_token(
-                    http_client,
-                    &sa.service_account,
-                ).await?;
+                let access_token =
+                    ServiceAccountInstance::get_new_token(http_client, &sa.service_account).await?;
                 *sa.access_token.lock().await = access_token;
             }
         }
@@ -97,12 +105,8 @@ impl AccessInstance {
 
     pub async fn rate_limit(&self, bg_request: bool, retry: bool) {
         let rate_limiter = match self {
-            AccessInstance::Client(c) => {
-                &c.rate_limiter
-            }
-            AccessInstance::ServiceAccount(sa) => {
-                &sa.rate_limiter
-            }
+            AccessInstance::Client(c) => &c.rate_limiter,
+            AccessInstance::ServiceAccount(sa) => &sa.rate_limiter,
         };
 
         if bg_request {
@@ -127,7 +131,11 @@ pub struct ClientInstance {
 }
 
 impl ClientInstance {
-    pub async fn new(client_id: &str, client_secret: &str, refresh_token: &str) -> Result<ClientInstance, DownloaderError> {
+    pub async fn new(
+        client_id: &str,
+        client_secret: &str,
+        refresh_token: &str,
+    ) -> Result<ClientInstance, DownloaderError> {
         let rate_limiter = PrioLimit::new(1, 5, Duration::from_millis(100));
 
         let client_id = ClientId::new(client_id.to_owned());
@@ -140,13 +148,12 @@ impl ClientInstance {
             refresh_token,
         };
 
-        let initial_access_token =
-            get_new_token(&conn_info, &rate_limiter)
-                .await
-                .ok_or(DownloaderError::AccessTokenError)?;
+        let initial_access_token = get_new_token(&conn_info, &rate_limiter)
+            .await
+            .ok_or(DownloaderError::AccessTokenError)?;
         let access_token = Mutex::new(initial_access_token);
 
-        let client_instance = ClientInstance{
+        let client_instance = ClientInstance {
             rate_limiter,
             access_token,
             conn_info,
@@ -164,7 +171,10 @@ pub struct ServiceAccountInstance {
 }
 
 impl ServiceAccountInstance {
-    pub async fn new(http_client: &Client, path: &Path) -> Result<ServiceAccountInstance, DownloaderError> {
+    pub async fn new(
+        http_client: &Client,
+        path: &Path,
+    ) -> Result<ServiceAccountInstance, DownloaderError> {
         let rate_limiter = PrioLimit::new(1, 5, Duration::from_millis(100));
 
         let sa_bytes = tokio::fs::read(path).await.unwrap();
@@ -180,9 +190,10 @@ impl ServiceAccountInstance {
         })
     }
 
-
-
-    async fn get_new_token(http_client: &Client, service_account: &ServiceAccount) -> Result<AccessToken, DownloaderError> {
+    async fn get_new_token(
+        http_client: &Client,
+        service_account: &ServiceAccount,
+    ) -> Result<AccessToken, DownloaderError> {
         let key_pair = RS256KeyPair::from_pem(&service_account.private_key).unwrap();
         let scope = "https://www.googleapis.com/auth/drive.readonly";
 
@@ -192,9 +203,12 @@ impl ServiceAccountInstance {
             aud: service_account.token_uri.clone(),
         };
         let claims = Claims::with_custom_claims(claim_data, JwtDuration::from_hours(1));
-        let token = key_pair.sign(claims).map_err(|_| DownloaderError::AccessTokenError)?;
+        let token = key_pair
+            .sign(claims)
+            .map_err(|_| DownloaderError::AccessTokenError)?;
 
-        let res = http_client.post("https://oauth2.googleapis.com/token")
+        let res = http_client
+            .post("https://oauth2.googleapis.com/token")
             .form(&[
                 ("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"),
                 ("assertion", &token),
@@ -222,7 +236,9 @@ impl GDriveClient {
         // Create all service account instances
         let mut access_instances = vec![AccessInstance::Client(client_instance)];
         for sa in service_account_files {
-            let service_account_instance = AccessInstance::ServiceAccount(ServiceAccountInstance::new(&http_client, *sa).await?);
+            let service_account_instance = AccessInstance::ServiceAccount(
+                ServiceAccountInstance::new(&http_client, *sa).await?,
+            );
             access_instances.push(service_account_instance);
         }
 
@@ -265,7 +281,6 @@ async fn scanner_bg_thread(
     mut state: GDriveStreamState,
     sender: Sender<Result<Page, DownloaderError>>,
 ) {
-
     loop {
         let mut query = state.root_query.clone();
         if let Some(page_token) = state.last_page_token.as_deref() {
@@ -292,7 +307,10 @@ async fn scanner_bg_thread(
                     200 => (),
                     // Bad access token, refresh it and retry request
                     401 => {
-                        access_instance.refresh_access_token(&state.http_client).await.unwrap();
+                        access_instance
+                            .refresh_access_token(&state.http_client)
+                            .await
+                            .unwrap();
                         continue;
                     }
                     // Rate limit or server error, retry request
@@ -363,7 +381,7 @@ async fn watcher_bg_thread(
         access_instance.rate_limit(true, false).await;
 
         let access_token = access_instance.access_token().await;
-        
+
         let res = if let Some(start_page_token) = &start_page_token {
             // If we wanted to get extra fancy, we could get a 10-second deadline, bg_wait,
             // then sleep for whatever time's left. This is probably good enough for now, though.
@@ -414,7 +432,10 @@ async fn watcher_bg_thread(
                     200 => (),
                     // Bad access token, refresh it and retry request
                     401 => {
-                        access_instance.refresh_access_token(&state.http_client).await.unwrap();
+                        access_instance
+                            .refresh_access_token(&state.http_client)
+                            .await
+                            .unwrap();
                         continue;
                     }
                     // Rate limit or server error, retry request
@@ -543,12 +564,12 @@ impl DownloaderDrive for GDriveDrive {
             match res {
                 Ok(res) => {
                     let stream = res.bytes_stream().map_err(|e| e.into());
-                    return Ok(Box::new(stream))
+                    return Ok(Box::new(stream));
                 }
                 Err(DownloaderError::QuotaExceeded) => {
                     continue;
                 }
-                Err(e) => return Err(e)
+                Err(e) => return Err(e),
             }
         }
 
@@ -605,7 +626,7 @@ async fn open_request(
                             for error in errors.iter() {
                                 if error.reason == "downloadQuotaExceeded" {
                                     println!("{:?}", &error_json);
-                                    return Err(DownloaderError::QuotaExceeded)
+                                    return Err(DownloaderError::QuotaExceeded);
                                 }
                             }
                         }
@@ -765,7 +786,7 @@ pub struct GChangeFile {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GErrorTop {
-    error: GErrorInner
+    error: GErrorInner,
 }
 
 #[derive(Debug, Deserialize)]
@@ -861,7 +882,8 @@ mod test {
         println!("token: {}", token);
 
         let rclient = reqwest::Client::new();
-        let res = rclient.post("https://oauth2.googleapis.com/token")
+        let res = rclient
+            .post("https://oauth2.googleapis.com/token")
             .form(&[
                 ("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"),
                 ("assertion", &token),
@@ -872,7 +894,7 @@ mod test {
         dbg!(&res.status());
         let res_data = res.json::<SaJwtResponse>().await.unwrap();
         dbg!(&res_data);
-        
+
         let url = format!("https://www.googleapis.com/drive/v3/files/{}", file_id);
         let res = rclient
             .get(&url)

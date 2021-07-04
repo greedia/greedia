@@ -1,9 +1,19 @@
 // Filesystem cache handler
 
-use std::{cmp::min, collections::HashMap, io::SeekFrom, mem, path::Path, path::PathBuf, sync::Arc, sync::{
+use std::{
+    cmp::min,
+    collections::HashMap,
+    io::SeekFrom,
+    mem,
+    path::Path,
+    path::PathBuf,
+    sync::Arc,
+    sync::{
         atomic::{AtomicU64, Ordering},
         Weak,
-    }, time::Duration};
+    },
+    time::Duration,
+};
 
 use self::{
     lru::Lru,
@@ -17,7 +27,12 @@ use async_trait::async_trait;
 use byte_ranger::GetRange;
 use bytes::{Bytes, BytesMut};
 use futures::{Stream, StreamExt};
-use tokio::{fs::{self, File}, io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt}, sync::Mutex, time::sleep};
+use tokio::{
+    fs::{self, File},
+    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
+    sync::Mutex,
+    time::sleep,
+};
 
 mod open_file;
 use open_file::OpenFile;
@@ -283,7 +298,11 @@ impl CacheFileHandler for FilesystemCacheFileHandler {
 
 impl FilesystemCacheFileHandler {
     /// Handle the read_into and cache_data methods
-    async fn handle_read_into(&mut self, len: usize, mut buf: Option<&mut [u8]>) -> Result<usize, CacheHandlerError> {
+    async fn handle_read_into(
+        &mut self,
+        len: usize,
+        mut buf: Option<&mut [u8]>,
+    ) -> Result<usize, CacheHandlerError> {
         // println!("handle_read_into len {} buf {} offset {} size {}, hc {}", len, buf.is_some(), self.offset, self.size, self.write_hard_cache);
         // dbg!(&self.current_chunk);
         // EOF short-circuit
@@ -342,7 +361,11 @@ impl FilesystemCacheFileHandler {
         panic!("HANDLE_INTO loop failed")
     }
 
-    async fn handle_chunk(&mut self, len: usize, buf: &mut Option<&mut [u8]>) -> Result<Reader, CacheHandlerError> {
+    async fn handle_chunk(
+        &mut self,
+        len: usize,
+        buf: &mut Option<&mut [u8]>,
+    ) -> Result<Reader, CacheHandlerError> {
         if let Some(ref mut current_chunk) = self.current_chunk {
             let data_read = match current_chunk {
                 CurrentChunk::Downloading { read_data, _dl } => {
@@ -789,7 +812,11 @@ impl FilesystemCacheFileHandler {
     }
 
     /// Read data from file, or ignore if we're caching.
-    async fn simple_read(file: &mut File, buf: &mut Option<&mut [u8]>, len: usize) -> Result<usize, CacheHandlerError> {
+    async fn simple_read(
+        file: &mut File,
+        buf: &mut Option<&mut [u8]>,
+        len: usize,
+    ) -> Result<usize, CacheHandlerError> {
         Ok(if let Some(buf) = buf {
             file.read(&mut buf[..len]).await?
         } else {
@@ -1049,7 +1076,13 @@ mod test {
     use std::env;
 
     use super::*;
-    use crate::{cache_handlers::{crypt_passthrough::CryptPassthrough, crypt_context::CryptContext, filesystem::FilesystemCacheHandler}, downloaders::{gdrive::GDriveClient, timecode::TimecodeDrive, DownloaderClient}};
+    use crate::{
+        cache_handlers::{
+            crypt_context::CryptContext, crypt_passthrough::CryptPassthrough,
+            filesystem::FilesystemCacheHandler,
+        },
+        downloaders::{gdrive::GDriveClient, timecode::TimecodeDrive, DownloaderClient},
+    };
 
     use proptest::{
         arbitrary::any,
@@ -1255,27 +1288,34 @@ mod test {
         let mut files = vec![];
         for f in 0..3 {
             if let Some(ctx) = &crypt_context {
-                let reader = fsch.open_file(
-                    file_id.to_owned(),
-                    data_id.clone(),
-                    file_size,
-                    0,
-                    init_hard_cache[f],
-                )
-                .await
-                .unwrap();
-                let file: Box<dyn CacheFileHandler> = Box::new(CryptPassthrough::new(ctx, offsets[f], reader).await.unwrap());
+                let reader = fsch
+                    .open_file(
+                        file_id.to_owned(),
+                        data_id.clone(),
+                        file_size,
+                        0,
+                        init_hard_cache[f],
+                    )
+                    .await
+                    .unwrap();
+                let file: Box<dyn CacheFileHandler> = Box::new(
+                    CryptPassthrough::new(ctx, offsets[f], reader)
+                        .await
+                        .unwrap(),
+                );
                 files.push(file)
             } else {
-                files.push(fsch.open_file(
-                    file_id.to_owned(),
-                    data_id.clone(),
-                    file_size,
-                    offsets[f],
-                    init_hard_cache[f],
+                files.push(
+                    fsch.open_file(
+                        file_id.to_owned(),
+                        data_id.clone(),
+                        file_size,
+                        offsets[f],
+                        init_hard_cache[f],
+                    )
+                    .await
+                    .unwrap(),
                 )
-                .await
-                .unwrap())
             }
         }
 
@@ -1298,20 +1338,19 @@ mod test {
                     };
                     files[f] = if let Some(ctx) = &crypt_context {
                         let reader = fsch
-                        .open_file(
-                            file_id.to_owned(),
-                            data_id.clone(),
-                            file_size,
-                            0,
-                            hard_cache,
-                        )
-                        .await
-                        .unwrap();
+                            .open_file(
+                                file_id.to_owned(),
+                                data_id.clone(),
+                                file_size,
+                                0,
+                                hard_cache,
+                            )
+                            .await
+                            .unwrap();
 
                         Box::new(CryptPassthrough::new(ctx, offset, reader).await.unwrap())
                     } else {
-                        fsch
-                        .open_file(
+                        fsch.open_file(
                             file_id.to_owned(),
                             data_id.clone(),
                             file_size,

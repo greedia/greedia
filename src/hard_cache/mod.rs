@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use futures::{Future, FutureExt, ready};
+use futures::{ready, Future, FutureExt};
 use smart_cacher::{FileSpec, ScErr, ScOk, ScResult, SmartCacher};
 use std::{
     cmp::min,
@@ -19,7 +19,15 @@ use std::path::PathBuf;
 use rkyv::{de::deserializers::AllocDeserializer, Archive, Deserialize, Serialize};
 
 use self::smart_cacher::SMART_CACHER_VERSION;
-use crate::{cache_handlers::{CacheFileHandler, CacheHandlerError, crypt_context::CryptContext, crypt_passthrough::CryptPassthrough}, config::{DownloadAmount, SmartCacherConfig}, drive_access::DriveAccess, types::DataIdentifier};
+use crate::{
+    cache_handlers::{
+        crypt_context::CryptContext, crypt_passthrough::CryptPassthrough, CacheFileHandler,
+        CacheHandlerError,
+    },
+    config::{DownloadAmount, SmartCacherConfig},
+    drive_access::DriveAccess,
+    types::DataIdentifier,
+};
 
 #[cfg(feature = "sctest")]
 mod sctest;
@@ -128,15 +136,14 @@ impl HardCacher {
         size: u64,
         meta: Option<&ArchivedHardCacheMetadata>,
     ) -> Result<HardCacheMetadata, CacheHandlerError> {
-        let (crypt_context, new_file_name, size) = if let Some(drive_access) = self.drive_access.as_ref() {
-            if let Some((cc, file_name, crypt_size)) = drive_access
-                .crypts
-                .iter()
-                .find_map(|cc| {
-                    let file_name = cc.cipher.decrypt_segment(file_name).ok()?;
-                    let crypt_size = CryptContext::get_crypt_file_size(size);
-                    Some((cc.clone(), file_name, crypt_size))
-                }) {
+        let (crypt_context, new_file_name, size) = if let Some(drive_access) =
+            self.drive_access.as_ref()
+        {
+            if let Some((cc, file_name, crypt_size)) = drive_access.crypts.iter().find_map(|cc| {
+                let file_name = cc.cipher.decrypt_segment(file_name).ok()?;
+                let crypt_size = CryptContext::get_crypt_file_size(size);
+                Some((cc.clone(), file_name, crypt_size))
+            }) {
                 (Some(cc), file_name, crypt_size)
             } else {
                 (None, file_name.to_string(), size)
@@ -144,7 +151,6 @@ impl HardCacher {
         } else {
             (None, file_name.to_string(), size)
         };
-        
 
         if file_name != new_file_name {
             // println!("FILENAME {} -> {}", file_name, new_file_name);
@@ -198,7 +204,7 @@ impl HardCacher {
             .and_then(|ext| self.cachers_by_ext.get(ext));
 
         let file_item = item.clone();
-        
+
         // The compiler complains that _ is unreachable, however
         // this is needed in sctest mode, so squelch the warning.
         #[allow(unreachable_patterns)]
@@ -250,9 +256,7 @@ impl HardCacher {
                 Err(ScErr::Cancel) => {
                     println!("Preferred cacher {} failed, trying next...", spec.name);
                 }
-                Err(ScErr::CacheHandlerError(e)) => {
-                    return Err(e)
-                }
+                Err(ScErr::CacheHandlerError(e)) => return Err(e),
             }
         } else {
             // println!(
@@ -290,9 +294,7 @@ impl HardCacher {
                 Err(ScErr::Cancel) => {
                     // println!("Smart cacher {} failed, trying next...", spec.name);
                 }
-                Err(ScErr::CacheHandlerError(e)) => {
-                    return Err(e)
-                }
+                Err(ScErr::CacheHandlerError(e)) => return Err(e),
             }
         }
 
@@ -345,7 +347,12 @@ pub trait HcCacherItem {
         max_bridge_len: Option<u64>,
     ) -> Result<Vec<u8>, CacheHandlerError>;
     async fn cache_data(&mut self, offset: u64, size: u64) -> Result<(), CacheHandlerError>;
-    async fn cache_data_bridged(&mut self, offset: u64, size: u64, max_bridge_len: Option<u64>) -> Result<(), CacheHandlerError>;
+    async fn cache_data_bridged(
+        &mut self,
+        offset: u64,
+        size: u64,
+        max_bridge_len: Option<u64>,
+    ) -> Result<(), CacheHandlerError>;
     async fn cache_data_to(&mut self, offset: u64) -> Result<(), CacheHandlerError>;
     async fn cache_data_fully(&mut self) -> Result<(), CacheHandlerError>;
     async fn save(&mut self);
@@ -395,7 +402,10 @@ impl HcDownloadCacherItem {
     }
 
     /// Open a new reader, depending on whether filename is encrypted or not.
-    async fn open_reader(&mut self, offset: u64) -> Result<Box<dyn CacheFileHandler>, CacheHandlerError> {
+    async fn open_reader(
+        &mut self,
+        offset: u64,
+    ) -> Result<Box<dyn CacheFileHandler>, CacheHandlerError> {
         // println!("open_reader item_size {}", self.item.size);
         if let Some(ref crypt_context) = self.item.crypt_context {
             let reader = self
@@ -410,7 +420,9 @@ impl HcDownloadCacherItem {
                 )
                 .await?;
 
-            return Ok(Box::new(CryptPassthrough::new(crypt_context, offset, reader).await?));
+            return Ok(Box::new(
+                CryptPassthrough::new(crypt_context, offset, reader).await?,
+            ));
         }
 
         self.drive_access
@@ -510,7 +522,12 @@ impl HcCacherItem for HcDownloadCacherItem {
         Ok(())
     }
 
-    async fn cache_data_bridged(&mut self, _offset: u64, _size: u64, _max_bridge_len: Option<u64>) -> Result<(), CacheHandlerError> {
+    async fn cache_data_bridged(
+        &mut self,
+        _offset: u64,
+        _size: u64,
+        _max_bridge_len: Option<u64>,
+    ) -> Result<(), CacheHandlerError> {
         todo!()
     }
 
@@ -571,7 +588,11 @@ impl HardCacheDownloader {
 
     /// Download `size` bytes of data from `offset` and return it here.
     /// Any data that is read will also be cached.
-    pub async fn read_data(&mut self, offset: u64, size: u64) -> Result<Vec<u8>, CacheHandlerError> {
+    pub async fn read_data(
+        &mut self,
+        offset: u64,
+        size: u64,
+    ) -> Result<Vec<u8>, CacheHandlerError> {
         if size == 0 {
             return Ok(vec![]);
         }
@@ -679,9 +700,7 @@ impl<'a> AsyncRead for HardCacheReader<'a> {
                 self.offset += x.len() as u64;
                 Poll::Ready(Ok(()))
             }
-            Err(e) => {
-                Poll::Ready(Err(e.into_tokio_io_error()))
-            }
+            Err(e) => Poll::Ready(Err(e.into_tokio_io_error())),
         }
     }
 }

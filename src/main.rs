@@ -6,7 +6,10 @@ use std::{
 use std::{fs, path::Path};
 
 use anyhow::{bail, Result};
-use cache_handlers::{crypt_context::CryptContext, filesystem::{lru::Lru, FilesystemCacheHandler}};
+use cache_handlers::{
+    crypt_context::CryptContext,
+    filesystem::{lru::Lru, FilesystemCacheHandler},
+};
 use db::Db;
 use downloaders::{gdrive::GDriveClient, timecode::TimecodeDrive, DownloaderClient};
 use drive_access::DriveAccess;
@@ -175,7 +178,6 @@ async fn get_gdrive_drives(
         let client = if let Some(client) = clients.get(&cfg_drive.client_id) {
             client.clone()
         } else {
-
             let service_accounts = cfg_drive.service_accounts.unwrap_or_else(Vec::new);
             let sa_refs: Vec<_> = service_accounts.iter().map(|sa| sa.as_path()).collect();
 

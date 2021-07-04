@@ -1,11 +1,25 @@
-use std::{borrow::Cow, convert::TryInto, path::{Component, Path, PathBuf}, sync::{Arc, atomic::{AtomicBool, AtomicU64, Ordering}}};
+use std::{
+    borrow::Cow,
+    convert::TryInto,
+    path::{Component, Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc,
+    },
+};
 
 use rclone_crypt::decrypter::{self, Decrypter};
 
 use rkyv::de::deserializers::AllocDeserializer;
 use rkyv::Deserialize;
 
-use crate::{cache_handlers::{CacheHandlerError, crypt_context::CryptContext, crypt_passthrough::CryptPassthrough}, db::get_rkyv, types::DataIdentifier};
+use crate::{
+    cache_handlers::{
+        crypt_context::CryptContext, crypt_passthrough::CryptPassthrough, CacheHandlerError,
+    },
+    db::get_rkyv,
+    types::DataIdentifier,
+};
 use crate::{
     cache_handlers::{CacheDriveHandler, CacheFileHandler},
     db::{Db, Tree},
@@ -109,46 +123,50 @@ impl DriveAccess {
         offset: u64,
     ) -> Result<TypeResult<Box<dyn CacheFileHandler>>, CacheHandlerError> {
         // Check if the inode exists in the db's inode_tree.
-        Ok(if let Some(drive_item_bytes) = self.inode_tree.get(inode.to_le_bytes()) {
-            // Load the DriveItem, and check that it's a file and not a directory.
-            let drive_item = get_rkyv::<DriveItem>(&drive_item_bytes);
-            if let ArchivedDriveItemData::FileItem {
-                file_name: _,
-                data_id,
-                size,
-            } = &drive_item.data
-            {
-                let access_id = drive_item.access_id.to_string();
-                let data_id = data_id.deserialize(&mut AllocDeserializer).map_err(|_| CacheHandlerError::DeserializeError)?;
-                // Once we get the data_id from the db, open the file in the CacheHandler.
-                // Don't write to hard cache, as we aren't opening from a scanner.
-                let mut file = self
-                    .cache_handler
-                    .open_file(access_id, data_id, *size, offset, false)
-                    .await?;
+        Ok(
+            if let Some(drive_item_bytes) = self.inode_tree.get(inode.to_le_bytes()) {
+                // Load the DriveItem, and check that it's a file and not a directory.
+                let drive_item = get_rkyv::<DriveItem>(&drive_item_bytes);
+                if let ArchivedDriveItemData::FileItem {
+                    file_name: _,
+                    data_id,
+                    size,
+                } = &drive_item.data
+                {
+                    let access_id = drive_item.access_id.to_string();
+                    let data_id = data_id
+                        .deserialize(&mut AllocDeserializer)
+                        .map_err(|_| CacheHandlerError::DeserializeError)?;
+                    // Once we get the data_id from the db, open the file in the CacheHandler.
+                    // Don't write to hard cache, as we aren't opening from a scanner.
+                    let mut file = self
+                        .cache_handler
+                        .open_file(access_id, data_id, *size, offset, false)
+                        .await?;
 
-                // Check each CryptContext to see if any of them can decrypt the filename.
-                // If so, create a CryptPassthrough reader for file decryption.
-                for cc in self.crypts.iter() {
-                    file.seek_to(0).await?;
-
-                    let mut header = [0u8; decrypter::FILE_HEADER_SIZE];
-                    file.read_exact(&mut header).await?;
-                    if Decrypter::new(&cc.cipher.file_key, &header).is_ok() {
+                    // Check each CryptContext to see if any of them can decrypt the filename.
+                    // If so, create a CryptPassthrough reader for file decryption.
+                    for cc in self.crypts.iter() {
                         file.seek_to(0).await?;
-                        return Ok(TypeResult::IsType(Box::new(
-                            CryptPassthrough::new(&cc, offset, file).await?,
-                        )));
-                    }
-                }
 
-                TypeResult::IsType(file)
+                        let mut header = [0u8; decrypter::FILE_HEADER_SIZE];
+                        file.read_exact(&mut header).await?;
+                        if Decrypter::new(&cc.cipher.file_key, &header).is_ok() {
+                            file.seek_to(0).await?;
+                            return Ok(TypeResult::IsType(Box::new(
+                                CryptPassthrough::new(&cc, offset, file).await?,
+                            )));
+                        }
+                    }
+
+                    TypeResult::IsType(file)
+                } else {
+                    TypeResult::IsNotType
+                }
             } else {
-                TypeResult::IsNotType
-            }
-        } else {
-            TypeResult::DoesNotExist
-        })
+                TypeResult::DoesNotExist
+            },
+        )
     }
 
     /// Clear an item from the cache, if it exists.
@@ -163,16 +181,18 @@ impl DriveAccess {
     /// If it is, return bool that states if scanning is in progress.
     pub fn check_dir(&self, inode: u64) -> Result<TypeResult<bool>, CacheHandlerError> {
         let scanning = self.scanning.load(Ordering::Acquire);
-        Ok(if let Some(inode_data) = self.inode_tree.get(inode.to_le_bytes()) {
-            let item = get_rkyv::<DriveItem>(&inode_data);
-            if let ArchivedDriveItemData::Dir { items: _ } = item.data {
-                TypeResult::IsType(scanning)
+        Ok(
+            if let Some(inode_data) = self.inode_tree.get(inode.to_le_bytes()) {
+                let item = get_rkyv::<DriveItem>(&inode_data);
+                if let ArchivedDriveItemData::Dir { items: _ } = item.data {
+                    TypeResult::IsType(scanning)
+                } else {
+                    TypeResult::IsNotType
+                }
             } else {
-                TypeResult::IsNotType
-            }
-        } else {
-            TypeResult::DoesNotExist
-        })
+                TypeResult::DoesNotExist
+            },
+        )
     }
 
     /// Look up a filename within an inode, assuming the inode is a directory.
@@ -194,12 +214,7 @@ impl DriveAccess {
         let file_name = if self.uses_crypt {
             self.crypts
                 .iter()
-                .find_map(|cc| {
-                    cc.cipher
-                        .encrypt_segment(file_name)
-                        .ok()
-                        .map(Cow::Owned)
-                })
+                .find_map(|cc| cc.cipher.encrypt_segment(file_name).ok().map(Cow::Owned))
                 .unwrap_or(Cow::Borrowed(file_name))
         } else {
             Cow::Borrowed(file_name)

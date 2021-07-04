@@ -1,4 +1,4 @@
-use super::{CacheFileHandler, CacheHandlerError, crypt_context::CryptContext};
+use super::{crypt_context::CryptContext, CacheFileHandler, CacheHandlerError};
 use async_trait::async_trait;
 use bytes::Bytes;
 use rclone_crypt::decrypter::{self, Decrypter};
@@ -21,7 +21,8 @@ impl CryptPassthrough {
         reader.seek_to(0).await?;
         let mut header = [0u8; decrypter::FILE_HEADER_SIZE];
         reader.read_exact(&mut header).await?;
-        let decrypter = Decrypter::new(&ctx.cipher.file_key, &header).map_err(|_| CacheHandlerError::CryptPassthroughError)?;
+        let decrypter = Decrypter::new(&ctx.cipher.file_key, &header)
+            .map_err(|_| CacheHandlerError::CryptPassthroughError)?;
 
         let cur_block = 0;
         let last_bytes = None;
@@ -38,7 +39,11 @@ impl CryptPassthrough {
         Ok(cpt)
     }
 
-    async fn handle_read_into(&mut self, len: usize, mut buf: Option<&mut [u8]>) -> Result<usize, CacheHandlerError> {
+    async fn handle_read_into(
+        &mut self,
+        len: usize,
+        mut buf: Option<&mut [u8]>,
+    ) -> Result<usize, CacheHandlerError> {
         // println!("crypt handle_read_into len {} buf {}", len, buf.is_some());
         // If data exists in last_bytes, read from there first
         if let Some(last_bytes) = &mut self.last_bytes {

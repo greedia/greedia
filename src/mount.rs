@@ -1,4 +1,9 @@
-use crate::{cache_handlers::{CacheFileHandler, CacheHandlerError}, drive_access::{DriveAccess, TypeResult}, fh_map::FhMap, types::ArchivedDriveItemData};
+use crate::{
+    cache_handlers::{CacheFileHandler, CacheHandlerError},
+    drive_access::{DriveAccess, TypeResult},
+    fh_map::FhMap,
+    types::ArchivedDriveItemData,
+};
 use anyhow::Result;
 use polyfuse::{
     op,
@@ -28,11 +33,17 @@ pub async fn mount_thread(drives: Vec<Arc<DriveAccess>>, mountpoint: PathBuf) {
     config.mount_option("ro");
     config.mount_option("allow_other");
 
-    let session = AsyncSession::mount(mountpoint, config).await.expect("Could not mount FUSE filesystem");
+    let session = AsyncSession::mount(mountpoint, config)
+        .await
+        .expect("Could not mount FUSE filesystem");
 
     let fs = Arc::new(GreediaFS::new(drives));
 
-    while let Some(req) = session.next_request().await.expect("Could not process FUSE request") {
+    while let Some(req) = session
+        .next_request()
+        .await
+        .expect("Could not process FUSE request")
+    {
         let fs = fs.clone();
 
         let _: JoinHandle<Result<()>> = task::spawn(async move {
@@ -76,7 +87,9 @@ struct GreediaFS {
 impl GreediaFS {
     pub fn new(drives: Vec<Arc<DriveAccess>>) -> GreediaFS {
         let start = SystemTime::now();
-        let start_time = start.duration_since(UNIX_EPOCH).expect("Could not get duration since unix epoch");
+        let start_time = start
+            .duration_since(UNIX_EPOCH)
+            .expect("Could not get duration since unix epoch");
         let file_handles = FhMap::new();
         GreediaFS {
             drives,
@@ -278,30 +291,36 @@ impl GreediaFS {
     ///
     /// There is no root version of this, as the root only contains
     /// drives, which are all represented as directories.
-    async fn open_drive(&self, drive: u16, local_inode: u64) -> Result<TypeResult<OpenOut>, CacheHandlerError> {
-        Ok(if let Some(drive_access) = self.drives.get(drive as usize) {
-            match drive_access.open_file(local_inode, 0).await? {
-                TypeResult::IsType(reader) => {
-                    let fh = self
-                        .file_handles
-                        .open(FileHandle {
-                            offset: 0,
-                            reader,
-                            buffer: vec![0u8; 65536],
-                        })
-                        .await;
+    async fn open_drive(
+        &self,
+        drive: u16,
+        local_inode: u64,
+    ) -> Result<TypeResult<OpenOut>, CacheHandlerError> {
+        Ok(
+            if let Some(drive_access) = self.drives.get(drive as usize) {
+                match drive_access.open_file(local_inode, 0).await? {
+                    TypeResult::IsType(reader) => {
+                        let fh = self
+                            .file_handles
+                            .open(FileHandle {
+                                offset: 0,
+                                reader,
+                                buffer: vec![0u8; 65536],
+                            })
+                            .await;
 
-                    let mut open_out = OpenOut::default();
-                    open_out.fh(fh);
+                        let mut open_out = OpenOut::default();
+                        open_out.fh(fh);
 
-                    TypeResult::IsType(open_out)
+                        TypeResult::IsType(open_out)
+                    }
+                    TypeResult::IsNotType => TypeResult::IsNotType,
+                    TypeResult::DoesNotExist => TypeResult::DoesNotExist,
                 }
-                TypeResult::IsNotType => TypeResult::IsNotType,
-                TypeResult::DoesNotExist => TypeResult::DoesNotExist,
-            }
-        } else {
-            TypeResult::DoesNotExist
-        })
+            } else {
+                TypeResult::DoesNotExist
+            },
+        )
     }
 
     /// Open a directory within the root from an `opendir()` call.
@@ -318,22 +337,28 @@ impl GreediaFS {
     ///
     /// This only returns an entry if an item exists at a local_inode,
     /// and that item is a directory.
-    async fn opendir_drive(&self, drive: u16, local_inode: u64) -> Result<TypeResult<OpenOut>, CacheHandlerError> {
-        Ok(if let Some(drive_access) = self.drives.get(drive as usize) {
-            match drive_access.check_dir(local_inode)? {
-                TypeResult::IsType(scanning) => {
-                    let mut open_out = OpenOut::default();
-                    open_out.fh(0);
-                    open_out.keep_cache(!scanning);
-                    open_out.cache_dir(!scanning);
-                    TypeResult::IsType(open_out)
+    async fn opendir_drive(
+        &self,
+        drive: u16,
+        local_inode: u64,
+    ) -> Result<TypeResult<OpenOut>, CacheHandlerError> {
+        Ok(
+            if let Some(drive_access) = self.drives.get(drive as usize) {
+                match drive_access.check_dir(local_inode)? {
+                    TypeResult::IsType(scanning) => {
+                        let mut open_out = OpenOut::default();
+                        open_out.fh(0);
+                        open_out.keep_cache(!scanning);
+                        open_out.cache_dir(!scanning);
+                        TypeResult::IsType(open_out)
+                    }
+                    TypeResult::IsNotType => TypeResult::IsNotType,
+                    TypeResult::DoesNotExist => TypeResult::DoesNotExist,
                 }
-                TypeResult::IsNotType => TypeResult::IsNotType,
-                TypeResult::DoesNotExist => TypeResult::DoesNotExist,
-            }
-        } else {
-            TypeResult::DoesNotExist
-        })
+            } else {
+                TypeResult::DoesNotExist
+            },
+        )
     }
 
     /// Pass a FUSE `getattr()` call to the correct sub-method (root, drive, item).

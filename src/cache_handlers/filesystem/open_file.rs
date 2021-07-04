@@ -10,7 +10,13 @@ use std::{
         Arc, Weak,
     },
 };
-use tokio::{fs::DirEntry, fs::{read_dir, File, OpenOptions}, io::{AsyncSeekExt, AsyncWriteExt}, sync::Mutex, task};
+use tokio::{
+    fs::DirEntry,
+    fs::{read_dir, File, OpenOptions},
+    io::{AsyncSeekExt, AsyncWriteExt},
+    sync::Mutex,
+    task,
+};
 
 use crate::{
     cache_handlers::CacheHandlerError,
@@ -19,7 +25,7 @@ use crate::{
 };
 use byte_ranger::{ByteRanger, GetRange};
 
-use super::{MAX_CHUNK_SIZE, get_file_cache_path, lru::Lru};
+use super::{get_file_cache_path, lru::Lru, MAX_CHUNK_SIZE};
 
 /// OpenFile is a struct representing a single open file within the cache. It is a requirement
 /// that, for any file, only one of these structs exist and that it is protected by a mutex.
@@ -99,11 +105,7 @@ impl OpenFile {
     /// cache: Which cache to get chunk from. If Any, check hard_cache then soft_cache.
     ///
     /// Returns chunk data, as well as a bool that's true if the chunk is in hard_cache, or false if in soft_cache.
-    pub fn get_chunk_at(
-        &self,
-        offset: u64,
-        cache: Cache,
-    ) -> (GetRange<&'_ ChunkData>, bool) {
+    pub fn get_chunk_at(&self, offset: u64, cache: Cache) -> (GetRange<&'_ ChunkData>, bool) {
         match cache {
             Cache::Hard => (self.hc_chunks.get_range_at(offset), true),
             Cache::Any => {
@@ -341,7 +343,7 @@ impl OpenFile {
             println!("File error occurred!");
         }
         let read_file = read_file_res?;
-        
+
         let download_handle = DownloadHandle {
             dl_handle: download_status,
         };
@@ -541,7 +543,8 @@ impl OpenFile {
                 // lru.update_file_size(&self.data_id, start_offset, new_size).await;
                 // println!("update, old {} new {}, size {}", old_size.unwrap_or(0), new_size, new_size.saturating_sub(old_size.unwrap_or(0)));
                 // dbg!(&self.sc_chunks);
-                lru.add_space_usage(new_size.saturating_sub(old_size.unwrap_or(0))).await;
+                lru.add_space_usage(new_size.saturating_sub(old_size.unwrap_or(0)))
+                    .await;
             }
         }
     }

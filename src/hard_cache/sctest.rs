@@ -119,7 +119,12 @@ impl HcCacherItem for HcTestCacherItem {
 
         Ok(())
     }
-    async fn cache_data_bridged(&mut self, offset: u64, size: u64, max_bridge_len: Option<u64>) -> Result<(), CacheHandlerError> {
+    async fn cache_data_bridged(
+        &mut self,
+        offset: u64,
+        size: u64,
+        max_bridge_len: Option<u64>,
+    ) -> Result<(), CacheHandlerError> {
         // println!(
         //     "cache_data_bridged {} {} {:?}",
         //     offset, size, max_bridge_len
@@ -163,17 +168,32 @@ impl HcCacherItem for HcTestCacherItem {
         for (offset, size) in &self.ranges_to_cache {
             buf.resize(*size as usize, 0);
             // println!("bufsize {}, offset {}, size {}", buf.len(), offset, size);
-            self.input.seek(SeekFrom::Start(*offset)).await.expect("sctest seek failed");
-            self.input.read_exact(&mut buf).await.expect("sctest read_exact failed");
-            self.output.seek(SeekFrom::Start(*offset)).await.expect("sctest seek failed");
-            self.output.write_all(&buf).await.expect("sctest write_all failed");
+            self.input
+                .seek(SeekFrom::Start(*offset))
+                .await
+                .expect("sctest seek failed");
+            self.input
+                .read_exact(&mut buf)
+                .await
+                .expect("sctest read_exact failed");
+            self.output
+                .seek(SeekFrom::Start(*offset))
+                .await
+                .expect("sctest seek failed");
+            self.output
+                .write_all(&buf)
+                .await
+                .expect("sctest write_all failed");
         }
         // Make sure file is full length
         self.output
             .seek(SeekFrom::Start(self.input_size - 1))
             .await
             .expect("sctest seek failed");
-        self.output.write_all(&[0]).await.expect("sctest write_all failed");
+        self.output
+            .write_all(&[0])
+            .await
+            .expect("sctest write_all failed");
 
         self.output.flush().await.expect("sctest flush failed");
 

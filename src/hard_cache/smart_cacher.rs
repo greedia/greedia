@@ -48,7 +48,7 @@ pub enum ScErr {
     /// Consider file download to be unsuccessful, but keep downloaded data.
     /// The cacher will then attempt to download using a different SmartCacher.
     Cancel,
-    CacheHandlerError(CacheHandlerError)
+    CacheHandlerError(CacheHandlerError),
 }
 
 impl From<CacheHandlerError> for ScErr {

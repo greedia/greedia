@@ -45,9 +45,7 @@ impl Lru {
     pub async fn add_space_usage(&self, size: u64) {
         self.cmd_sender
             .clone()
-            .send(LruInnerMsg::AddSpaceUsage {
-                size,
-            })
+            .send(LruInnerMsg::AddSpaceUsage { size })
             .await
             .unwrap();
     }
@@ -65,9 +63,7 @@ impl Lru {
     pub async fn close_file(self, data_id: DataIdentifier) {
         self.cmd_sender
             .clone()
-            .send(LruInnerMsg::CloseFile {
-                data_id,
-            })
+            .send(LruInnerMsg::CloseFile { data_id })
             .await
             .unwrap();
     }
@@ -115,22 +111,12 @@ async fn run_background(
     while let Some(msg) = recv.recv().await {
         // let last_space_usage = space_usage;
         match msg {
-            LruInnerMsg::UpdateFile {
-                data_id,
-                offset,
-            } => {
-                handle_update_file(
-                    &ts_tree,
-                    &data_tree,
-                    &data_id,
-                    offset,
-                );
+            LruInnerMsg::UpdateFile { data_id, offset } => {
+                handle_update_file(&ts_tree, &data_tree, &data_id, offset);
             }
             LruInnerMsg::AddSpaceUsage { size } => {
                 space_usage += size;
                 // println!("space_usage {}, size_limit {}", space_usage, size_limit);
-
-
             }
             LruInnerMsg::OpenFile { data_id } => {
                 // let hex_md5 = if let DataIdentifier::GlobalMd5(x) = &data_id {
@@ -138,7 +124,7 @@ async fn run_background(
                 // } else {
                 //     "".to_string()
                 // };
-        
+
                 // println!("OPEN  DATA_ID {} (count: {})", hex_md5, open_files.len());
                 open_files.insert(data_id);
             }
@@ -148,7 +134,7 @@ async fn run_background(
                 // } else {
                 //     "".to_string()
                 // };
-        
+
                 // println!("CLOSE DATA_ID {} (count: {})", hex_md5, open_files.len());
 
                 open_files.remove(&data_id);
@@ -190,7 +176,10 @@ fn handle_cache_cleanup(
     if ts_tree.is_empty() && *space_usage != 0 {
         // If we're over the size limit, but no items exist,
         // the LRU has become inconsistent, so re-scan.
-        println!("LRU inconsistent; tree empty, but space_usage is {}", *space_usage);
+        println!(
+            "LRU inconsistent; tree empty, but space_usage is {}",
+            *space_usage
+        );
         scan_soft_cache(ts_tree, data_tree, cache_root, space_usage);
     }
 
@@ -243,12 +232,7 @@ fn handle_cache_cleanup(
 }
 
 /// Handle updating a file's timestamp or changing its reported size.
-fn handle_update_file(
-    ts_tree: &Tree,
-    data_tree: &Tree,
-    data_id: &DataIdentifier,
-    offset: u64
-) {
+fn handle_update_file(ts_tree: &Tree, data_tree: &Tree, data_id: &DataIdentifier, offset: u64) {
     // Create a new timestamp key
     let ts_key = add_new_ts_key(ts_tree, &data_id, offset);
 
@@ -266,7 +250,7 @@ fn update_data_key(
     data_tree: &Tree,
     data_id: &DataIdentifier,
     offset: u64,
-    ts_key: [u8; 9]
+    ts_key: [u8; 9],
 ) -> Option<[u8; 9]> {
     let data_key = LruDataKey {
         data_id: data_id.clone(),
@@ -375,9 +359,11 @@ fn scan_soft_cache(
         return;
     }
 
-    let walker = WalkDir::new(soft_cache_root).into_iter().filter_entry(is_chunk_file).filter_map(|e| e.ok());
-    for entry in walker
-    {
+    let walker = WalkDir::new(soft_cache_root)
+        .into_iter()
+        .filter_entry(is_chunk_file)
+        .filter_map(|e| e.ok());
+    for entry in walker {
         if entry.file_type().is_dir() {
             continue;
         }
@@ -417,7 +403,7 @@ fn scan_soft_cache(
                 .to_bytes();
 
                 let data_data = LruDataData {
-                    timestamp_key: ts_key
+                    timestamp_key: ts_key,
                 }
                 .to_bytes();
 

@@ -9,8 +9,10 @@ sctest = []
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
-byte-ranger = { path = "byte-ranger" }
-timecode_rs = { path = "timecode_rs" }
+byte-ranger = { path = "vendor/byte-ranger" }
+timecode_rs = { path = "vendor/timecode_rs" }
+bitstream-io = { path = "vendor/bitstream-io" }
+rclone-crypt = { path = "vendor/rclone-crypt-rs" }
 leaky-bucket = "0.10"
 anyhow = "1.0"
 thiserror = "1.0"
@@ -25,7 +27,6 @@ oauth2 = { version = "4.0" }
 reqwest = { version = "0.11", features = ["json", "trust-dns", "stream"] }
 itertools = "0.10"
 libc = "0.2"
-rclone-crypt = "0.1"
 walkdir = "2.3"
 polyfuse = "0.4.1"
 hex = "0.4"
@@ -37,7 +38,6 @@ bytes = "1.0"
 rkyv = "0.6"
 sled = "0.34"
 tokio-stream = "0.1"
-bitstream-io = { path = "../bitstream-io" }
 phf = { version = "0.8", features = ["macros"] }
 tracing = "0.1"
 tracing-subscriber = "0.2.17"

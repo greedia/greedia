@@ -1,0 +1,12 @@
+[submodule "vendor/rclone-crypt-rs"]
+	path = vendor/rclone-crypt-rs
+	url = https://github.com/greedia/rclone-crypt-rs
+[submodule "vendor/byte-ranger"]
+	path = vendor/byte-ranger
+	url = https://github.com/greedia/byte-ranger
+[submodule "vendor/bitstream-io"]
+	path = vendor/bitstream-io
+	url = https://github.com/greedia/bitstream-io
+[submodule "vendor/timecode_rs"]
+	path = vendor/timecode_rs
+	url = https://github.com/greedia/timecode_rs

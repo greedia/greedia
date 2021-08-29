@@ -82,6 +82,7 @@ pub struct GdriveFileInfo {
 #[non_exhaustive]
 pub enum DataIdentifier {
     /// Data is referred to globally within Greedia by an md5 hash.
+    /// This is what gdrive uses.
     GlobalMd5(Vec<u8>),
     // /// Data is referred to by a drive-specific ID.
     // DriveUnique(Vec<u8>, Vec<u8>), // probably needed for future S3, etc support

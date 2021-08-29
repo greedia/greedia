@@ -218,6 +218,13 @@ impl CacheDriveHandler for FilesystemCacheHandler {
         let _ = fs::remove_dir_all(&hard_cache_file_root).await;
         let _ = fs::remove_dir_all(&soft_cache_file_root).await;
     }
+
+    async fn unlink_file(&self, file_id: String, data_id: DataIdentifier) -> Result<(), CacheHandlerError> {
+        self.downloader_drive.delete_file(file_id).await?;
+        self.clear_cache_item(data_id).await;
+        
+        Ok(())
+    }
 }
 
 struct FilesystemCacheFileHandler {

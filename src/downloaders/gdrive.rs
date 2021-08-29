@@ -11,15 +11,10 @@ use oauth2::{
 };
 use reqwest::{self, Client};
 use serde::{Deserialize, Serialize};
-use std::{
-    borrow::Cow,
-    path::Path,
-    sync::{
+use std::{borrow::Cow, path::{Path, PathBuf}, sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
-    },
-    time::Duration,
-};
+    }, time::Duration};
 use tokio::sync::{
     mpsc::{self, Sender},
     Mutex,
@@ -90,7 +85,7 @@ impl AccessInstance {
             AccessInstance::Client(c) => {
                 let access_token = get_new_token(&c.conn_info, &c.rate_limiter)
                     .await
-                    .ok_or(DownloaderError::AccessTokenError)?;
+                    .ok_or(DownloaderError::AccessToken)?;
                 *c.access_token.lock().await = access_token;
             }
             AccessInstance::ServiceAccount(sa) => {
@@ -150,7 +145,7 @@ impl ClientInstance {
 
         let initial_access_token = get_new_token(&conn_info, &rate_limiter)
             .await
-            .ok_or(DownloaderError::AccessTokenError)?;
+            .ok_or(DownloaderError::AccessToken)?;
         let access_token = Mutex::new(initial_access_token);
 
         let client_instance = ClientInstance {
@@ -205,7 +200,7 @@ impl ServiceAccountInstance {
         let claims = Claims::with_custom_claims(claim_data, JwtDuration::from_hours(1));
         let token = key_pair
             .sign(claims)
-            .map_err(|_| DownloaderError::AccessTokenError)?;
+            .map_err(|_| DownloaderError::AccessToken)?;
 
         let res = http_client
             .post("https://oauth2.googleapis.com/token")
@@ -477,6 +472,10 @@ async fn watcher_bg_thread(
 
 #[async_trait]
 impl DownloaderDrive for GDriveDrive {
+    fn get_downloader_type(&self) -> &'static str {
+        "gdrive"
+    }
+
     fn scan_pages(
         &self,
         last_page_token: Option<String>,
@@ -576,8 +575,28 @@ impl DownloaderDrive for GDriveDrive {
         Err(DownloaderError::QuotaExceeded)
     }
 
-    fn get_downloader_type(&self) -> &'static str {
-        "gdrive"
+    async fn move_file(&self, _file_id: String, _new_path: PathBuf) -> Result<(), DownloaderError> {
+        Err(DownloaderError::Unimplemented) // KTODO
+    }
+
+    async fn delete_file(&self, file_id: String) -> Result<(), DownloaderError> {
+        for _ in 0..self.access_instances.len() {
+            let access_instance = self.access_instances.next();
+            let res = delete_request(
+                &file_id,
+                &self.http_client,
+                access_instance,
+            )
+            .await;
+            match res {
+                Ok(_) => {
+                    return Ok(());
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        Err(DownloaderError::Retry)
     }
 }
 
@@ -592,7 +611,6 @@ async fn open_request(
     let range_string = format!("bytes={}-", offset);
 
     let mut retry = false;
-
     let mut last_error = None;
 
     for _ in 0..10 {
@@ -618,7 +636,7 @@ async fn open_request(
                     401 => {
                         println!("access token needs refresh");
                         access_instance.refresh_access_token(http_client).await?;
-                        last_error = Some(DownloaderError::AccessTokenError);
+                        last_error = Some(DownloaderError::AccessToken);
                     }
                     416 => {
                         return Err(DownloaderError::RangeNotSatisfiable(range_string));
@@ -633,11 +651,11 @@ async fn open_request(
                                 }
                             }
                         }
-                        last_error = Some(DownloaderError::ForbiddenError);
+                        last_error = Some(DownloaderError::Forbidden);
                     }
                     // Rate limit or server error, retry request
                     _ => {
-                        last_error = Some(DownloaderError::ServerError(
+                        last_error = Some(DownloaderError::Server(
                             r.status().as_str().to_string(),
                         ));
                         println!("Other: {}", r.status());
@@ -656,7 +674,73 @@ async fn open_request(
     if let Some(last_error) = last_error {
         Err(last_error)
     } else {
-        Err(DownloaderError::UnknownRetryError)
+        Err(DownloaderError::Retry)
+    }
+}
+
+async fn delete_request(file_id: &str, http_client: &reqwest::Client, access_instance: &AccessInstance) -> Result<(), DownloaderError> {
+    let url = format!("https://www.googleapis.com/drive/v3/files/{}", file_id);
+
+    let mut retry = false;
+    let mut last_error = None;
+
+    for _ in 0..10 {
+        access_instance.rate_limit(false, retry).await;
+        let access_token = access_instance.access_token().await;
+
+        let res = http_client
+            .delete(&url)
+            .bearer_auth(access_token.secret())
+            .send()
+            .await;
+
+        match res {
+            Ok(r) => {
+                match r.status().as_u16() {
+                    // Everything's good
+                    200 | 206 => {
+                        return Ok(());
+                    }
+                    // Bad access token, refresh it and retry request
+                    401 => {
+                        println!("access token needs refresh");
+                        access_instance.refresh_access_token(http_client).await?;
+                        last_error = Some(DownloaderError::AccessToken);
+                    }
+                    403 => {
+                        if let Ok(error_json) = r.json::<GErrorTop>().await {
+                            let errors = &error_json.error.errors;
+                            for error in errors.iter() {
+                                if error.reason == "downloadQuotaExceeded" {
+                                    println!("{:?}", &error_json);
+                                    return Err(DownloaderError::QuotaExceeded);
+                                }
+                            }
+                        }
+                        last_error = Some(DownloaderError::Forbidden);
+                    }
+                    // Rate limit or server error, retry request
+                    _ => {
+                        last_error = Some(DownloaderError::Server(
+                            r.status().as_str().to_string(),
+                        ));
+                        println!("Other: {}", r.status());
+                    }
+                }
+            }
+            Err(e) => {
+                println!("Error: {}", &e);
+                last_error = Some(DownloaderError::Reqwest(e));
+            }
+        }
+
+        retry = true
+    }
+
+    if let Some(last_error) = last_error {
+        Err(last_error)
+    } else {
+        Err(DownloaderError::Retry)
     }
 }
 

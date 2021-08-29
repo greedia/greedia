@@ -227,6 +227,50 @@ impl DriveAccess {
         Some(to_t(inode, drive_item))
     }
 
+    /// Unlink a filename within an inode, assuming the inode is a directory.
+    ///
+    /// If inode is file or file_name doesn't exist within the inode, return None.
+    pub async fn unlink_item(&self, inode: u64, file_name: &str) -> Option<()> {
+        let inode = if inode == 0 {
+            self.root_inode().unwrap_or(0)
+        } else {
+            inode
+        };
+
+        // If we're using encryption, try to look up the encrypted file_name.
+        let file_name = if self.uses_crypt {
+            self.crypts
+                .iter()
+                .find_map(|cc| cc.cipher.encrypt_segment(file_name).ok().map(Cow::Owned))
+                .unwrap_or(Cow::Borrowed(file_name))
+        } else {
+            Cow::Borrowed(file_name)
+        };
+
+        let inode = self.lookup_inode(inode, &file_name)?;
+
+        let drive_item_bytes = self.inode_tree.get(inode.to_le_bytes())?;
+        let drive_item = get_rkyv::<DriveItem>(&drive_item_bytes);
+
+        if let ArchivedDriveItemData::FileItem {
+            file_name: _,
+            data_id,
+            size: _,
+        } = &drive_item.data
+        {
+            let file_id = drive_item.access_id.to_string();
+            let data_id = data_id
+                .deserialize(&mut AllocDeserializer)
+                .map_err(|_| CacheHandlerError::Deserialize).ok()?;
+
+                self.cache_handler.unlink_file(file_id, data_id).await.ok()?;
+
+                Some(())
+        } else {
+            None
+        }
+    }
+
     /// Get the attributes for a given inode.
     pub fn getattr_item<T>(
         &self,

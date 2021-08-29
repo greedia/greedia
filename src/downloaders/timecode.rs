@@ -1,9 +1,4 @@
-use std::{
-    cmp::min,
-    io::Read,
-    pin::Pin,
-    task::{Context, Poll},
-};
+use std::{cmp::min, io::Read, path::PathBuf, pin::Pin, task::{Context, Poll}};
 
 use crate::types::DataIdentifier;
 use async_trait::async_trait;
@@ -22,6 +17,10 @@ pub struct TimecodeDrive {
 
 #[async_trait]
 impl DownloaderDrive for TimecodeDrive {
+    fn get_downloader_type(&self) -> &'static str {
+        "timecode"
+    }
+
     fn scan_pages(
         &self,
         _last_page_token: Option<String>,
@@ -83,8 +82,12 @@ impl DownloaderDrive for TimecodeDrive {
         Ok(stream)
     }
 
-    fn get_downloader_type(&self) -> &'static str {
-        "timecode"
+    async fn move_file(&self, _file_id: String, _new_path: PathBuf) -> Result<(), DownloaderError> {
+        Err(DownloaderError::Unimplemented)
+    }
+
+    async fn delete_file(&self, _file_id: String) -> Result<(), DownloaderError> {
+        Err(DownloaderError::Unimplemented)
     }
 }
 

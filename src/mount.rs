@@ -56,6 +56,7 @@ pub async fn mount_thread(drives: Vec<Arc<DriveAccess>>, mountpoint: PathBuf) {
                 Operation::Open(op) => fs.do_open(&req, op).await?,
                 Operation::Read(op) => fs.do_read(&req, op).await?,
                 Operation::Release(op) => fs.do_release(&req, op).await?,
+                Operation::Unlink(op) => fs.do_unlink(&req, op).await?,
                 _ => req.reply_error(libc::ENOSYS)?,
             }
 
@@ -285,6 +286,17 @@ impl GreediaFS {
             })?;
 
         Some(reply_entry)
+    }
+
+    /// Unlinks a filename within a drive directory.
+    ///
+    /// Takes an inode as a pointer to a directory to look up a file inside.
+    /// If the inode is 0, look up in the root directory of the drive.
+    async fn unlink_drive(&self, drive: u16, inode: u64, name: &OsStr) -> Option<()> {
+        let drive_access = self.drives.get(drive as usize)?;
+        let file_name = name.to_str()?;
+
+        drive_access.unlink_item(inode, file_name).await
     }
 
     /// Open a file within a drive from an `open()` call.
@@ -529,6 +541,26 @@ impl GreediaFS {
         self.file_handles.close(fh).await;
 
         req.reply(())?;
+
+        Ok(())
+    }
+
+    /// Handle a FUSE `unlink()` call.
+    ///
+    /// This allows deleting files on drives that support it.
+    async fn do_unlink(&self, req: &Request, op: op::Unlink<'_>) -> io::Result<()> {
+        let inode = op.parent();
+        let name = op.name();
+        let unlink = match self.map_inode(inode) {
+            Inode::Drive(drive, local_inode) => self.unlink_drive(drive, local_inode, name).await.is_some(),
+            _ => false,
+        };
+
+        if unlink {
+            req.reply(())?
+        } else {
+            req.reply_error(libc::ENOENT)?;
+        }
 
         Ok(())
     }

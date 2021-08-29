@@ -302,7 +302,7 @@ fn is_chunk_file(entry: &DirEntry) -> bool {
 /// From a path, get the DataIdentifier, offset, size, and timestamp of a chunk.
 fn dir_entry_to_data_key(entry: &DirEntry) -> Option<(DataIdentifier, u64, u64, u64)> {
     // We're assuming only GlobalMd5 exists for now.
-    // This will break when DriveSpecific is added to DataIdentifier.
+    // This will break when DriveUnique is added to DataIdentifier.
     // TODO: handle more than GlobalMd5.
 
     let path = entry.path();

@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -18,19 +20,22 @@ pub enum DownloaderError {
     #[error("Range not satisfiable ({})", _0)]
     RangeNotSatisfiable(String),
     #[error("Could not initialize or renew access token")]
-    AccessTokenError,
+    AccessToken,
     #[error("Server error: {}", _0)]
-    ServerError(String),
+    Server(String),
     #[error("Forbidden error")]
-    ForbiddenError,
+    Forbidden,
+    #[error("Operation is unimplemented")]
+    Unimplemented,
     #[error("Unknown downloader retry error")]
-    UnknownRetryError,
+    Retry,
 }
 
 pub trait DownloaderClient {
     fn open_drive(&self, drive_id: &str) -> Box<dyn DownloaderDrive>;
 }
 
+/// Download-side implementation of a drive.
 #[async_trait]
 pub trait DownloaderDrive: Sync + Send + 'static {
     /// Get the downloader type.
@@ -58,6 +63,12 @@ pub trait DownloaderDrive: Sync + Send + 'static {
         Box<dyn Stream<Item = Result<Bytes, DownloaderError>> + Send + Sync + Unpin>,
         DownloaderError,
     >;
+
+    /// Move a file to a given path.
+    async fn move_file(&self, file_id: String, new_path: PathBuf) -> Result<(), DownloaderError>;
+
+    /// Delete a file.
+    async fn delete_file(&self, file_id: String) -> Result<(), DownloaderError>;
 }
 
 #[derive(Debug)]

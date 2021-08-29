@@ -152,10 +152,6 @@ impl HardCacher {
             (None, file_name.to_string(), size)
         };
 
-        if file_name != new_file_name {
-            // println!("FILENAME {} -> {}", file_name, new_file_name);
-        }
-
         let item = HardCacheItem {
             access_id: access_id.to_string(),
             file_name: new_file_name,
@@ -246,7 +242,7 @@ impl HardCacher {
             match res {
                 Ok(ScOk::Finalize) => {
                     // Write metadata, save here
-                    // println!("Success with smart cacher {}", spec.name);
+                    println!("Success with smart cacher {}", spec.name);
                     hcd.save().await;
                     return Ok(HardCacheMetadata {
                         cacher: spec.name.to_string(),
@@ -258,11 +254,6 @@ impl HardCacher {
                 }
                 Err(ScErr::CacheHandlerError(e)) => return Err(e),
             }
-        } else {
-            // println!(
-            //     "No preferred cacher for {} ({} bytes)",
-            //     file_spec.name, file_spec.size
-            // );
         }
 
         for cacher in SMART_CACHERS {
@@ -292,7 +283,7 @@ impl HardCacher {
                     });
                 }
                 Err(ScErr::Cancel) => {
-                    // println!("Smart cacher {} failed, trying next...", spec.name);
+                    println!("Smart cacher {} failed, trying next...", spec.name);
                 }
                 Err(ScErr::CacheHandlerError(e)) => return Err(e),
             }
@@ -406,7 +397,6 @@ impl HcDownloadCacherItem {
         &mut self,
         offset: u64,
     ) -> Result<Box<dyn CacheFileHandler>, CacheHandlerError> {
-        // println!("open_reader item_size {}", self.item.size);
         if let Some(ref crypt_context) = self.item.crypt_context {
             let reader = self
                 .drive_access
@@ -441,8 +431,6 @@ impl HcDownloadCacherItem {
 #[async_trait]
 impl HcCacherItem for HcDownloadCacherItem {
     async fn read_data(&mut self, offset: u64, size: u64) -> Result<Vec<u8>, CacheHandlerError> {
-        // println!("read_data {} {}", offset, size);
-
         let mut buf = vec![0u8; size as usize];
         if let Some(mut reader) = self.readers.remove(&offset) {
             reader.read_exact(&mut buf).await?;
@@ -494,14 +482,11 @@ impl HcCacherItem for HcDownloadCacherItem {
     }
 
     async fn cache_data(&mut self, offset: u64, size: u64) -> Result<(), CacheHandlerError> {
-        // println!("cache_data {} {}", offset, size);
-
         if let Some(mut reader) = self.readers.remove(&offset) {
             reader.cache_exact(size as usize).await?;
 
             self.readers.insert(offset + size, reader);
         } else {
-            // println!("cache_data size {} {}", size, self.item.size);
             let mut reader = self
                 .drive_access
                 .cache_handler
@@ -532,7 +517,6 @@ impl HcCacherItem for HcDownloadCacherItem {
     }
 
     async fn cache_data_to(&mut self, offset: u64) -> Result<(), CacheHandlerError> {
-        // println!("cache_data_to {}", offset);
         // Ignore any other readers - make a new one, and go from start to offset
         let mut reader = self
             .drive_access
@@ -707,7 +691,6 @@ impl<'a> AsyncRead for HardCacheReader<'a> {
 
 impl<'a> AsyncSeek for HardCacheReader<'a> {
     fn start_seek(mut self: Pin<&mut Self>, position: SeekFrom) -> std::io::Result<()> {
-        println!("Seek performed to {:?}", position);
         match position {
             SeekFrom::Start(val) => {
                 self.offset = min(val, self.size);

@@ -65,7 +65,6 @@ impl DownloaderDrive for TimecodeDrive {
         let params: TimecodeParams =
             serde_json::from_str(&file_id).expect("Unable to parse file ID, should be JSON.");
         let default_file_size = 1024u64.pow(3) * 10; // 10 GB
-                                                     // dbg!(&params);
 
         let data_left = params
             .file_size

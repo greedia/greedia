@@ -44,13 +44,11 @@ impl CryptPassthrough {
         len: usize,
         mut buf: Option<&mut [u8]>,
     ) -> Result<usize, CacheHandlerError> {
-        // println!("crypt handle_read_into len {} buf {}", len, buf.is_some());
         // If data exists in last_bytes, read from there first
         if let Some(last_bytes) = &mut self.last_bytes {
             if last_bytes.is_empty() {
                 self.last_bytes = None
             } else {
-                // println!("read from last_bytes first");
                 let bytes_split_len = min(len, last_bytes.len());
                 let from_last_bytes = last_bytes.split_to(bytes_split_len);
                 if let Some(buf) = buf.as_mut() {
@@ -80,7 +78,6 @@ impl CryptPassthrough {
 
         self.cur_block += 1;
         self.last_bytes = Some(Bytes::copy_from_slice(&decrypted_block[read_len..]));
-        // println!("handle_read_into read_len {} last_bytes {}", read_len, &decrypted_block[read_len..].len());
         Ok(read_len)
     }
 }
@@ -96,14 +93,11 @@ impl CacheFileHandler for CryptPassthrough {
     }
 
     async fn seek_to(&mut self, offset: u64) -> Result<(), CacheHandlerError> {
-        // println!("crypt seek_to {}", offset);
-
         // The block to start at - note the data may span more than one block.
         // For simplicity, each block is read and decrypted individually.
         // Ideally, we could calculate all blocks required, issue one read call,
         // and then decrypt them efficiently but this is easier to verify for now...
         let starting_block = offset / decrypter::BLOCK_DATA_SIZE as u64;
-        // let starting_block = offset / decrypter::BLOCK_DATA_SIZE as u64;
 
         let block_starting_offset =
             decrypter::FILE_HEADER_SIZE as u64 + (starting_block * decrypter::BLOCK_SIZE as u64);
@@ -117,8 +111,6 @@ impl CacheFileHandler for CryptPassthrough {
             offset as usize
         };
 
-        // dbg!(starting_block, block_starting_offset, decrypted_block_starting_offset);
-
         self.cur_block = starting_block;
         self.last_bytes = None;
 
@@ -127,8 +119,6 @@ impl CacheFileHandler for CryptPassthrough {
 
         let mut block_buf = [0u8; decrypter::BLOCK_SIZE];
         let encrypted_block_len = self.reader.read_exact(&mut block_buf).await?;
-
-        // dbg!(encrypted_block_len);
 
         if encrypted_block_len == 0 {
             return Ok(());

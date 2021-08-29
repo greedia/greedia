@@ -109,34 +109,17 @@ async fn run_background(
     let mut open_files = HashSet::new();
 
     while let Some(msg) = recv.recv().await {
-        // let last_space_usage = space_usage;
         match msg {
             LruInnerMsg::UpdateFile { data_id, offset } => {
                 handle_update_file(&ts_tree, &data_tree, &data_id, offset);
             }
             LruInnerMsg::AddSpaceUsage { size } => {
                 space_usage += size;
-                // println!("space_usage {}, size_limit {}", space_usage, size_limit);
             }
             LruInnerMsg::OpenFile { data_id } => {
-                // let hex_md5 = if let DataIdentifier::GlobalMd5(x) = &data_id {
-                //     hex::encode(x)
-                // } else {
-                //     "".to_string()
-                // };
-
-                // println!("OPEN  DATA_ID {} (count: {})", hex_md5, open_files.len());
                 open_files.insert(data_id);
             }
             LruInnerMsg::CloseFile { data_id } => {
-                // let hex_md5 = if let DataIdentifier::GlobalMd5(x) = &data_id {
-                //     hex::encode(x)
-                // } else {
-                //     "".to_string()
-                // };
-
-                // println!("CLOSE DATA_ID {} (count: {})", hex_md5, open_files.len());
-
                 open_files.remove(&data_id);
             }
         }
@@ -148,10 +131,6 @@ async fn run_background(
             size_limit,
             &mut space_usage,
         );
-        // println!("Space usage is {}", space_usage);
-        // if last_space_usage != space_usage {
-        //     lru_tree.insert("space_usage", &space_usage.to_be_bytes());
-        // }
     }
 }
 
@@ -215,7 +194,7 @@ fn handle_cache_cleanup(
         }
         .to_bytes();
 
-        // subtract from our space usage
+        // Subtract from our space usage
         *space_usage = space_usage.saturating_sub(file_len);
 
         // Delete the lru_data and ts_data entries.
@@ -280,6 +259,9 @@ fn update_data_key(
 }
 
 /// Add a new key to the lru_timestamp tree, adding extra data to the key if needed.
+///
+/// If multiple keys are added to the tree in the same millisecond, the extra data
+/// will be used to deduplicate the keys.
 fn add_new_ts_key(ts_tree: &Tree, data_id: &DataIdentifier, offset: u64) -> [u8; 9] {
     let data = LruTimestampData {
         data_id: data_id.clone(),
@@ -321,7 +303,7 @@ fn is_chunk_file(entry: &DirEntry) -> bool {
 fn dir_entry_to_data_key(entry: &DirEntry) -> Option<(DataIdentifier, u64, u64, u64)> {
     // We're assuming only GlobalMd5 exists for now.
     // This will break when DriveSpecific is added to DataIdentifier.
-    // TODO: make more generic.
+    // TODO: handle more than GlobalMd5.
 
     let path = entry.path();
 

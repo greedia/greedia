@@ -271,7 +271,6 @@ async fn perform_scan(
         handle_one_page(trees, &page.items).await;
 
         if let Some(next_page_token) = page.next_page_token.as_deref() {
-            // println!("NEXT PAGE TOKEN: {}", next_page_token);
             let next_page_token_bytes = serialize_rkyv(&next_page_token.to_string());
             trees
                 .scan_tree
@@ -338,7 +337,6 @@ async fn perform_one_cache(
             .as_deref()
             .map(|m| get_rkyv::<HardCacheMetadata>(m));
 
-        // KTODO: handle CacheHandlerErrors here
         match hard_cacher
             .process(item.access_id.as_str(), file_name, &data_id, *size, hc_meta)
             .await
@@ -585,8 +583,4 @@ fn inner_get_drive_size(inode_tree: Tree) -> (u64, u64) {
 }
 
 // TODO: move to types
-#[derive(Debug, Clone, PartialEq, Archive, Serialize, Deserialize)]
-struct ScanState {
-    last_page_token: String,
-    last_modified_date: i64,
-}
+

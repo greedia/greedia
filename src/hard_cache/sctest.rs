@@ -63,7 +63,6 @@ struct HcTestCacherItem {
 #[async_trait]
 impl HcCacherItem for HcTestCacherItem {
     async fn read_data(&mut self, offset: u64, size: u64) -> Result<Vec<u8>, CacheHandlerError> {
-        //println!("read_data {} {}", offset, size);
         self.bridge_points.insert(offset + size);
         self.input.seek(SeekFrom::Start(offset)).await.unwrap();
         let mut buf = vec![0u8; size as usize];
@@ -92,7 +91,6 @@ impl HcCacherItem for HcTestCacherItem {
         size: u64,
         max_bridge_len: Option<u64>,
     ) -> Result<Vec<u8>, CacheHandlerError> {
-        //println!("read_data_bridged {} {} {:?}", offset, size, max_bridge_len);
         let last_bridge_point =
             if let Some(last_bridge_point) = self.bridge_points.range(..offset).rev().next() {
                 *last_bridge_point
@@ -113,7 +111,6 @@ impl HcCacherItem for HcTestCacherItem {
         self.read_data(offset, size).await
     }
     async fn cache_data(&mut self, offset: u64, size: u64) -> Result<(), CacheHandlerError> {
-        //println!("cache_data {} {}", offset, size);
         self.bytes_downloaded += size;
         self.ranges_to_cache.insert(offset, size);
 
@@ -125,10 +122,6 @@ impl HcCacherItem for HcTestCacherItem {
         size: u64,
         max_bridge_len: Option<u64>,
     ) -> Result<(), CacheHandlerError> {
-        // println!(
-        //     "cache_data_bridged {} {} {:?}",
-        //     offset, size, max_bridge_len
-        // );
         let last_bridge_point =
             if let Some(last_bridge_point) = self.bridge_points.range(..offset).rev().next() {
                 *last_bridge_point
@@ -149,14 +142,12 @@ impl HcCacherItem for HcTestCacherItem {
         Ok(())
     }
     async fn cache_data_to(&mut self, offset: u64) -> Result<(), CacheHandlerError> {
-        // println!("cache_data_to {}", offset);
         self.ranges_to_cache.insert(0, offset);
 
         Ok(())
     }
 
     async fn cache_data_fully(&mut self) -> Result<(), CacheHandlerError> {
-        // println!("cache_data_fully");
         self.ranges_to_cache.insert(0, self.input_size);
 
         Ok(())
@@ -167,7 +158,6 @@ impl HcCacherItem for HcTestCacherItem {
         let mut buf = vec![];
         for (offset, size) in &self.ranges_to_cache {
             buf.resize(*size as usize, 0);
-            // println!("bufsize {}, offset {}, size {}", buf.len(), offset, size);
             self.input
                 .seek(SeekFrom::Start(*offset))
                 .await

@@ -19,6 +19,12 @@ pub enum DownloaderError {
     RangeNotSatisfiable(String),
     #[error("Could not initialize or renew access token")]
     AccessTokenError,
+    #[error("Server error: {}", _0)]
+    ServerError(String),
+    #[error("Forbidden error")]
+    ForbiddenError,
+    #[error("Unknown downloader retry error")]
+    UnknownRetryError,
 }
 
 pub trait DownloaderClient {

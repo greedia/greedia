@@ -123,6 +123,12 @@ pub struct DirItem {
     pub is_dir: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Archive, RkyvSerialize, RkyvDeserialize)]
+struct ScanState {
+    last_page_token: String,
+    last_modified_date: i64,
+}
+
 /// Generate an internal lookup key, given a parent inode and name.
 pub fn make_lookup_key(parent: u64, name: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(8 + name.len());

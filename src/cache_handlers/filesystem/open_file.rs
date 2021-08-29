@@ -78,16 +78,12 @@ impl OpenFile {
         let hc_chunks = Self::get_cache_files(hard_cache_root, data_id).await;
         let sc_chunks = Self::get_cache_files(soft_cache_root, data_id).await;
 
-        // dbg!(&hc_chunks);
-        // dbg!(&sc_chunks);
-
         let file_id = file_id.to_string();
         let revision = 0;
 
         if let Some(lru) = &lru {
             lru.open_file(&data_id).await;
         }
-        // println!("OPEN FILE {} {}", file_id, soft_cache_root.display());
 
         OpenFile {
             file_id,
@@ -190,7 +186,6 @@ impl OpenFile {
         write_hard_cache: bool,
         file_path: &Path,
     ) -> Result<(File, DownloadHandle), CacheHandlerError> {
-        // println!("START DL {}", offset);
 
         let next_chunk = self.get_next_chunk(
             offset,
@@ -254,11 +249,7 @@ impl OpenFile {
         );
 
         // let read_file = File::open(file_path).await?;
-        let read_file_res = File::open(file_path).await;
-        if read_file_res.is_err() {
-            println!("File error occurred!");
-        }
-        let read_file = read_file_res?;
+        let read_file = File::open(file_path).await?;
         let download_handle = DownloadHandle {
             dl_handle: download_status,
         };
@@ -281,7 +272,6 @@ impl OpenFile {
         write_hard_cache: bool,
         file_path: &Path,
     ) -> Result<(File, DownloadHandle), CacheHandlerError> {
-        // println!("TRANSFER DL {}", offset);
 
         let next_chunk = self.get_next_chunk(
             offset,
@@ -337,12 +327,7 @@ impl OpenFile {
             },
         );
 
-        //let read_file = File::open(file_path).await?;
-        let read_file_res = File::open(file_path).await;
-        if read_file_res.is_err() {
-            println!("File error occurred!");
-        }
-        let read_file = read_file_res?;
+        let read_file = File::open(file_path).await?;
 
         let download_handle = DownloadHandle {
             dl_handle: download_status,
@@ -367,7 +352,6 @@ impl OpenFile {
         write_hard_cache: bool,
         file_path: &Path,
     ) -> Result<(File, DownloadHandle), CacheHandlerError> {
-        // println!("APPEND DL");
 
         let next_chunk = self.get_next_chunk(
             start_offset,
@@ -385,13 +369,6 @@ impl OpenFile {
             chunk_start_offset + MAX_CHUNK_SIZE
         };
 
-        if !file_path.exists() {
-            println!("FILE NOT EXIST");
-            println!("{}", file_path.display());
-            dbg!(&self.hc_chunks);
-            dbg!(&self.sc_chunks);
-        }
-
         let chunks = if write_hard_cache {
             &mut self.hc_chunks
         } else {
@@ -400,14 +377,7 @@ impl OpenFile {
 
         // Check that the chunk actually exists
         if let Some(mut cache_data) = chunks.get_data_mut(chunk_start_offset) {
-            // KTODO: check that this file exists
-            let write_file_res = OpenOptions::new().append(true).open(file_path).await;
-            if let Err(e) = &write_file_res {
-                println!("File error occurred! {}", e);
-                println!("{}", file_path.display());
-                dbg!(e);
-            }
-            let mut write_file = write_file_res?;
+            let mut write_file = OpenOptions::new().append(true).open(file_path).await?;
             if let Some(lru) = &self.lru {
                 if !write_hard_cache {
                     lru.touch_file(&self.data_id, chunk_start_offset).await;
@@ -435,12 +405,7 @@ impl OpenFile {
             assert_eq!(start_offset, cache_data.end_offset.load(Ordering::Acquire));
             cache_data.download_status = Arc::downgrade(&download_status);
 
-            // let mut read_file = File::open(file_path).await?;
-            let read_file_res = File::open(file_path).await;
-            if read_file_res.is_err() {
-                println!("File error occurred!");
-            }
-            let mut read_file = read_file_res?;
+            let mut read_file = File::open(file_path).await?;
 
             read_file.seek(SeekFrom::End(0)).await?;
 
@@ -465,8 +430,6 @@ impl OpenFile {
         source_file_end_offset: u64,
         file_path: &Path,
     ) -> Result<(File, DownloadHandle), CacheHandlerError> {
-        // println!("START COPY");
-
         let next_chunk = self.get_next_chunk(offset, Cache::Hard);
 
         // Stop downloading at MAX_CHUNK_SIZE or next chunk offset, whichever comes first
@@ -484,12 +447,7 @@ impl OpenFile {
         let mut write_file = File::create(file_path).await?;
         write_file.flush().await?;
 
-        // let mut cache_file = File::open(source_file_path).await?;
-        let cache_file_res = File::open(source_file_path).await;
-        if cache_file_res.is_err() {
-            println!("File error occurred!");
-        }
-        let mut cache_file = cache_file_res?;
+        let mut cache_file = File::open(source_file_path).await?;
 
         cache_file.seek(SeekFrom::Start(source_file_offset)).await?;
 
@@ -515,12 +473,7 @@ impl OpenFile {
             },
         );
 
-        // let read_file = File::open(file_path).await?;
-        let read_file_res = File::open(file_path).await;
-        if read_file_res.is_err() {
-            println!("File error occurred!");
-        }
-        let read_file = read_file_res?;
+        let read_file = File::open(file_path).await?;
         let download_handle = DownloadHandle {
             dl_handle: download_status,
         };
@@ -540,9 +493,6 @@ impl OpenFile {
 
         if let Some(lru) = &self.lru {
             if !hard_cache {
-                // lru.update_file_size(&self.data_id, start_offset, new_size).await;
-                // println!("update, old {} new {}, size {}", old_size.unwrap_or(0), new_size, new_size.saturating_sub(old_size.unwrap_or(0)));
-                // dbg!(&self.sc_chunks);
                 lru.add_space_usage(new_size.saturating_sub(old_size.unwrap_or(0)))
                     .await;
             }
@@ -603,7 +553,6 @@ impl OpenFile {
                         continue;
                     }
                     let end_offset = Arc::new(AtomicU64::new(offset + len));
-                    // println!("add_range {} {}", offset, len);
                     br.add_range(
                         offset,
                         len,

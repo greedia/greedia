@@ -593,6 +593,8 @@ async fn open_request(
 
     let mut retry = false;
 
+    let mut last_error = None;
+
     for _ in 0..10 {
         access_instance.rate_limit(bg_request, retry).await;
         let access_token = access_instance.access_token().await;
@@ -604,7 +606,7 @@ async fn open_request(
             .query(&[("alt", "media")])
             .send()
             .await;
-
+        
         match res {
             Ok(r) => {
                 match r.status().as_u16() {
@@ -616,6 +618,7 @@ async fn open_request(
                     401 => {
                         println!("access token needs refresh");
                         access_instance.refresh_access_token(&http_client).await?;
+                        last_error = Some(DownloaderError::AccessTokenError);
                     }
                     416 => {
                         return Err(DownloaderError::RangeNotSatisfiable(range_string));
@@ -630,23 +633,29 @@ async fn open_request(
                                 }
                             }
                         }
+                        last_error = Some(DownloaderError::ForbiddenError);
                     }
                     // Rate limit or server error, retry request
                     _ => {
+                        last_error = Some(DownloaderError::ServerError(r.status().as_str().to_string()));
                         println!("Other: {}", r.status());
                     }
                 }
             }
             Err(e) => {
-                println!("Error: {}", e)
+                println!("Error: {}", &e);
+                last_error = Some(DownloaderError::Reqwest(e));
             }
         }
 
         retry = true
     }
 
-    // KTODO: 10 tries failed, return error
-    todo!()
+    if let Some(last_error) = last_error {
+        Err(last_error)
+    } else {
+        Err(DownloaderError::UnknownRetryError)
+    }
 }
 
 async fn get_new_token(conn_info: &ConnInfo, rate_limiter: &PrioLimit) -> Option<AccessToken> {
@@ -700,8 +709,6 @@ fn to_page_item(file: GPageItem) -> PageItem {
 }
 
 fn to_change_item(change: GChangeItem) -> Option<Change> {
-    // dbg!(&change);
-
     if let Some(file) = change.file {
         if file.trashed || change.removed {
             Some(Change::Removed(file.id))

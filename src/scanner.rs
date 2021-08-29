@@ -22,7 +22,7 @@ use flume::Receiver;
 use futures::future::join_all;
 use futures::{Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
-use rkyv::{de::deserializers::AllocDeserializer, Archive, Deserialize, Serialize};
+use rkyv::{de::deserializers::AllocDeserializer, Deserialize};
 use sled::IVec;
 
 use crate::{

@@ -318,7 +318,7 @@ impl FilesystemCacheFileHandler {
 
         // dbg!(&self.current_chunk);
 
-        for attempt in 0..100 {
+        for attempt in 0..40 {
             if attempt > 20 {
                 sleep(Duration::from_millis(50 * attempt)).await;
             }
@@ -358,7 +358,7 @@ impl FilesystemCacheFileHandler {
             }
         }
 
-        panic!("HANDLE_INTO loop failed")
+        Err(CacheHandlerError::HandleIntoError)
     }
 
     async fn handle_chunk(

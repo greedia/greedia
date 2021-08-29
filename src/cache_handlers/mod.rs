@@ -23,6 +23,8 @@ pub enum CacheHandlerError {
     DeserializeError,
     #[error("Could not build CryptPassthrough")]
     CryptPassthroughError,
+    #[error("HANDLE_INTO Error")]
+    HandleIntoError,
 }
 
 impl CacheHandlerError {

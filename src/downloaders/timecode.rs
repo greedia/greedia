@@ -1,4 +1,9 @@
-use std::{cmp::min, io::Read, path::PathBuf, pin::Pin, task::{Context, Poll}};
+use std::{
+    cmp::min,
+    io::Read,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 use crate::types::DataIdentifier;
 use async_trait::async_trait;
@@ -82,7 +87,12 @@ impl DownloaderDrive for TimecodeDrive {
         Ok(stream)
     }
 
-    async fn move_file(&self, _file_id: String, _new_path: PathBuf) -> Result<(), DownloaderError> {
+    async fn move_file(
+        &self,
+        _file_id: String,
+        _old_new_filename_ids: Option<(String, String)>,
+        _new_parent_id: Option<String>,
+    ) -> Result<(), DownloaderError> {
         Err(DownloaderError::Unimplemented)
     }
 

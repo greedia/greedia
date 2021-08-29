@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -15,6 +13,8 @@ pub mod timecode;
 pub enum DownloaderError {
     #[error("Reqwest error")]
     Reqwest(#[from] reqwest::Error),
+    #[error("JSON error")]
+    Json(#[from] serde_json::Error),
     #[error("Download quota for this file has been exceeded")]
     QuotaExceeded,
     #[error("Range not satisfiable ({})", _0)]
@@ -64,8 +64,19 @@ pub trait DownloaderDrive: Sync + Send + 'static {
         DownloaderError,
     >;
 
-    /// Move a file to a given path.
-    async fn move_file(&self, file_id: String, new_path: PathBuf) -> Result<(), DownloaderError>;
+    /// Move or rename a file.
+    ///
+    /// file_id: ID of the existing file.
+    ///
+    /// new_filename: New filename, if name change is desired.
+    ///
+    /// new_parent: New parent, if moving the file is d
+    async fn move_file(
+        &self,
+        file_id: String,
+        new_parent_id: Option<(String, String)>,
+        new_file_name: Option<String>,
+    ) -> Result<(), DownloaderError>;
 
     /// Delete a file.
     async fn delete_file(&self, file_id: String) -> Result<(), DownloaderError>;

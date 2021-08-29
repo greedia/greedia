@@ -11,10 +11,16 @@ use oauth2::{
 };
 use reqwest::{self, Client};
 use serde::{Deserialize, Serialize};
-use std::{borrow::Cow, path::{Path, PathBuf}, sync::{
+use serde_json::json;
+use std::{
+    borrow::Cow,
+    path::Path,
+    sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
-    }, time::Duration};
+    },
+    time::Duration,
+};
 use tokio::sync::{
     mpsc::{self, Sender},
     Mutex,
@@ -172,8 +178,11 @@ impl ServiceAccountInstance {
     ) -> Result<ServiceAccountInstance, DownloaderError> {
         let rate_limiter = PrioLimit::new(1, 5, Duration::from_millis(100));
 
-        let sa_bytes = tokio::fs::read(path).await.unwrap();
-        let service_account: ServiceAccount = serde_json::from_slice(&sa_bytes).unwrap();
+        let sa_bytes = tokio::fs::read(path)
+            .await
+            .expect("Could not open service account file");
+        let service_account: ServiceAccount =
+            serde_json::from_slice(&sa_bytes).expect("Could not parse service account file");
 
         let initial_access_token = Self::get_new_token(http_client, &service_account).await?;
         let access_token = Mutex::new(initial_access_token);
@@ -575,19 +584,38 @@ impl DownloaderDrive for GDriveDrive {
         Err(DownloaderError::QuotaExceeded)
     }
 
-    async fn move_file(&self, _file_id: String, _new_path: PathBuf) -> Result<(), DownloaderError> {
-        Err(DownloaderError::Unimplemented) // KTODO
+    async fn move_file(
+        &self,
+        file_id: String,
+        old_new_parent_ids: Option<(String, String)>,
+        new_file_name: Option<String>,
+    ) -> Result<(), DownloaderError> {
+        for _ in 0..self.access_instances.len() {
+            let access_instance = self.access_instances.next();
+            let old_new_parent_ids = old_new_parent_ids.as_ref().map(|(o, n)| (o.as_str(), n.as_str()));
+            let res = move_request(
+                &file_id,
+                old_new_parent_ids,
+                new_file_name.as_deref(),
+                &self.http_client,
+                access_instance,
+            )
+            .await;
+            match res {
+                Ok(_) => {
+                    return Ok(());
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        Err(DownloaderError::Retry)
     }
 
     async fn delete_file(&self, file_id: String) -> Result<(), DownloaderError> {
         for _ in 0..self.access_instances.len() {
             let access_instance = self.access_instances.next();
-            let res = delete_request(
-                &file_id,
-                &self.http_client,
-                access_instance,
-            )
-            .await;
+            let res = delete_request(&file_id, &self.http_client, access_instance).await;
             match res {
                 Ok(_) => {
                     return Ok(());
@@ -655,9 +683,7 @@ async fn open_request(
                     }
                     // Rate limit or server error, retry request
                     _ => {
-                        last_error = Some(DownloaderError::Server(
-                            r.status().as_str().to_string(),
-                        ));
+                        last_error = Some(DownloaderError::Server(r.status().as_str().to_string()));
                         println!("Other: {}", r.status());
                     }
                 }
@@ -678,7 +704,11 @@ async fn open_request(
     }
 }
 
-async fn delete_request(file_id: &str, http_client: &reqwest::Client, access_instance: &AccessInstance) -> Result<(), DownloaderError> {
+async fn delete_request(
+    file_id: &str,
+    http_client: &reqwest::Client,
+    access_instance: &AccessInstance,
+) -> Result<(), DownloaderError> {
     let url = format!("https://www.googleapis.com/drive/v3/files/{}", file_id);
 
     let mut retry = false;
@@ -721,9 +751,94 @@ async fn delete_request(file_id: &str, http_client: &reqwest::Client, access_ins
                     }
                     // Rate limit or server error, retry request
                     _ => {
-                        last_error = Some(DownloaderError::Server(
-                            r.status().as_str().to_string(),
-                        ));
+                        last_error = Some(DownloaderError::Server(r.status().as_str().to_string()));
+                        println!("Other: {}", r.status());
+                    }
+                }
+            }
+            Err(e) => {
+                println!("Error: {}", &e);
+                last_error = Some(DownloaderError::Reqwest(e));
+            }
+        }
+
+        retry = true
+    }
+
+    if let Some(last_error) = last_error {
+        Err(last_error)
+    } else {
+        Err(DownloaderError::Retry)
+    }
+}
+
+async fn move_request(
+    file_id: &str,
+    old_new_parent_ids: Option<(&str, &str)>,
+    new_file_name: Option<&str>,
+    http_client: &reqwest::Client,
+    access_instance: &AccessInstance,
+) -> Result<(), DownloaderError> {
+    let url = format!("https://www.googleapis.com/drive/v3/files/{}", file_id);
+
+    let mut retry = false;
+    let mut last_error = None;
+
+    let mut query = vec![];
+
+    if let Some((old_parent_id, new_parent_id)) = old_new_parent_ids {
+        query.push(("removeParents", Cow::Borrowed(old_parent_id)));
+        query.push(("addParents", Cow::Borrowed(new_parent_id)));
+    }
+
+    let body = if let Some(new_file_name) = new_file_name {
+        let json_body = json!({ "name": new_file_name });
+        serde_json::to_vec(&json_body)?
+    } else {
+        vec![]
+    };
+
+    for _ in 0..10 {
+        access_instance.rate_limit(false, retry).await;
+        let access_token = access_instance.access_token().await;
+
+        let body = body.clone();
+        let res = http_client
+            .patch(&url)
+            .bearer_auth(access_token.secret())
+            .query(&query)
+            .body(body)
+            .send()
+            .await;
+
+        match res {
+            Ok(r) => {
+                match r.status().as_u16() {
+                    // Everything's good
+                    200 | 206 => {
+                        return Ok(());
+                    }
+                    // Bad access token, refresh it and retry request
+                    401 => {
+                        println!("access token needs refresh");
+                        access_instance.refresh_access_token(http_client).await?;
+                        last_error = Some(DownloaderError::AccessToken);
+                    }
+                    403 => {
+                        if let Ok(error_json) = r.json::<GErrorTop>().await {
+                            let errors = &error_json.error.errors;
+                            for error in errors.iter() {
+                                if error.reason == "downloadQuotaExceeded" {
+                                    println!("{:?}", &error_json);
+                                    return Err(DownloaderError::QuotaExceeded);
+                                }
+                            }
+                        }
+                        last_error = Some(DownloaderError::Forbidden);
+                    }
+                    // Rate limit or server error, retry request
+                    _ => {
+                        last_error = Some(DownloaderError::Server(r.status().as_str().to_string()));
                         println!("Other: {}", r.status());
                     }
                 }

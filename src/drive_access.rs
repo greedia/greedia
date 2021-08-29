@@ -261,11 +261,15 @@ impl DriveAccess {
             let file_id = drive_item.access_id.to_string();
             let data_id = data_id
                 .deserialize(&mut AllocDeserializer)
-                .map_err(|_| CacheHandlerError::Deserialize).ok()?;
+                .map_err(|_| CacheHandlerError::Deserialize)
+                .ok()?;
 
-                self.cache_handler.unlink_file(file_id, data_id).await.ok()?;
+            self.cache_handler
+                .unlink_file(file_id, data_id)
+                .await
+                .ok()?;
 
-                Some(())
+            Some(())
         } else {
             None
         }

@@ -57,6 +57,7 @@ pub async fn mount_thread(drives: Vec<Arc<DriveAccess>>, mountpoint: PathBuf) {
                 Operation::Read(op) => fs.do_read(&req, op).await?,
                 Operation::Release(op) => fs.do_release(&req, op).await?,
                 Operation::Unlink(op) => fs.do_unlink(&req, op).await?,
+                Operation::Rename(op) => fs.do_rename(&req, op).await?,
                 _ => req.reply_error(libc::ENOSYS)?,
             }
 
@@ -552,7 +553,9 @@ impl GreediaFS {
         let inode = op.parent();
         let name = op.name();
         let unlink = match self.map_inode(inode) {
-            Inode::Drive(drive, local_inode) => self.unlink_drive(drive, local_inode, name).await.is_some(),
+            Inode::Drive(drive, local_inode) => {
+                self.unlink_drive(drive, local_inode, name).await.is_some()
+            }
             _ => false,
         };
 
@@ -563,6 +566,13 @@ impl GreediaFS {
         }
 
         Ok(())
+    }
+
+    /// Handle a FUSE `rename()` call.
+    ///
+    /// This allows renaming or moving a file.
+    async fn do_rename(&self, req: &Request, op: op::Rename<'_>) -> io::Result<()> {
+        todo!() // KTODO
     }
 }
 

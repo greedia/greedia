@@ -54,7 +54,11 @@ pub trait CacheDriveHandler: Send + Sync {
         write_hard_cache: bool,
     ) -> Result<Box<dyn CacheFileHandler>, CacheHandlerError>;
     async fn clear_cache_item(&self, data_id: DataIdentifier);
-    async fn unlink_file(&self, file_id: String, data_id: DataIdentifier) -> Result<(), CacheHandlerError>;
+    async fn unlink_file(
+        &self,
+        file_id: String,
+        data_id: DataIdentifier,
+    ) -> Result<(), CacheHandlerError>;
 }
 
 #[async_trait]

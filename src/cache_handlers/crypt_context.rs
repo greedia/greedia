@@ -10,11 +10,10 @@ pub struct CryptContext {
 impl CryptContext {
     pub fn new(password1: &str, password2: &str) -> Result<CryptContext, CacheHandlerError> {
         let password =
-            obscure::reveal(password1).map_err(|_| CacheHandlerError::CryptPassthroughError)?;
-        let salt =
-            obscure::reveal(password2).map_err(|_| CacheHandlerError::CryptPassthroughError)?;
+            obscure::reveal(password1).map_err(|_| CacheHandlerError::CryptPassthrough)?;
+        let salt = obscure::reveal(password2).map_err(|_| CacheHandlerError::CryptPassthrough)?;
         let cipher =
-            Cipher::new(password, salt).map_err(|_| CacheHandlerError::CryptPassthroughError)?;
+            Cipher::new(password, salt).map_err(|_| CacheHandlerError::CryptPassthrough)?;
         Ok(CryptContext { cipher })
     }
 

@@ -22,7 +22,7 @@ impl CryptPassthrough {
         let mut header = [0u8; decrypter::FILE_HEADER_SIZE];
         reader.read_exact(&mut header).await?;
         let decrypter = Decrypter::new(&ctx.cipher.file_key, &header)
-            .map_err(|_| CacheHandlerError::CryptPassthroughError)?;
+            .map_err(|_| CacheHandlerError::CryptPassthrough)?;
 
         let cur_block = 0;
         let last_bytes = None;
@@ -69,7 +69,7 @@ impl CryptPassthrough {
         let decrypted_block = self
             .decrypter
             .decrypt_block(self.cur_block, &block_buf[..encrypted_block_len])
-            .map_err(|_| CacheHandlerError::CryptPassthroughError)?;
+            .map_err(|_| CacheHandlerError::CryptPassthrough)?;
 
         let read_len = min(decrypted_block.len(), len);
         if let Some(buf) = buf {
@@ -127,7 +127,7 @@ impl CacheFileHandler for CryptPassthrough {
         let decrypted_block = self
             .decrypter
             .decrypt_block(self.cur_block, &block_buf[..encrypted_block_len])
-            .map_err(|_| CacheHandlerError::CryptPassthroughError)?;
+            .map_err(|_| CacheHandlerError::CryptPassthrough)?;
 
         if let Some(decrypted_block) = decrypted_block.get(decrypted_block_starting_offset..) {
             self.last_bytes = Some(Bytes::copy_from_slice(decrypted_block));

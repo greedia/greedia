@@ -82,7 +82,7 @@ impl OpenFile {
         let revision = 0;
 
         if let Some(lru) = &lru {
-            lru.open_file(&data_id).await;
+            lru.open_file(data_id).await;
         }
 
         OpenFile {
@@ -186,7 +186,6 @@ impl OpenFile {
         write_hard_cache: bool,
         file_path: &Path,
     ) -> Result<(File, DownloadHandle), CacheHandlerError> {
-
         let next_chunk = self.get_next_chunk(
             offset,
             if write_hard_cache {
@@ -272,7 +271,6 @@ impl OpenFile {
         write_hard_cache: bool,
         file_path: &Path,
     ) -> Result<(File, DownloadHandle), CacheHandlerError> {
-
         let next_chunk = self.get_next_chunk(
             offset,
             if write_hard_cache {
@@ -352,7 +350,6 @@ impl OpenFile {
         write_hard_cache: bool,
         file_path: &Path,
     ) -> Result<(File, DownloadHandle), CacheHandlerError> {
-
         let next_chunk = self.get_next_chunk(
             start_offset,
             if write_hard_cache {
@@ -415,7 +412,7 @@ impl OpenFile {
 
             Ok((read_file, download_handle))
         } else {
-            Err(CacheHandlerError::AppendChunkError {
+            Err(CacheHandlerError::AppendChunk {
                 start_offset: chunk_start_offset,
             })
         }

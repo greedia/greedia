@@ -136,7 +136,7 @@ impl DriveAccess {
                     let access_id = drive_item.access_id.to_string();
                     let data_id = data_id
                         .deserialize(&mut AllocDeserializer)
-                        .map_err(|_| CacheHandlerError::DeserializeError)?;
+                        .map_err(|_| CacheHandlerError::Deserialize)?;
                     // Once we get the data_id from the db, open the file in the CacheHandler.
                     // Don't write to hard cache, as we aren't opening from a scanner.
                     let mut file = self
@@ -154,7 +154,7 @@ impl DriveAccess {
                         if Decrypter::new(&cc.cipher.file_key, &header).is_ok() {
                             file.seek_to(0).await?;
                             return Ok(TypeResult::IsType(Box::new(
-                                CryptPassthrough::new(&cc, offset, file).await?,
+                                CryptPassthrough::new(cc, offset, file).await?,
                             )));
                         }
                     }
@@ -223,7 +223,7 @@ impl DriveAccess {
         let inode = self.lookup_inode(inode, &file_name)?;
 
         let drive_item_bytes = self.inode_tree.get(inode.to_le_bytes())?;
-        let drive_item = get_rkyv::<DriveItem>(&&drive_item_bytes);
+        let drive_item = get_rkyv::<DriveItem>(&drive_item_bytes);
         Some(to_t(inode, drive_item))
     }
 
@@ -234,7 +234,7 @@ impl DriveAccess {
         to_t: impl FnOnce(&ArchivedDriveItem) -> T,
     ) -> Option<T> {
         let drive_item_bytes = self.inode_tree.get(inode.to_le_bytes())?;
-        let drive_item = get_rkyv::<DriveItem>(&&drive_item_bytes);
+        let drive_item = get_rkyv::<DriveItem>(&drive_item_bytes);
         Some(to_t(drive_item))
     }
 

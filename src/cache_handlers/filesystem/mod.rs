@@ -343,7 +343,7 @@ impl FilesystemCacheFileHandler {
             }
         }
 
-        Err(CacheHandlerError::HandleIntoError)
+        Err(CacheHandlerError::HandleInto)
     }
 
     async fn handle_chunk(

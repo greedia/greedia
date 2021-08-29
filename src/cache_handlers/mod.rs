@@ -14,17 +14,17 @@ use crate::{downloaders::Change, types::DataIdentifier};
 #[derive(Error, Debug)]
 pub enum CacheHandlerError {
     #[error("IO Error")]
-    IoError(#[from] io::Error),
+    Io(#[from] io::Error),
     #[error("Downloader Error")]
-    DownloaderError(#[from] DownloaderError),
+    Downloader(#[from] DownloaderError),
     #[error("AppendChunkError at start_offset: {start_offset}")]
-    AppendChunkError { start_offset: u64 },
+    AppendChunk { start_offset: u64 },
     #[error("Could not deserialize DataID")]
-    DeserializeError,
+    Deserialize,
     #[error("Could not build CryptPassthrough")]
-    CryptPassthroughError,
+    CryptPassthrough,
     #[error("HANDLE_INTO Error")]
-    HandleIntoError,
+    HandleInto,
 }
 
 impl CacheHandlerError {

@@ -606,7 +606,7 @@ async fn open_request(
             .query(&[("alt", "media")])
             .send()
             .await;
-        
+
         match res {
             Ok(r) => {
                 match r.status().as_u16() {
@@ -617,7 +617,7 @@ async fn open_request(
                     // Bad access token, refresh it and retry request
                     401 => {
                         println!("access token needs refresh");
-                        access_instance.refresh_access_token(&http_client).await?;
+                        access_instance.refresh_access_token(http_client).await?;
                         last_error = Some(DownloaderError::AccessTokenError);
                     }
                     416 => {
@@ -637,7 +637,9 @@ async fn open_request(
                     }
                     // Rate limit or server error, retry request
                     _ => {
-                        last_error = Some(DownloaderError::ServerError(r.status().as_str().to_string()));
+                        last_error = Some(DownloaderError::ServerError(
+                            r.status().as_str().to_string(),
+                        ));
                         println!("Other: {}", r.status());
                     }
                 }

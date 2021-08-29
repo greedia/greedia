@@ -213,7 +213,7 @@ fn handle_cache_cleanup(
 /// Handle updating a file's timestamp or changing its reported size.
 fn handle_update_file(ts_tree: &Tree, data_tree: &Tree, data_id: &DataIdentifier, offset: u64) {
     // Create a new timestamp key
-    let ts_key = add_new_ts_key(ts_tree, &data_id, offset);
+    let ts_key = add_new_ts_key(ts_tree, data_id, offset);
 
     // Update data key, returning the old ts_key if existed
     let old_ts_key = update_data_key(data_tree, data_id, offset, ts_key);

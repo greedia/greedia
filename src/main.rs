@@ -103,7 +103,7 @@ async fn run(config_path: &Path) -> Result<()> {
     let db = Db::open(&db_path.join("db_v1"))?;
 
     // Initialize LRU
-    let lru = Lru::new(&db, &db_path, cfg.caching.soft_cache_limit).await;
+    let lru = Lru::new(&db, db_path, cfg.caching.soft_cache_limit).await;
 
     // Initialize cache handlers
     let mut drives = Vec::new();

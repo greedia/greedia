@@ -186,7 +186,7 @@ impl HardCacher {
         meta: Option<&ArchivedHardCacheMetadata>,
     ) -> Result<HardCacheMetadata, CacheHandlerError> {
         // Short-circuit if finalized with latest version of smart_cacher
-        if let Some(ref meta) = meta {
+        if let Some(meta) = meta {
             if self.is_latest(meta) {
                 return Ok(meta.deserialize(&mut AllocDeserializer).unwrap());
             }

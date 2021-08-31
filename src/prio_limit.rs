@@ -5,7 +5,7 @@
 use flume::{bounded, Receiver, Sender};
 use futures::select_biased;
 use futures::FutureExt;
-use leaky_bucket::LeakyBucket;
+use leaky_bucket::RateLimiter;
 use std::time::Duration;
 
 #[derive(Debug)]
@@ -31,13 +31,12 @@ impl PrioLimit {
         let (bg_retry_sender, bg_retry_recv) = bounded(0);
         let (bg_sender, bg_recv) = bounded(0);
 
-        let leaky_bucket = LeakyBucket::builder()
-            .tokens(tokens)
+        let leaky_bucket = RateLimiter::builder()
+            .initial(tokens)
             .max(max)
-            .refill_amount(1)
-            .refill_interval(refill_interval)
-            .build()
-            .expect("Could not create rate limiter");
+            .refill(1)
+            .interval(refill_interval)
+            .build();
 
         tokio::spawn(Self::internal(
             leaky_bucket,
@@ -113,7 +112,7 @@ impl PrioLimit {
     }
 
     async fn internal(
-        leaky_bucket: LeakyBucket,
+        leaky_bucket: RateLimiter,
         access_token_recv: Receiver<Req>,
         retry_recv: Receiver<Req>,
         recv: Receiver<Req>,
@@ -131,8 +130,7 @@ impl PrioLimit {
 
             leaky_bucket
                 .acquire_one()
-                .await
-                .expect("Could not acquire rate-limiting token");
+                .await;
 
             if let Ok(next_req) = next_req {
                 next_req

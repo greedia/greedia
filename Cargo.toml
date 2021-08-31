@@ -13,10 +13,10 @@ byte-ranger = { path = "vendor/byte-ranger" }
 timecode_rs = { path = "vendor/timecode_rs" }
 bitstream-io = { path = "vendor/bitstream-io" }
 rclone-crypt = { path = "vendor/rclone-crypt-rs" }
-leaky-bucket = "0.10"
+leaky-bucket = "0.11"
 anyhow = "1.0"
 thiserror = "1.0"
-tokio = { version = "1.5", features = ["fs", "rt", "net", "sync"] }
+tokio = { version = "1.10", features = ["fs", "rt", "net", "sync", "macros"] }
 futures = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0" 

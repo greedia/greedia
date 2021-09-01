@@ -59,6 +59,12 @@ pub trait CacheDriveHandler: Send + Sync {
         file_id: String,
         data_id: DataIdentifier,
     ) -> Result<(), CacheHandlerError>;
+    async fn rename_file(
+        &self,
+        file_id: String,
+        old_new_parent_ids: Option<(String, String)>,
+        new_file_name: Option<String>,
+    ) -> Result<(), CacheHandlerError>;
 }
 
 #[async_trait]

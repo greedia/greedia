@@ -229,6 +229,17 @@ impl CacheDriveHandler for FilesystemCacheHandler {
 
         Ok(())
     }
+
+    async fn rename_file(
+        &self,
+        file_id: String,
+        old_new_parent_ids: Option<(String, String)>,
+        new_file_name: Option<String>,
+    ) -> Result<(), CacheHandlerError> {
+        self.downloader_drive.move_file(file_id, old_new_parent_ids, new_file_name).await?;
+
+        Ok(())
+    }
 }
 
 struct FilesystemCacheFileHandler {

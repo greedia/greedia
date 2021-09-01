@@ -300,6 +300,19 @@ impl GreediaFS {
         drive_access.unlink_item(inode, file_name).await
     }
 
+    /// Renames and/or moves a file within a drive directory.
+    ///
+    /// If new_parent differs from parent, move the file to that new parent.
+    /// If new_name differs from name, rename the file.
+    async fn rename_drive(&self, drive: u16, parent: u64, name: &OsStr, new_parent: u64, new_name: &OsStr) -> Option<()> {
+        let drive_access = self.drives.get(drive as usize)?;
+        let file_name = name.to_str()?;
+        let new_parent = if new_parent == parent { None } else { Some(new_parent) };
+        let new_name = if new_name == name { None } else { Some(new_name.to_str()? )};
+
+        drive_access.rename_item(parent, file_name, new_parent, new_name).await
+    }
+
     /// Open a file within a drive from an `open()` call.
     ///
     /// There is no root version of this, as the root only contains
@@ -572,7 +585,26 @@ impl GreediaFS {
     ///
     /// This allows renaming or moving a file.
     async fn do_rename(&self, req: &Request, op: op::Rename<'_>) -> io::Result<()> {
-        todo!() // KTODO
+        let parent = op.parent();
+        let name = op.name();
+        let new_parent = op.newparent();
+        let new_name = op.newname();
+        // TODO: For now, the flags are ignored. They should probably be handled at some point.
+
+        let rename = match self.map_inode(parent) {
+            Inode::Drive(drive, local_parent_inode) => {
+                self.rename_drive(drive, local_parent_inode, name, new_parent, new_name).await.is_some()
+            }
+            _ => false,
+        };
+
+        if rename {
+            req.reply(())?
+        } else {
+            req.reply_error(libc::ENOENT)?;
+        }
+
+        Ok(())
     }
 }
 

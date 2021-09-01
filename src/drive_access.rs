@@ -275,6 +275,92 @@ impl DriveAccess {
         }
     }
 
+    /// Rename and/or move a file.
+    pub async fn rename_item(&self, parent: u64, file_name: &str, new_parent: Option<u64>, new_name: Option<&str>) -> Option<()> {
+        // No action is being performed, so just short-circuit
+        if new_parent.is_none() && new_name.is_none() {
+            return Some(());
+        }
+
+        let parent_inode = if parent == 0 {
+            self.root_inode().unwrap_or(0)
+        } else {
+            parent
+        };
+
+        // If we're using encryption, try to look up the encrypted file_name.
+        // Make sure to use the same CryptContext to re-encrypt new file
+        let (cc, file_name) = if self.uses_crypt {
+            self.crypts
+                .iter()
+                .find_map(|cc| {
+                    cc.cipher.encrypt_segment(file_name).ok().map(Cow::Owned).map(|file_name| (Some(cc.clone()), file_name))
+                })
+                .unwrap_or((None, Cow::Borrowed(file_name)))
+        } else {
+            (None, Cow::Borrowed(file_name))
+        };
+
+        let inode = self.lookup_inode(parent_inode, &file_name)?;
+
+        // Get item's file_id
+        let drive_item_bytes = self.inode_tree.get(inode.to_le_bytes())?;
+        let drive_item = get_rkyv::<DriveItem>(&drive_item_bytes);
+        let item_file_id = drive_item.access_id.to_string();
+
+        // Get parent's file_id
+        let parent_item_bytes = self.inode_tree.get(parent_inode.to_le_bytes())?;
+        let parent_item = get_rkyv::<DriveItem>(&parent_item_bytes);
+        let parent_file_id = parent_item.access_id.to_string();
+
+        // Get new_parent's file_id
+        let new_parent_file_id = if let Some(new_parent) = new_parent {
+            let new_parent_item_bytes = self.inode_tree.get(new_parent.to_le_bytes())?;
+            let new_parent_item = get_rkyv::<DriveItem>(&new_parent_item_bytes);
+            Some(parent_item.access_id.to_string())
+        } else {
+            None
+        };
+
+        // Get old_new_parent_ids
+        let old_new_parent_ids = new_parent_file_id.map(|npfi| (parent_file_id, npfi));
+
+        // Re-encrypt the new filename if original filename is encrypted
+        let new_file_name = if let Some(new_name) = new_name {
+            if let Some(cc) = cc {
+                cc.cipher.encrypt_segment(new_name).ok()
+            } else {
+                Some(new_name.to_string())
+            }
+        } else {
+            None
+        };
+
+        let new_file_name = None;
+        
+        // Perform the move on the downloader
+        self.cache_handler.rename_file(item_file_id, old_new_parent_ids, new_file_name);
+
+
+        // TODO: combine these two together
+        // Move parents if new_parent set
+        if let Some(new_parent) = new_parent {
+            // TODO:
+            // - look up raccess key to remove item from old parent
+            // - add new lookup key to new parent
+        }
+
+        // Rename if new_name set
+        if let Some(new_name) = new_name {
+            // TODO:
+            // - check if raccess key is needed if key is within same parent
+            // - delete lookup key from parent
+            // - add new lookup key to parent
+        }
+
+        todo!()
+    }
+
     /// Get the attributes for a given inode.
     pub fn getattr_item<T>(
         &self,

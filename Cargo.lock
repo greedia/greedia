@@ -1769,6 +1769,8 @@ dependencies = [
 [[package]]
 name = "rclone-crypt"
 version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "478efdfc39265cd7e368a2252a06dd30a4b977b745b7bf731ace462951879644"
 dependencies = [
  "aes",
  "anyhow",

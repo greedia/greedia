@@ -128,11 +128,12 @@ impl DriveAccess {
                 // Load the DriveItem, and check that it's a file and not a directory.
                 let drive_item = get_rkyv::<DriveItem>(&drive_item_bytes);
                 if let ArchivedDriveItemData::FileItem {
-                    file_name: _,
+                    file_name,
                     data_id,
                     size,
                 } = &drive_item.data
                 {
+                    println!("Opened file {}", file_name);
                     let access_id = drive_item.access_id.to_string();
                     let data_id = data_id
                         .deserialize(&mut AllocDeserializer)
@@ -339,7 +340,7 @@ impl DriveAccess {
         let new_file_name = None;
         
         // Perform the move on the downloader
-        self.cache_handler.rename_file(item_file_id, old_new_parent_ids, new_file_name);
+        self.cache_handler.rename_file(item_file_id, old_new_parent_ids, new_file_name).await.ok()?;
 
 
         // TODO: combine these two together

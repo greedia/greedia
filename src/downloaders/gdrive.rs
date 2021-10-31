@@ -12,15 +12,10 @@ use oauth2::{
 use reqwest::{self, Client};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::{
-    borrow::Cow,
-    path::Path,
-    sync::{
+use std::{borrow::Cow, path::Path, sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
-    },
-    time::Duration,
-};
+    }, time::Duration};
 use tokio::sync::{
     mpsc::{self, Sender},
     Mutex,
@@ -59,11 +54,11 @@ impl AccessInstanceHandler {
         let index = self.index.fetch_add(1, Ordering::AcqRel) % self.access_instances.len() as u64;
 
         let access_instance = self.access_instances.get(index as usize).unwrap();
-        println!(
-            "access_instance_handler next {}/{}",
-            index,
-            self.access_instances.len()
-        );
+        // println!(
+        //     "access_instance_handler next {}/{}",
+        //     index,
+        //     self.access_instances.len()
+        // );
         access_instance
     }
 

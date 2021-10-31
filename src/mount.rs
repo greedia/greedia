@@ -334,6 +334,7 @@ impl GreediaFS {
                                 buffer: vec![0u8; 65536],
                             })
                             .await;
+                    println!("OPN {}, {}", fh, &self.file_handles.len().await);
 
                         let mut open_out = OpenOut::default();
                         open_out.fh(fh);
@@ -525,6 +526,12 @@ impl GreediaFS {
                 req.reply_error(libc::EIO)?;
                 return Ok(());
             }
+            
+            if *f_offset != offset {
+                println!("SEEK {}, {} to {}", fh, f_offset, offset);
+            }
+
+            // println!("READ {}, {} {}, size: {}", fh, *f_offset, offset, size);
 
             // FUSE requires us to give an exact size, so make sure the buffer is large
             // enough to accommodate the read. We only give a smaller size on EOF.
@@ -553,6 +560,7 @@ impl GreediaFS {
     async fn do_release(&self, req: &Request, op: op::Release<'_>) -> io::Result<()> {
         let fh = op.fh();
         self.file_handles.close(fh).await;
+        println!("REL {}, {}", fh, &self.file_handles.len().await);
 
         req.reply(())?;
 

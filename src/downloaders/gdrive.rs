@@ -559,7 +559,7 @@ impl DownloaderDrive for GDriveDrive {
         Box<dyn Stream<Item = Result<Bytes, DownloaderError>> + Unpin + Send + Sync>,
         DownloaderError,
     > {
-        for _ in 0..self.access_instances.len() {
+        for _ in 0..self.access_instances.len()*2 {
             let access_instance = self.access_instances.next();
             let res = open_request(
                 &file_id,

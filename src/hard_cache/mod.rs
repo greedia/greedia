@@ -252,7 +252,10 @@ impl HardCacher {
                 Err(ScErr::Cancel) => {
                     println!("Preferred cacher {} failed, trying next...", spec.name);
                 }
-                Err(ScErr::CacheHandlerError(e)) => return Err(e),
+                Err(ScErr::CacheHandlerError(e)) => {
+                    println!("Cache handler error {} {:?}", e, e);
+                    return Err(e);
+                }
             }
         }
 
@@ -482,6 +485,9 @@ impl HcCacherItem for HcDownloadCacherItem {
     }
 
     async fn cache_data(&mut self, offset: u64, size: u64) -> Result<(), CacheHandlerError> {
+        if self.item.size > offset {
+            return Ok(());
+        }
         if let Some(mut reader) = self.readers.remove(&offset) {
             reader.cache_exact(size as usize).await?;
 

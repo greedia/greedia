@@ -291,21 +291,22 @@ async fn perform_scan(
 /// Use HardCacher to hard cache data required for all files.
 async fn perform_caching(trees: &ScanTrees, drive_access: Arc<DriveAccess>) {
     // Start 10 threads for caching
-    let (send, recv) = flume::bounded(1);
     let mut thread_joiners = vec![];
-    for _ in 0..10 {
-        thread_joiners.push(tokio::spawn(caching_thread(
-            trees.clone(),
-            drive_access.clone(),
-            recv.clone(),
-        )));
-    }
+    {
+        let (send, recv) = flume::bounded(1);
+        for _ in 0..10 {
+            thread_joiners.push(tokio::spawn(caching_thread(
+                trees.clone(),
+                drive_access.clone(),
+                recv.clone(),
+            )));
+        }
 
-    for item in trees.inode_tree.iter() {
-        let (_, value) = item.unwrap();
-        send.send_async(value).await.unwrap();
+        for item in trees.inode_tree.iter() {
+            let (_, value) = item.unwrap();
+            send.send_async(value).await.unwrap();
+        }
     }
-
     join_all(thread_joiners).await;
 }
 

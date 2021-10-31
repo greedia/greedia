@@ -40,4 +40,9 @@ impl<T> FhMap<T> {
         let mut inner_w = self.0.write().await;
         inner_w.map.remove(&fh);
     }
+
+    pub async fn len(&self) -> usize {
+        let inner_r = self.0.read().await;
+        inner_r.map.len()
+    }
 }

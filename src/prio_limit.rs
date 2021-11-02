@@ -128,9 +128,7 @@ impl PrioLimit {
                 x = bg_recv.recv_async().fuse() => x,
             };
 
-            leaky_bucket
-                .acquire_one()
-                .await;
+            leaky_bucket.acquire_one().await;
 
             if let Ok(next_req) = next_req {
                 next_req

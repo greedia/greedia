@@ -7,7 +7,7 @@ use rkyv::{
 };
 use sled::{IVec, Iter};
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Db {
     db: sled::Db,
 }
@@ -27,7 +27,7 @@ impl Db {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Tree {
     pub tree: sled::Tree,
 }

@@ -12,15 +12,21 @@ use oauth2::{
 use reqwest::{self, Client};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::{borrow::Cow, path::Path, sync::{
+use std::{
+    borrow::Cow,
+    path::Path,
+    sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
-    }, time::Duration};
+    },
+    time::Duration,
+};
 use tokio::sync::{
     mpsc::{self, Sender},
     Mutex,
 };
 use tokio_stream::wrappers::ReceiverStream;
+use tracing::{info, instrument};
 
 #[derive(Clone, Debug)]
 struct ConnInfo {
@@ -54,6 +60,20 @@ impl AccessInstanceHandler {
         let index = self.index.fetch_add(1, Ordering::AcqRel) % self.access_instances.len() as u64;
 
         let access_instance = self.access_instances.get(index as usize).unwrap();
+        // println!(
+        //     "access_instance_handler next {}/{}",
+        //     index,
+        //     self.access_instances.len()
+        // );
+        access_instance
+    }
+
+    pub fn get_client(&self) -> &'_ AccessInstance {
+        let access_instance = self
+            .access_instances
+            .iter()
+            .find(|x| matches!(x, AccessInstance::Client(_)))
+            .unwrap();
         // println!(
         //     "access_instance_handler next {}/{}",
         //     index,
@@ -264,6 +284,14 @@ pub struct GDriveDrive {
     http_client: reqwest::Client,
     drive_id: String,
     access_instances: Arc<AccessInstanceHandler>,
+}
+
+impl std::fmt::Debug for GDriveDrive {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GDriveDrive")
+            .field("drive_id", &self.drive_id)
+            .finish()
+    }
 }
 
 pub struct GDriveStreamState {
@@ -554,7 +582,7 @@ impl DownloaderDrive for GDriveDrive {
         Box<dyn Stream<Item = Result<Bytes, DownloaderError>> + Unpin + Send + Sync>,
         DownloaderError,
     > {
-        for _ in 0..self.access_instances.len()*2 {
+        for _ in 0..self.access_instances.len() * 2 {
             let access_instance = self.access_instances.next();
             let res = open_request(
                 &file_id,
@@ -579,47 +607,45 @@ impl DownloaderDrive for GDriveDrive {
         Err(DownloaderError::QuotaExceeded)
     }
 
+    #[instrument]
     async fn move_file(
         &self,
         file_id: String,
         old_new_parent_ids: Option<(String, String)>,
         new_file_name: Option<String>,
     ) -> Result<(), DownloaderError> {
-        for _ in 0..self.access_instances.len() {
-            let access_instance = self.access_instances.next();
-            let old_new_parent_ids = old_new_parent_ids.as_ref().map(|(o, n)| (o.as_str(), n.as_str()));
-            let res = move_request(
-                &file_id,
-                old_new_parent_ids,
-                new_file_name.as_deref(),
-                &self.http_client,
-                access_instance,
-            )
-            .await;
-            match res {
-                Ok(_) => {
-                    return Ok(());
-                }
-                Err(e) => return Err(e),
+        // Moving only works on main account, not service accounts
+        let access_instance = self.access_instances.get_client();
+        let old_new_parent_ids = old_new_parent_ids
+            .as_ref()
+            .map(|(o, n)| (o.as_str(), n.as_str()));
+        let res = move_request(
+            &self.drive_id,
+            &file_id,
+            old_new_parent_ids,
+            new_file_name.as_deref(),
+            &self.http_client,
+            access_instance,
+        )
+        .await;
+        match res {
+            Ok(_) => {
+                return Ok(());
             }
+            Err(e) => return Err(e),
         }
-
-        Err(DownloaderError::Retry)
     }
 
     async fn delete_file(&self, file_id: String) -> Result<(), DownloaderError> {
-        for _ in 0..self.access_instances.len() {
-            let access_instance = self.access_instances.next();
-            let res = delete_request(&file_id, &self.http_client, access_instance).await;
-            match res {
-                Ok(_) => {
-                    return Ok(());
-                }
-                Err(e) => return Err(e),
+        // Deleting only works on main account, not service accounts
+        let access_instance = self.access_instances.get_client();
+        let res = delete_request(&file_id, &self.http_client, access_instance).await;
+        match res {
+            Ok(_) => {
+                return Ok(());
             }
+            Err(e) => return Err(e),
         }
-
-        Err(DownloaderError::Retry)
     }
 }
 
@@ -767,7 +793,9 @@ async fn delete_request(
     }
 }
 
+#[instrument(skip(http_client, access_instance))]
 async fn move_request(
+    drive_id: &str,
     file_id: &str,
     old_new_parent_ids: Option<(&str, &str)>,
     new_file_name: Option<&str>,
@@ -779,7 +807,11 @@ async fn move_request(
     let mut retry = false;
     let mut last_error = None;
 
-    let mut query = vec![];
+    let mut query = vec![
+        ("supportsAllDrives", Cow::Borrowed("true")),
+        ("driveId", Cow::Borrowed(drive_id)),
+        ("alt", Cow::Borrowed("json")),
+    ];
 
     if let Some((old_parent_id, new_parent_id)) = old_new_parent_ids {
         query.push(("removeParents", Cow::Borrowed(old_parent_id)));
@@ -793,6 +825,8 @@ async fn move_request(
         vec![]
     };
 
+    info!("url: {}, body: {}", url, String::from_utf8_lossy(&body));
+
     for _ in 0..10 {
         access_instance.rate_limit(false, retry).await;
         let access_token = access_instance.access_token().await;
@@ -800,17 +834,25 @@ async fn move_request(
         let body = body.clone();
         let res = http_client
             .patch(&url)
+            .header("Content-Type", "application/json")
             .bearer_auth(access_token.secret())
             .query(&query)
             .body(body)
-            .send()
-            .await;
+            .build()
+            .unwrap();
+
+        info!(?res);
+
+        let res = http_client.execute(res).await;
 
         match res {
             Ok(r) => {
+                info!(?r);
                 match r.status().as_u16() {
                     // Everything's good
                     200 | 206 => {
+                        let d = r.text().await.unwrap();
+                        info!(?d);
                         return Ok(());
                     }
                     // Bad access token, refresh it and retry request
@@ -830,6 +872,10 @@ async fn move_request(
                             }
                         }
                         last_error = Some(DownloaderError::Forbidden);
+                    }
+                    404 => {
+                        info!("404, r: {:?}", r);
+                        return Err(DownloaderError::Forbidden);
                     }
                     // Rate limit or server error, retry request
                     _ => {

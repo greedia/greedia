@@ -30,7 +30,7 @@ const ITEM_MASK: u64 = DRIVE_OFFSET - 1;
 
 pub async fn mount_thread(drives: Vec<Arc<DriveAccess>>, mountpoint: PathBuf) {
     let mut config = KernelConfig::default();
-    config.mount_option("ro");
+    // config.mount_option("ro");
     config.mount_option("allow_other");
 
     let session = AsyncSession::mount(mountpoint, config)
@@ -304,13 +304,30 @@ impl GreediaFS {
     ///
     /// If new_parent differs from parent, move the file to that new parent.
     /// If new_name differs from name, rename the file.
-    async fn rename_drive(&self, drive: u16, parent: u64, name: &OsStr, new_parent: u64, new_name: &OsStr) -> Option<()> {
+    async fn rename_drive(
+        &self,
+        drive: u16,
+        parent: u64,
+        name: &OsStr,
+        new_parent: u64,
+        new_name: &OsStr,
+    ) -> Option<()> {
         let drive_access = self.drives.get(drive as usize)?;
         let file_name = name.to_str()?;
-        let new_parent = if new_parent == parent { None } else { Some(new_parent) };
-        let new_name = if new_name == name { None } else { Some(new_name.to_str()? )};
+        let new_parent = if new_parent == parent {
+            None
+        } else {
+            Some(new_parent)
+        };
+        let new_name = if new_name == name {
+            None
+        } else {
+            Some(new_name.to_str()?)
+        };
 
-        drive_access.rename_item(parent, file_name, new_parent, new_name).await
+        drive_access
+            .rename_item(parent, file_name, new_parent, new_name)
+            .await
     }
 
     /// Open a file within a drive from an `open()` call.
@@ -334,7 +351,7 @@ impl GreediaFS {
                                 buffer: vec![0u8; 65536],
                             })
                             .await;
-                    println!("OPN {}, {}", fh, &self.file_handles.len().await);
+                        println!("OPN {}, {}", fh, &self.file_handles.len().await);
 
                         let mut open_out = OpenOut::default();
                         open_out.fh(fh);
@@ -526,7 +543,7 @@ impl GreediaFS {
                 req.reply_error(libc::EIO)?;
                 return Ok(());
             }
-            
+
             if *f_offset != offset {
                 println!("SEEK {}, {} to {}", fh, f_offset, offset);
             }
@@ -599,10 +616,20 @@ impl GreediaFS {
         let new_name = op.newname();
         // TODO: For now, the flags are ignored. They should probably be handled at some point.
 
-        let rename = match self.map_inode(parent) {
-            Inode::Drive(drive, local_parent_inode) => {
-                self.rename_drive(drive, local_parent_inode, name, new_parent, new_name).await.is_some()
-            }
+        let rename = match (self.map_inode(parent), self.map_inode(new_parent)) {
+            (
+                Inode::Drive(drive, local_parent_inode),
+                Inode::Drive(new_drive, local_new_parent_inode),
+            ) if drive == new_drive => self
+                .rename_drive(
+                    drive,
+                    local_parent_inode,
+                    name,
+                    local_new_parent_inode,
+                    new_name,
+                )
+                .await
+                .is_some(),
             _ => false,
         };
 

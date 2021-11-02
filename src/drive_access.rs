@@ -12,6 +12,7 @@ use rclone_crypt::decrypter::{self, Decrypter};
 
 use rkyv::de::deserializers::AllocDeserializer;
 use rkyv::Deserialize;
+use tracing::{info, instrument};
 
 use crate::{
     cache_handlers::{
@@ -78,6 +79,14 @@ pub struct DriveAccess {
     lookup_tree: Tree,
     /// Optimization, in order to not traverse the root path repeatedly.
     root_inode: AtomicU64,
+}
+
+impl std::fmt::Debug for DriveAccess {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DriveAccess")
+            .field("name", &self.name)
+            .finish()
+    }
 }
 
 impl DriveAccess {
@@ -277,7 +286,14 @@ impl DriveAccess {
     }
 
     /// Rename and/or move a file.
-    pub async fn rename_item(&self, parent: u64, file_name: &str, new_parent: Option<u64>, new_name: Option<&str>) -> Option<()> {
+    #[instrument]
+    pub async fn rename_item(
+        &self,
+        parent: u64,
+        file_name: &str,
+        new_parent: Option<u64>,
+        new_name: Option<&str>,
+    ) -> Option<()> {
         // No action is being performed, so just short-circuit
         if new_parent.is_none() && new_name.is_none() {
             return Some(());
@@ -295,7 +311,11 @@ impl DriveAccess {
             self.crypts
                 .iter()
                 .find_map(|cc| {
-                    cc.cipher.encrypt_segment(file_name).ok().map(Cow::Owned).map(|file_name| (Some(cc.clone()), file_name))
+                    cc.cipher
+                        .encrypt_segment(file_name)
+                        .ok()
+                        .map(Cow::Owned)
+                        .map(|file_name| (Some(cc.clone()), file_name))
                 })
                 .unwrap_or((None, Cow::Borrowed(file_name)))
         } else {
@@ -318,7 +338,7 @@ impl DriveAccess {
         let new_parent_file_id = if let Some(new_parent) = new_parent {
             let new_parent_item_bytes = self.inode_tree.get(new_parent.to_le_bytes())?;
             let new_parent_item = get_rkyv::<DriveItem>(&new_parent_item_bytes);
-            Some(parent_item.access_id.to_string())
+            Some(new_parent_item.access_id.to_string())
         } else {
             None
         };
@@ -337,11 +357,11 @@ impl DriveAccess {
             None
         };
 
-        let new_file_name = None;
-        
         // Perform the move on the downloader
-        self.cache_handler.rename_file(item_file_id, old_new_parent_ids, new_file_name).await.ok()?;
-
+        self.cache_handler
+            .rename_file(item_file_id, old_new_parent_ids, new_file_name)
+            .await
+            .ok()?;
 
         // TODO: combine these two together
         // Move parents if new_parent set
@@ -359,7 +379,8 @@ impl DriveAccess {
             // - add new lookup key to parent
         }
 
-        todo!()
+        // todo!()
+        None
     }
 
     /// Get the attributes for a given inode.

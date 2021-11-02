@@ -72,6 +72,7 @@ enum Greedia {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    tracing_subscriber::fmt::init();
     let opt = Greedia::from_args();
 
     match opt {

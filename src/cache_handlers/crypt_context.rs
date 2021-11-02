@@ -2,7 +2,7 @@ use rclone_crypt::{cipher::Cipher, decrypter, obscure};
 
 use super::CacheHandlerError;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct CryptContext {
     pub cipher: Cipher,
 }

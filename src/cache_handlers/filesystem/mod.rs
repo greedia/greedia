@@ -36,6 +36,7 @@ use tokio::{
 
 mod open_file;
 use open_file::OpenFile;
+use tracing::instrument;
 
 pub mod lru;
 
@@ -48,6 +49,14 @@ pub struct FilesystemCacheHandler {
     soft_cache_root: PathBuf,
     open_files: Mutex<HashMap<String, Weak<Mutex<OpenFile>>>>,
     downloader_drive: Arc<dyn DownloaderDrive>,
+}
+
+impl std::fmt::Debug for FilesystemCacheHandler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FilesystemCacheHandler")
+            .field("drive_id", &self.drive_id)
+            .finish()
+    }
 }
 
 #[derive(Debug)]
@@ -230,13 +239,16 @@ impl CacheDriveHandler for FilesystemCacheHandler {
         Ok(())
     }
 
+    #[instrument]
     async fn rename_file(
         &self,
         file_id: String,
         old_new_parent_ids: Option<(String, String)>,
         new_file_name: Option<String>,
     ) -> Result<(), CacheHandlerError> {
-        self.downloader_drive.move_file(file_id, old_new_parent_ids, new_file_name).await?;
+        self.downloader_drive
+            .move_file(file_id, old_new_parent_ids, new_file_name)
+            .await?;
 
         Ok(())
     }

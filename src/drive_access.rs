@@ -12,14 +12,15 @@ use rclone_crypt::decrypter::{self, Decrypter};
 
 use rkyv::de::deserializers::AllocDeserializer;
 use rkyv::Deserialize;
-use tracing::{info, instrument};
+use tracing::instrument;
 
 use crate::{
     cache_handlers::{
         crypt_context::CryptContext, crypt_passthrough::CryptPassthrough, CacheHandlerError,
     },
-    db::get_rkyv,
-    types::DataIdentifier,
+    db::{get_rkyv, serialize_rkyv},
+    scanner::merge_parent,
+    types::{DataIdentifier, DirItem, DriveItemData},
 };
 use crate::{
     cache_handlers::{CacheDriveHandler, CacheFileHandler},
@@ -294,6 +295,7 @@ impl DriveAccess {
         new_parent: Option<u64>,
         new_name: Option<&str>,
     ) -> Option<()> {
+        println!("rename_item ({} {}) -> ({:?} {:?})", parent, file_name, new_parent, new_name);
         // No action is being performed, so just short-circuit
         if new_parent.is_none() && new_name.is_none() {
             return Some(());
@@ -359,28 +361,123 @@ impl DriveAccess {
 
         // Perform the move on the downloader
         self.cache_handler
-            .rename_file(item_file_id, old_new_parent_ids, new_file_name)
+            .rename_file(
+                item_file_id.clone(),
+                old_new_parent_ids,
+                new_file_name.clone(),
+            )
             .await
             .ok()?;
 
-        // TODO: combine these two together
         // Move parents if new_parent set
+        // Add to new parent and then remove from old parent.
+        // It could be done properly with transactions, but this is good enough for now.
+        // Better to have two files than a point in time with zero files, so add first.
         if let Some(new_parent) = new_parent {
-            // TODO:
-            // - look up raccess key to remove item from old parent
-            // - add new lookup key to new parent
+            let new_file_name = new_file_name.as_deref().unwrap_or(&file_name);
+
+            // Add to new parent first
+            let new_parent_item_bytes = self.inode_tree.get(new_parent.to_le_bytes())?;
+            let new_parent_item = get_rkyv::<DriveItem>(&new_parent_item_bytes);
+            let mut new_items = vec![DirItem {
+                name: new_file_name.to_string(),
+                access_id: item_file_id.clone(),
+                inode,
+                is_dir: matches!(drive_item.data, ArchivedDriveItemData::Dir { items: _ }),
+            }];
+            let parent_modified_time = merge_parent(new_parent_item, &mut new_items);
+
+            // Create new parent and add all files to it
+            let parent_drive_item = DriveItem {
+                access_id: parent.to_string(),
+                modified_time: parent_modified_time,
+                data: DriveItemData::Dir { items: new_items },
+            };
+
+            let parent_drive_item_bytes = serialize_rkyv(&parent_drive_item);
+            self.inode_tree.insert(
+                &parent_inode.to_le_bytes(),
+                parent_drive_item_bytes.as_slice(),
+            );
+
+            // Add the lookup entry for the new directory item
+            let lookup_key = make_lookup_key(new_parent, new_file_name);
+            self.lookup_tree
+                .insert(lookup_key.as_slice(), &inode.to_le_bytes());
+
+            // Delete the old item, if found
+            if let Some(parent_drive_item_bytes) =
+                self.inode_tree.get(parent.to_le_bytes())
+            {
+                let parent_drive_item = get_rkyv::<DriveItem>(&parent_drive_item_bytes);
+                let mut new_items = vec![];
+                if let ArchivedDriveItemData::Dir { items } = &parent_drive_item.data {
+                    for item in items.iter() {
+                        if item.name != file_name.as_ref() {
+                            new_items
+                                .push(item.deserialize(&mut AllocDeserializer).unwrap())
+                        }
+                    }
+                }
+
+                let new_parent_drive_item = DriveItem {
+                    access_id: parent_drive_item.access_id.to_string(),
+                    modified_time: parent_drive_item.modified_time,
+                    data: DriveItemData::Dir { items: new_items },
+                };
+
+                let new_parent_drive_item_bytes = serialize_rkyv(&new_parent_drive_item);
+                self.inode_tree.insert(
+                    parent.to_le_bytes(),
+                    new_parent_drive_item_bytes.as_slice(),
+                );
+            }
+        } else if let Some(new_file_name) = new_file_name {
+            // Rename file in dir item
+            if let Some(parent_drive_item_bytes) =
+                self.inode_tree.get(parent.to_le_bytes())
+            {
+                let parent_drive_item = get_rkyv::<DriveItem>(&parent_drive_item_bytes);
+                dbg!(&new_file_name, &file_name, &item_file_id, inode);
+
+                let mut new_items = vec![DirItem {
+                    name: new_file_name.to_string(),
+                    access_id: item_file_id.clone(),
+                    inode,
+                    is_dir: matches!(drive_item.data, ArchivedDriveItemData::Dir { items: _ }),
+                }];
+                if let ArchivedDriveItemData::Dir { items } = &parent_drive_item.data {
+                    for item in items.iter() {
+                        if item.name != file_name.as_ref() {
+                            new_items
+                                .push(item.deserialize(&mut AllocDeserializer).unwrap())
+                        }
+                    }
+                }
+
+                let new_parent_drive_item = DriveItem {
+                    access_id: parent_drive_item.access_id.to_string(),
+                    modified_time: parent_drive_item.modified_time,
+                    data: DriveItemData::Dir { items: new_items },
+                };
+
+                let new_parent_drive_item_bytes = serialize_rkyv(&new_parent_drive_item);
+                self.inode_tree.insert(
+                    parent.to_le_bytes(),
+                    new_parent_drive_item_bytes.as_slice(),
+                );
+            }
+
+            // Add new lookup key, remove old lookup key
+            let new_lookup_key = make_lookup_key(parent_inode, &new_file_name);
+            self.lookup_tree
+                .insert(new_lookup_key.as_slice(), &inode.to_le_bytes());
+
+            let old_lookup_key = make_lookup_key(parent_inode, &file_name);
+            self.lookup_tree.remove(old_lookup_key);
         }
 
-        // Rename if new_name set
-        if let Some(new_name) = new_name {
-            // TODO:
-            // - check if raccess key is needed if key is within same parent
-            // - delete lookup key from parent
-            // - add new lookup key to parent
-        }
-
-        // todo!()
-        None
+        Some(())
     }
 
     /// Get the attributes for a given inode.

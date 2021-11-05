@@ -528,7 +528,8 @@ fn handle_update_parent(trees: &ScanTrees, parent: &str, modified_time: i64) {
 /// Merge an existing DriveItem parent into a list of new items.
 ///
 /// Returns the modified time of the parent.
-fn merge_parent(existing_parent: &ArchivedDriveItem, items: &mut Vec<DirItem>) -> i64 {
+// TODO: move this outside of scanner
+pub fn merge_parent(existing_parent: &ArchivedDriveItem, items: &mut Vec<DirItem>) -> i64 {
     let new_item_set = items.clone();
     let new_item_set: HashSet<&str> = new_item_set.iter().map(|x| x.access_id.as_str()).collect();
 

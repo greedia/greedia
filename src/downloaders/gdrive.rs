@@ -26,7 +26,7 @@ use tokio::sync::{
     Mutex,
 };
 use tokio_stream::wrappers::ReceiverStream;
-use tracing::{info, instrument};
+use tracing::instrument;
 
 #[derive(Clone, Debug)]
 struct ConnInfo {
@@ -60,11 +60,6 @@ impl AccessInstanceHandler {
         let index = self.index.fetch_add(1, Ordering::AcqRel) % self.access_instances.len() as u64;
 
         let access_instance = self.access_instances.get(index as usize).unwrap();
-        // println!(
-        //     "access_instance_handler next {}/{}",
-        //     index,
-        //     self.access_instances.len()
-        // );
         access_instance
     }
 
@@ -74,11 +69,6 @@ impl AccessInstanceHandler {
             .iter()
             .find(|x| matches!(x, AccessInstance::Client(_)))
             .unwrap();
-        // println!(
-        //     "access_instance_handler next {}/{}",
-        //     index,
-        //     self.access_instances.len()
-        // );
         access_instance
     }
 
@@ -825,8 +815,6 @@ async fn move_request(
         vec![]
     };
 
-    info!("url: {}, body: {}", url, String::from_utf8_lossy(&body));
-
     for _ in 0..10 {
         access_instance.rate_limit(false, retry).await;
         let access_token = access_instance.access_token().await;
@@ -841,18 +829,13 @@ async fn move_request(
             .build()
             .unwrap();
 
-        info!(?res);
-
         let res = http_client.execute(res).await;
 
         match res {
             Ok(r) => {
-                info!(?r);
                 match r.status().as_u16() {
                     // Everything's good
                     200 | 206 => {
-                        let d = r.text().await.unwrap();
-                        info!(?d);
                         return Ok(());
                     }
                     // Bad access token, refresh it and retry request
@@ -874,7 +857,6 @@ async fn move_request(
                         last_error = Some(DownloaderError::Forbidden);
                     }
                     404 => {
-                        info!("404, r: {:?}", r);
                         return Err(DownloaderError::Forbidden);
                     }
                     // Rate limit or server error, retry request

@@ -29,6 +29,8 @@ pub enum DownloaderError {
     Unimplemented,
     #[error("Unknown downloader retry error")]
     Retry,
+    #[error("File was not found")]
+    NotFound,
 }
 
 pub trait DownloaderClient {

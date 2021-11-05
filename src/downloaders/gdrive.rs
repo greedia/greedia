@@ -610,7 +610,6 @@ impl DownloaderDrive for GDriveDrive {
             .as_ref()
             .map(|(o, n)| (o.as_str(), n.as_str()));
         let res = move_request(
-            &self.drive_id,
             &file_id,
             old_new_parent_ids,
             new_file_name.as_deref(),
@@ -629,6 +628,7 @@ impl DownloaderDrive for GDriveDrive {
     async fn delete_file(&self, file_id: String) -> Result<(), DownloaderError> {
         // Deleting only works on main account, not service accounts
         let access_instance = self.access_instances.get_client();
+        println!("delete file_id: {}", file_id);
         let res = delete_request(&file_id, &self.http_client, access_instance).await;
         match res {
             Ok(_) => {
@@ -721,9 +721,15 @@ async fn delete_request(
     access_instance: &AccessInstance,
 ) -> Result<(), DownloaderError> {
     let url = format!("https://www.googleapis.com/drive/v3/files/{}", file_id);
+    println!("url: {}", url);
 
     let mut retry = false;
     let mut last_error = None;
+
+    let query = vec![
+        ("supportsAllDrives", Cow::Borrowed("true")),
+        ("alt", Cow::Borrowed("json")),
+    ];
 
     for _ in 0..10 {
         access_instance.rate_limit(false, retry).await;
@@ -732,6 +738,7 @@ async fn delete_request(
         let res = http_client
             .delete(&url)
             .bearer_auth(access_token.secret())
+            .query(&query)
             .send()
             .await;
 
@@ -760,10 +767,14 @@ async fn delete_request(
                         }
                         last_error = Some(DownloaderError::Forbidden);
                     }
+                    404 => {
+                        return Err(DownloaderError::NotFound);
+                    }
                     // Rate limit or server error, retry request
                     _ => {
                         last_error = Some(DownloaderError::Server(r.status().as_str().to_string()));
                         println!("Other: {}", r.status());
+                        println!("Data: {}", r.text().await.unwrap());
                     }
                 }
             }
@@ -785,7 +796,6 @@ async fn delete_request(
 
 #[instrument(skip(http_client, access_instance))]
 async fn move_request(
-    drive_id: &str,
     file_id: &str,
     old_new_parent_ids: Option<(&str, &str)>,
     new_file_name: Option<&str>,
@@ -799,7 +809,6 @@ async fn move_request(
 
     let mut query = vec![
         ("supportsAllDrives", Cow::Borrowed("true")),
-        ("driveId", Cow::Borrowed(drive_id)),
         ("alt", Cow::Borrowed("json")),
     ];
 

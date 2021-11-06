@@ -1,9 +1,4 @@
-use crate::{
-    cache_handlers::{CacheFileHandler, CacheHandlerError},
-    drive_access::{DriveAccess, TypeResult},
-    fh_map::FhMap,
-    types::ArchivedDriveItemData,
-};
+use crate::{cache_handlers::{CacheFileHandler, CacheHandlerError}, drive_access::{DriveAccess, TypeResult}, fh_map::FhMap, tweaks, types::ArchivedDriveItemData};
 use anyhow::Result;
 use polyfuse::{
     op,
@@ -30,7 +25,9 @@ const ITEM_MASK: u64 = DRIVE_OFFSET - 1;
 
 pub async fn mount_thread(drives: Vec<Arc<DriveAccess>>, mountpoint: PathBuf) {
     let mut config = KernelConfig::default();
-    // config.mount_option("ro");
+    if tweaks().mount_read_only {
+        config.mount_option("ro");
+    }
     config.mount_option("allow_other");
 
     let session = AsyncSession::mount(mountpoint, config)
@@ -84,6 +81,7 @@ struct GreediaFS {
     drives: Vec<Arc<DriveAccess>>,
     start_time: Duration,
     file_handles: FhMap<FileHandle>,
+    kernel_dir_caching: bool,
 }
 
 impl GreediaFS {
@@ -97,6 +95,7 @@ impl GreediaFS {
             drives,
             start_time,
             file_handles,
+            kernel_dir_caching: tweaks().enable_kernel_dir_caching,
         }
     }
 
@@ -238,8 +237,10 @@ impl GreediaFS {
 
         let mut entry_out = EntryOut::default();
         entry_out.ino(self.rev_inode(Inode::Drive(drive_num as u16, 0)));
-        entry_out.ttl_attr(TTL_LONG);
-        entry_out.ttl_entry(TTL_LONG);
+        if self.kernel_dir_caching {
+            entry_out.ttl_attr(TTL_LONG);
+            entry_out.ttl_entry(TTL_LONG);
+        }
 
         let file_attr = entry_out.attr();
         file_attr.mode(libc::S_IFDIR as u32 | 0o555);
@@ -281,8 +282,10 @@ impl GreediaFS {
                 file_attr.ino(global_inode);
 
                 reply_entry.ino(global_inode);
-                reply_entry.ttl_attr(TTL_LONG);
-                reply_entry.ttl_entry(TTL_LONG);
+                if self.kernel_dir_caching {
+                    reply_entry.ttl_attr(TTL_LONG);
+                    reply_entry.ttl_entry(TTL_LONG);
+                }
                 reply_entry
             })?;
 
@@ -424,7 +427,9 @@ impl GreediaFS {
 
         match ttl {
             Some(ttl) => {
-                attr_out.ttl(ttl);
+                if self.kernel_dir_caching {
+                    attr_out.ttl(ttl);
+                }
                 req.reply(attr_out)?
             }
             None => req.reply_error(libc::ENOENT)?,

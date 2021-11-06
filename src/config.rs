@@ -2,14 +2,29 @@ use std::{cmp::min, collections::HashMap, path::PathBuf};
 
 use serde::Deserialize;
 
-/// Tweaks are simple or temporary values used to modify the code.
-/// Every value must have a default, but they can be useful for testing.
-#[derive(Clone, Debug, Default, Deserialize)]
+/// Tweaks are development or testing values used to modify the code.
+/// Every value must have a default.
+#[derive(Clone, Debug, Deserialize)]
 pub struct Tweaks {
     /// Enable directory caching in the kernel. File contents will
     /// be cached, but directory listings and file metadata such
     /// as filenames will not be.
-    pub enable_kernel_dir_caching: Option<bool>,
+    #[serde(default)]
+    pub enable_kernel_dir_caching: bool,
+
+    /// Mount the FUSE endpoint as read-only. This will eventually
+    /// be a regular config option, but for now, use a tweak.
+    #[serde(default)]
+    pub mount_read_only: bool,
+}
+
+impl Default for Tweaks {
+    fn default() -> Self {
+        Self {
+            enable_kernel_dir_caching: false,
+            mount_read_only: true,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

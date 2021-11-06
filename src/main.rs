@@ -39,6 +39,10 @@ use config::{Config, ConfigGoogleDrive, ConfigTimecodeDrive, Tweaks, validate_co
 
 pub static TWEAKS: OnceCell<Tweaks> = OnceCell::new();
 
+pub fn tweaks() -> &'static Tweaks {
+    TWEAKS.get().expect("TWEAKS not initialized")
+}
+
 #[derive(Debug, StructOpt)]
 #[structopt(name = "greedia", about = "Greedily cache media and serve it up fast.")]
 enum Greedia {

@@ -1,8 +1,3 @@
-use crate::{downloaders::Change, drive_access::DriveAccess, hard_cache::HardCacheMetadata, tweaks, types::{
-        make_lookup_key, ArchivedDriveItem, ArchivedDriveItemData, DirItem, DriveItem,
-        DriveItemData, ReverseAccess,
-    }};
-use crate::{hard_cache::HardCacher, types::TreeKeys};
 use std::{
     collections::{HashMap, HashSet},
     convert::TryInto,
@@ -14,15 +9,22 @@ use std::{
 
 use chrono::{Duration, TimeZone, Utc};
 use flume::Receiver;
-use futures::future::join_all;
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::{future::join_all, Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use rkyv::{de::deserializers::AllocDeserializer, Deserialize};
 use sled::IVec;
 
 use crate::{
     cache_handlers::{DownloaderError, Page, PageItem},
-    db::{get_rkyv, serialize_rkyv, Db, Tree},
+    db::{get_rkyv, serialize_rkyv, Db, InnerTree},
+    downloaders::Change,
+    drive_access::DriveAccess,
+    hard_cache::{HardCacheMetadata, HardCacher},
+    tweaks,
+    types::{
+        make_lookup_key, ArchivedDriveItem, ArchivedDriveItemData, DirItem, DriveItem,
+        DriveItemData, ReverseAccess, TreeKeys,
+    },
 };
 
 /// Convenience struct that holds pointers to database trees.
@@ -32,17 +34,17 @@ use crate::{
 struct ScanTrees {
     drive_id: String,
     /// Tree that contains general scan metadata for this drive.
-    scan_tree: Tree,
+    scan_tree: InnerTree,
     /// Tree that maps access_ids to inodes.
-    access_tree: Tree,
+    access_tree: InnerTree,
     /// Tree that maps inodes to DriveItems.
-    inode_tree: Tree,
+    inode_tree: InnerTree,
     /// Tree that maps a dir inode + filename to an inode.
-    lookup_tree: Tree,
+    lookup_tree: InnerTree,
     /// Tree that maps an access_id to a parent inode containing the item.
-    raccess_tree: Tree,
+    raccess_tree: InnerTree,
     /// Tree that maps data_ids to HardCacheMetadatas.
-    hc_meta_tree: Tree,
+    hc_meta_tree: InnerTree,
     /// Atomic value that contains the next inode.
     next_inode: Arc<AtomicU64>,
 }
@@ -555,7 +557,7 @@ pub fn merge_parent(existing_parent: &ArchivedDriveItem, items: &mut Vec<DirItem
 /// Get the size of a drive.
 ///
 /// Returns number of files and total size in bytes.
-async fn get_drive_size(inode_tree: &Tree) -> (u64, u64) {
+async fn get_drive_size(inode_tree: &InnerTree) -> (u64, u64) {
     // Since this could take a while, throw this into a different thread
     let inode_tree = inode_tree.clone();
     tokio::task::spawn_blocking(|| inner_get_drive_size(inode_tree))
@@ -564,7 +566,7 @@ async fn get_drive_size(inode_tree: &Tree) -> (u64, u64) {
 }
 
 /// Get the number of items in, and total size of, a drive.
-fn inner_get_drive_size(inode_tree: Tree) -> (u64, u64) {
+fn inner_get_drive_size(inode_tree: InnerTree) -> (u64, u64) {
     let mut total_count = 0;
     let mut total_size = 0;
     for item in inode_tree.iter() {

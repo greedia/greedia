@@ -1,5 +1,6 @@
-use rustc_hash::FxHashMap;
 use std::sync::Arc;
+
+use rustc_hash::FxHashMap;
 use tokio::sync::{Mutex, RwLock};
 
 struct FhMapInner<T> {

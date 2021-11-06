@@ -11,13 +11,15 @@
 
 #![allow(dead_code)]
 
+use std::{collections::BTreeMap, time::Duration};
+
+use chrono::{DateTime, Utc};
+use tokio::io::{AsyncRead, AsyncSeek, AsyncSeekExt};
+
 use super::{
     ebml::{self, Element, ElementType, MResult, MatroskaError},
     ids,
 };
-use chrono::{DateTime, Utc};
-use std::{collections::BTreeMap, time::Duration};
-use tokio::io::{AsyncRead, AsyncSeek, AsyncSeekExt};
 
 /// A Matroska file
 #[derive(Debug)]

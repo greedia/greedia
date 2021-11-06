@@ -1,9 +1,9 @@
 use std::{
     collections::{HashMap, HashSet},
-    path::PathBuf,
+    fs,
+    path::{Path, PathBuf},
     sync::Arc,
 };
-use std::{fs, path::Path};
 
 use anyhow::{bail, Result};
 use cache_handlers::{
@@ -14,13 +14,12 @@ use db::Db;
 use downloaders::{gdrive::GDriveClient, timecode::TimecodeDrive, DownloaderClient};
 use drive_access::DriveAccess;
 use futures::future::join_all;
+#[cfg(feature = "sctest")]
+use hard_cache::HardCacher;
 use mount::mount_thread;
 use once_cell::sync::OnceCell;
 use scanner::scan_thread;
 use structopt::StructOpt;
-
-#[cfg(feature = "sctest")]
-use hard_cache::HardCacher;
 
 // New stuff
 mod cache_handlers;
@@ -35,7 +34,7 @@ mod prio_limit;
 mod scanner;
 mod types;
 
-use config::{Config, ConfigGoogleDrive, ConfigTimecodeDrive, Tweaks, validate_config};
+use config::{validate_config, Config, ConfigGoogleDrive, ConfigTimecodeDrive, Tweaks};
 
 pub static TWEAKS: OnceCell<Tweaks> = OnceCell::new();
 
@@ -102,7 +101,9 @@ async fn run(config_path: &Path) -> Result<()> {
     let cfg: Config = toml::from_slice(&config_data)?;
 
     let tweaks = cfg.tweaks.as_ref().cloned().unwrap_or_default();
-    TWEAKS.set(tweaks).expect("TWEAKS should not be set at this point");
+    TWEAKS
+        .set(tweaks)
+        .expect("TWEAKS should not be set at this point");
 
     if !validate_config(&cfg) {
         bail!("Config didn't validate.");

@@ -1,11 +1,12 @@
 use std::convert::TryInto;
 
+use async_trait::async_trait;
+
 use super::{
     smart_cacher::{FileSpec, ScErr::*, ScOk::*, ScResult, SmartCacher, SmartCacherSpec},
     HardCacheDownloader,
 };
 use crate::config::SmartCacherConfig;
-use async_trait::async_trait;
 
 // Related resources:
 // - https://www.codeproject.com/Articles/8295/MPEG-Audio-Frame-Header

@@ -2,11 +2,11 @@
 // Piggybacks off of leaky_bucket and flume.
 // This file is ripe for code deduplication.
 
-use flume::{bounded, Receiver, Sender};
-use futures::select_biased;
-use futures::FutureExt;
-use leaky_bucket::RateLimiter;
 use std::time::Duration;
+
+use flume::{bounded, Receiver, Sender};
+use futures::{select_biased, FutureExt};
+use leaky_bucket::RateLimiter;
 
 #[derive(Debug)]
 pub struct PrioLimit {

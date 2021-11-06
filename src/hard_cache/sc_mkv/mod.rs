@@ -11,19 +11,18 @@
 use core::time::Duration;
 use std::collections::BTreeMap;
 
-use crate::config::SmartCacherConfig;
-
-use self::{ebml::MResult, mkv::Seek};
-
-use super::{
-    smart_cacher::{FileSpec, ScErr::*, ScOk::*, ScResult, SmartCacher, SmartCacherSpec},
-    HardCacheDownloader,
-};
 use async_trait::async_trait;
 use ebml::{read_uint, Element, ElementType};
 use ids::EBML_DOC_TYPE;
 use mkv::Info;
 use tokio::io::AsyncRead;
+
+use self::{ebml::MResult, mkv::Seek};
+use super::{
+    smart_cacher::{FileSpec, ScErr::*, ScOk::*, ScResult, SmartCacher, SmartCacherSpec},
+    HardCacheDownloader,
+};
+use crate::config::SmartCacherConfig;
 
 mod ebml;
 mod ids;

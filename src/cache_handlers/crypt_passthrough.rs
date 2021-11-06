@@ -1,8 +1,10 @@
-use super::{crypt_context::CryptContext, CacheFileHandler, CacheHandlerError};
+use std::cmp::min;
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use rclone_crypt::decrypter::{self, Decrypter};
-use std::cmp::min;
+
+use super::{crypt_context::CryptContext, CacheFileHandler, CacheHandlerError};
 
 pub struct CryptPassthrough {
     decrypter: Decrypter,

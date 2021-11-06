@@ -5,24 +5,14 @@ use std::{
     collections::HashMap,
     io::SeekFrom,
     mem,
-    path::Path,
-    path::PathBuf,
-    sync::Arc,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Weak,
+        Arc, Weak,
     },
     time::Duration,
 };
 
-use self::{
-    lru::Lru,
-    open_file::{Cache, DownloadHandle, DownloadStatus, Receiver},
-};
-
-use super::{CacheDriveHandler, CacheFileHandler, CacheHandlerError, Page};
-use crate::downloaders::{DownloaderDrive, DownloaderError};
-use crate::types::DataIdentifier;
 use async_trait::async_trait;
 use byte_ranger::GetRange;
 use bytes::{Bytes, BytesMut};
@@ -32,6 +22,16 @@ use tokio::{
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
     sync::Mutex,
     time::sleep,
+};
+
+use self::{
+    lru::Lru,
+    open_file::{Cache, DownloadHandle, DownloadStatus, Receiver},
+};
+use super::{CacheDriveHandler, CacheFileHandler, CacheHandlerError, Page};
+use crate::{
+    downloaders::{DownloaderDrive, DownloaderError},
+    types::DataIdentifier,
 };
 
 mod open_file;
@@ -1073,15 +1073,6 @@ pub fn get_file_cache_chunk_path(
 mod test {
     use std::env;
 
-    use super::*;
-    use crate::{
-        cache_handlers::{
-            crypt_context::CryptContext, crypt_passthrough::CryptPassthrough,
-            filesystem::FilesystemCacheHandler,
-        },
-        downloaders::{gdrive::GDriveClient, timecode::TimecodeDrive, DownloaderClient},
-    };
-
     use proptest::{
         arbitrary::any,
         collection,
@@ -1090,6 +1081,15 @@ mod test {
         strategy::{Just, Strategy},
     };
     use tokio::runtime::Runtime;
+
+    use super::*;
+    use crate::{
+        cache_handlers::{
+            crypt_context::CryptContext, crypt_passthrough::CryptPassthrough,
+            filesystem::FilesystemCacheHandler,
+        },
+        downloaders::{gdrive::GDriveClient, timecode::TimecodeDrive, DownloaderClient},
+    };
 
     const MAX_FILE_SIZE: u64 = 1024u64.pow(2) * 100; // 100MB
     const MAX_OFFSET: u64 = MAX_FILE_SIZE - 11;

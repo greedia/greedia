@@ -1,5 +1,3 @@
-use bytes::Bytes;
-use futures::Stream;
 use std::{
     cmp::min,
     fmt,
@@ -10,22 +8,23 @@ use std::{
         Arc, Weak,
     },
 };
+
+use byte_ranger::{ByteRanger, GetRange};
+use bytes::Bytes;
+use futures::Stream;
 use tokio::{
-    fs::DirEntry,
-    fs::{read_dir, File, OpenOptions},
+    fs::{read_dir, DirEntry, File, OpenOptions},
     io::{AsyncSeekExt, AsyncWriteExt},
     sync::Mutex,
     task,
 };
 
+use super::{get_file_cache_path, lru::Lru, MAX_CHUNK_SIZE};
 use crate::{
     cache_handlers::CacheHandlerError,
     downloaders::{DownloaderDrive, DownloaderError},
     types::DataIdentifier,
 };
-use byte_ranger::{ByteRanger, GetRange};
-
-use super::{get_file_cache_path, lru::Lru, MAX_CHUNK_SIZE};
 
 /// OpenFile is a struct representing a single open file within the cache. It is a requirement
 /// that, for any file, only one of these structs exist and that it is protected by a mutex.

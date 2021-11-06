@@ -1,5 +1,13 @@
-use super::{Change, DownloaderClient, DownloaderDrive, DownloaderError, FileInfo, Page, PageItem};
-use crate::{prio_limit::PrioLimit, types::DataIdentifier};
+use std::{
+    borrow::Cow,
+    path::Path,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -12,21 +20,15 @@ use oauth2::{
 use reqwest::{self, Client};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::{
-    borrow::Cow,
-    path::Path,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
-    time::Duration,
-};
 use tokio::sync::{
     mpsc::{self, Sender},
     Mutex,
 };
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::instrument;
+
+use super::{Change, DownloaderClient, DownloaderDrive, DownloaderError, FileInfo, Page, PageItem};
+use crate::{prio_limit::PrioLimit, types::DataIdentifier};
 
 #[derive(Clone, Debug)]
 struct ConnInfo {
@@ -1074,12 +1076,11 @@ pub struct SaJwtResponse {
 mod test {
     use std::env;
 
-    use crate::downloaders::gdrive::{SaJwtClaims, SaJwtResponse, ServiceAccount};
-
-    use super::{DownloaderClient, GDriveClient};
-
     use futures::StreamExt;
     use jwt_simple::prelude::{Claims, Duration, RS256KeyPair, RSAKeyPairLike};
+
+    use super::{DownloaderClient, GDriveClient};
+    use crate::downloaders::gdrive::{SaJwtClaims, SaJwtResponse, ServiceAccount};
     #[tokio::test]
     async fn do_gdrive_stuff() {
         let client_id = env::var("TEST_CLIENT_ID").unwrap();

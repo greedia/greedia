@@ -11,12 +11,10 @@
 
 #![allow(dead_code)]
 
-use std::string::FromUtf8Error;
-use std::{error, fmt, io};
+use std::{error, fmt, io, string::FromUtf8Error};
 
 use bitstream_io::{AsyncBitRead, AsyncBitReader, BigEndian};
-use chrono::offset::Utc;
-use chrono::DateTime;
+use chrono::{offset::Utc, DateTime};
 use futures::{future::BoxFuture, FutureExt};
 use phf::{phf_set, Set};
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -358,8 +356,7 @@ pub async fn read_date<R: AsyncRead + Send + Sync + Unpin>(
     size: u64,
 ) -> MResult<DateTime<Utc>> {
     if size == 8 {
-        use chrono::Duration;
-        use chrono::TimeZone;
+        use chrono::{Duration, TimeZone};
 
         read_int(r, size)
             .await

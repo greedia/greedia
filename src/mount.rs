@@ -1,4 +1,11 @@
-use crate::{cache_handlers::{CacheFileHandler, CacheHandlerError}, drive_access::{DriveAccess, TypeResult}, fh_map::FhMap, tweaks, types::ArchivedDriveItemData};
+use std::{
+    ffi::OsStr,
+    io,
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
 use anyhow::Result;
 use polyfuse::{
     op,
@@ -10,12 +17,12 @@ use tokio::{
     task::{self, JoinHandle},
 };
 
-use std::{
-    ffi::OsStr,
-    io,
-    path::PathBuf,
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+use crate::{
+    cache_handlers::{CacheFileHandler, CacheHandlerError},
+    drive_access::{DriveAccess, TypeResult},
+    fh_map::FhMap,
+    tweaks,
+    types::ArchivedDriveItemData,
 };
 
 const TTL_LONG: Duration = Duration::from_secs(60 * 60 * 24 * 365);
@@ -168,7 +175,7 @@ impl GreediaFS {
                     size,
                 } => {
                     file_attr.mode(libc::S_IFREG as u32 | 0o444);
-                    file_attr.size(*size);
+                    file_attr.size(size.value());
                 }
                 ArchivedDriveItemData::Dir { items: _ } => {
                     file_attr.mode(libc::S_IFDIR as u32 | 0o555);
@@ -215,7 +222,7 @@ impl GreediaFS {
             // the unencrypted file name, without having to clone and modify the item.
             let file_name = file_name_override.unwrap_or_else(|| item.name.as_str());
             let name = OsStr::new(file_name);
-            let ino = self.rev_inode(Inode::Drive(drive, item.inode));
+            let ino = self.rev_inode(Inode::Drive(drive, item.inode.value()));
             let off = off + 1;
             let typ = if item.is_dir {
                 libc::DT_DIR as u32
@@ -264,7 +271,7 @@ impl GreediaFS {
         let reply_entry =
             drive_access.lookup_item(inode, file_name, |child_inode, drive_item| {
                 let global_inode = self.rev_inode(Inode::Drive(drive, child_inode));
-                let dur = Duration::from_secs(drive_item.modified_time as u64);
+                let dur = Duration::from_secs(drive_item.modified_time.value() as u64);
 
                 let mut reply_entry = EntryOut::default();
                 let file_attr = reply_entry.attr();
@@ -274,7 +281,7 @@ impl GreediaFS {
                     size,
                 } = drive_item.data
                 {
-                    file_attr.size(size);
+                    file_attr.size(size.value());
                     file_attr.mode(libc::S_IFREG as u32 | 0o444);
                 } else {
                     file_attr.mode(libc::S_IFDIR as u32 | 0o555);

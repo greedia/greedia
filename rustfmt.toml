@@ -1,0 +1,7 @@
+unstable_features = true
+
+reorder_imports = true
+imports_granularity = "Crate"
+group_imports = "StdExternalCrate"
+empty_item_single_line = false
+

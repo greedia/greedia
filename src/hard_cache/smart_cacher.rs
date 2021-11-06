@@ -1,6 +1,7 @@
+use async_trait::async_trait;
+
 use super::HardCacheDownloader;
 use crate::{cache_handlers::CacheHandlerError, config::SmartCacherConfig};
-use async_trait::async_trait;
 
 /// Global smart cacher version. Increment this any time a release is made with
 /// a new or updated smart cacher.

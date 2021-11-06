@@ -1,5 +1,3 @@
-use rkyv::de::deserializers::AllocDeserializer;
-use rkyv::{Archive, Deserialize, Serialize};
 use std::{
     collections::HashSet,
     convert::TryInto,
@@ -7,12 +5,16 @@ use std::{
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
+
+use rkyv::{de::deserializers::AllocDeserializer, Archive, Deserialize, Serialize};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use walkdir::{DirEntry, WalkDir};
 
-use crate::cache_handlers::filesystem::get_file_cache_chunk_path;
-use crate::db::{get_rkyv, get_rkyv_mut, serialize_rkyv, Db, Tree};
-use crate::types::DataIdentifier;
+use crate::{
+    cache_handlers::filesystem::get_file_cache_chunk_path,
+    db::{get_rkyv, get_rkyv_mut, serialize_rkyv, Db, InnerTree},
+    types::DataIdentifier,
+};
 
 /// Public interface to Lru thread.
 /// Lru is backgrounded and asynchronous - rather than
@@ -134,7 +136,7 @@ async fn run_background(
     }
 }
 
-fn get_space_usage(lru_tree: &Tree) -> u64 {
+fn get_space_usage(lru_tree: &InnerTree) -> u64 {
     if let Some(space_usage_val) = lru_tree.get("space_usage") {
         u64::from_be_bytes(space_usage_val.as_ref().try_into().unwrap())
     } else {
@@ -145,8 +147,8 @@ fn get_space_usage(lru_tree: &Tree) -> u64 {
 
 /// Handle cleaning up cache files if we're over the cache size.
 fn handle_cache_cleanup(
-    ts_tree: &Tree,
-    data_tree: &Tree,
+    ts_tree: &InnerTree,
+    data_tree: &InnerTree,
     cache_root: &Path,
     open_files: &HashSet<DataIdentifier>,
     size_limit: u64,
@@ -211,7 +213,7 @@ fn handle_cache_cleanup(
 }
 
 /// Handle updating a file's timestamp or changing its reported size.
-fn handle_update_file(ts_tree: &Tree, data_tree: &Tree, data_id: &DataIdentifier, offset: u64) {
+fn handle_update_file(ts_tree: &InnerTree, data_tree: &InnerTree, data_id: &DataIdentifier, offset: u64) {
     // Create a new timestamp key
     let ts_key = add_new_ts_key(ts_tree, data_id, offset);
 
@@ -226,7 +228,7 @@ fn handle_update_file(ts_tree: &Tree, data_tree: &Tree, data_id: &DataIdentifier
 
 /// Update an lru_data key with a new ts_key.
 fn update_data_key(
-    data_tree: &Tree,
+    data_tree: &InnerTree,
     data_id: &DataIdentifier,
     offset: u64,
     ts_key: [u8; 9],
@@ -262,7 +264,7 @@ fn update_data_key(
 ///
 /// If multiple keys are added to the tree in the same millisecond, the extra data
 /// will be used to deduplicate the keys.
-fn add_new_ts_key(ts_tree: &Tree, data_id: &DataIdentifier, offset: u64) -> [u8; 9] {
+fn add_new_ts_key(ts_tree: &InnerTree, data_id: &DataIdentifier, offset: u64) -> [u8; 9] {
     let data = LruTimestampData {
         data_id: data_id.clone(),
         offset,
@@ -327,8 +329,8 @@ fn dir_entry_to_data_key(entry: &DirEntry) -> Option<(DataIdentifier, u64, u64, 
 
 /// Scan all files in the soft cache, to rebuild the LRU from scratch.
 fn scan_soft_cache(
-    ts_tree: &Tree,
-    data_tree: &Tree,
+    ts_tree: &InnerTree,
+    data_tree: &InnerTree,
     soft_cache_root: &Path,
     space_usage: &mut u64,
 ) {

@@ -1,12 +1,13 @@
 // Related resources:
 // - https://xiph.org/flac/format.html
 
+use async_trait::async_trait;
+
 use super::{
     smart_cacher::{FileSpec, ScErr::*, ScResult, SmartCacher, SmartCacherSpec},
     HardCacheDownloader,
 };
 use crate::config::SmartCacherConfig;
-use async_trait::async_trait;
 
 static SPEC: SmartCacherSpec = SmartCacherSpec {
     name: "flac_testing",

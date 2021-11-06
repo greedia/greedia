@@ -1,6 +1,5 @@
-use async_trait::async_trait;
-use futures::{ready, Future, FutureExt};
-use smart_cacher::{FileSpec, ScErr, ScOk, ScResult, SmartCacher};
+#[cfg(feature = "sctest")]
+use std::path::PathBuf;
 use std::{
     cmp::min,
     collections::{BTreeMap, HashMap},
@@ -11,12 +10,12 @@ use std::{
     sync::Arc,
     task::{Context, Poll},
 };
+
+use async_trait::async_trait;
+use futures::{ready, Future, FutureExt};
+use rkyv::{Archive, Deserialize, Serialize};
+use smart_cacher::{FileSpec, ScErr, ScOk, ScResult, SmartCacher};
 use tokio::io::{AsyncRead, AsyncSeek, ReadBuf};
-
-#[cfg(feature = "sctest")]
-use std::path::PathBuf;
-
-use rkyv::{de::deserializers::AllocDeserializer, Archive, Deserialize, Serialize};
 
 use self::smart_cacher::SMART_CACHER_VERSION;
 use crate::{
@@ -186,6 +185,7 @@ impl HardCacher {
         meta: Option<&ArchivedHardCacheMetadata>,
     ) -> Result<HardCacheMetadata, CacheHandlerError> {
         // Short-circuit if finalized with latest version of smart_cacher
+        // TODO: bring hard cache metadata back to file on disk
         if let Some(meta) = meta {
             if self.is_latest(meta) {
                 return Ok(meta.deserialize(&mut AllocDeserializer).unwrap());
@@ -560,7 +560,8 @@ impl HcCacherItem for HcDownloadCacherItem {
         Ok(())
     }
 
-    async fn save(&mut self) {}
+    async fn save(&mut self) {
+    }
 }
 
 pub struct HardCacheDownloader {
@@ -663,8 +664,10 @@ pub struct HardCacheReader<'a> {
     last_fut: LastFut<Result<Vec<u8>, CacheHandlerError>>, // references HardCacheDownloader, must not escape
 }
 
-unsafe impl<'a> Send for HardCacheReader<'a> {}
-unsafe impl<'a> Sync for HardCacheReader<'a> {}
+unsafe impl<'a> Send for HardCacheReader<'a> {
+}
+unsafe impl<'a> Sync for HardCacheReader<'a> {
+}
 
 impl<'a> AsyncRead for HardCacheReader<'a> {
     fn poll_read(

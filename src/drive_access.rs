@@ -9,18 +9,13 @@ use std::{
 };
 
 use rclone_crypt::decrypter::{self, Decrypter};
-
-use rkyv::de::deserializers::AllocDeserializer;
-use rkyv::Deserialize;
 use tracing::instrument;
 
-use crate::{cache_handlers::{CacheHandlerError, DownloaderError, crypt_context::CryptContext, crypt_passthrough::CryptPassthrough}, db::{get_rkyv, serialize_rkyv}, scanner::merge_parent, types::{DataIdentifier, DirItem, DriveItemData}};
-use crate::{
-    cache_handlers::{CacheDriveHandler, CacheFileHandler},
-    db::{Db, Tree},
-    types::{make_lookup_key, ArchivedDirItem, DriveItem},
-    types::{ArchivedDriveItem, ArchivedDriveItemData, TreeKeys},
-};
+use crate::{cache_handlers::{
+        crypt_context::CryptContext, crypt_passthrough::CryptPassthrough, CacheDriveHandler,
+        CacheFileHandler, CacheHandlerError, DownloaderError,
+    }, db::{Db, DbAccess}, scanner::merge_parent
+    };
 
 /// Generic result that can specify the difference between
 /// something not existing, and something being the wrong type.
@@ -50,7 +45,7 @@ pub struct DriveAccess {
     /// that stores cache files on disk.
     pub cache_handler: Box<dyn CacheDriveHandler>,
     /// Handle to the database storing all inode-based metadata.
-    pub db: Db,
+    pub db: DbAccess,
     /// Which directory should be considered the "root path".
     /// Everything below this directory is ignored. On first
     /// traversal, if this path exists, the inode gets stored
@@ -66,11 +61,6 @@ pub struct DriveAccess {
     pub scanning: AtomicBool,
     /// Whether or not encryption is used on this drive.
     uses_crypt: bool,
-    /// Database tree that stores a mapping of inodes to DriveItems.
-    inode_tree: Tree,
-    /// Database tree that stores mapping of (parent_inode, file_name) -> inode.
-    /// That inode can then be loaded from inode_tree.
-    lookup_tree: Tree,
     /// Optimization, in order to not traverse the root path repeatedly.
     root_inode: AtomicU64,
 }
@@ -93,12 +83,7 @@ impl DriveAccess {
         uses_crypt: bool,
         crypts: Vec<Arc<CryptContext>>,
     ) -> DriveAccess {
-        let tree_keys = TreeKeys::new(
-            cache_handler.get_drive_type(),
-            &cache_handler.get_drive_id(),
-        );
-        let inode_tree = db.tree(&tree_keys.inode_key);
-        let lookup_tree = db.tree(&tree_keys.lookup_key);
+        let db = db.drive_access(cache_handler.get_drive_type(), &cache_handler.get_drive_id());
         let root_inode = AtomicU64::new(u64::MAX);
         // Scanning is considered "on" by default.
         let scanning = AtomicBool::new(true);
@@ -110,8 +95,6 @@ impl DriveAccess {
             crypts,
             scanning,
             uses_crypt,
-            inode_tree,
-            lookup_tree,
             root_inode,
         }
     }

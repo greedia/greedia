@@ -2,8 +2,19 @@ use std::{cmp::min, collections::HashMap, path::PathBuf};
 
 use serde::Deserialize;
 
+/// Tweaks are simple or temporary values used to modify the code.
+/// Every value must have a default, but they can be useful for testing.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Tweaks {
+    /// Enable directory caching in the kernel. File contents will
+    /// be cached, but directory listings and file metadata such
+    /// as filenames will not be.
+    pub enable_kernel_dir_caching: Option<bool>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Config {
+    pub tweaks: Option<Tweaks>,
     pub caching: CachingConfig,
     pub smart_cachers: HashMap<String, SmartCacherConfig>,
     pub generic_cacher: GenericCache,

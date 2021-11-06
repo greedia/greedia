@@ -668,6 +668,7 @@ dependencies = [
  "leaky-bucket",
  "libc",
  "oauth2",
+ "once_cell",
  "phf",
  "polyfuse",
  "proptest",

@@ -15,6 +15,7 @@ use downloaders::{gdrive::GDriveClient, timecode::TimecodeDrive, DownloaderClien
 use drive_access::DriveAccess;
 use futures::future::join_all;
 use mount::mount_thread;
+use once_cell::sync::OnceCell;
 use scanner::scan_thread;
 use structopt::StructOpt;
 
@@ -34,7 +35,9 @@ mod prio_limit;
 mod scanner;
 mod types;
 
-use config::{validate_config, Config, ConfigGoogleDrive, ConfigTimecodeDrive};
+use config::{Config, ConfigGoogleDrive, ConfigTimecodeDrive, Tweaks, validate_config};
+
+pub static TWEAKS: OnceCell<Tweaks> = OnceCell::new();
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "greedia", about = "Greedily cache media and serve it up fast.")]
@@ -93,6 +96,9 @@ async fn main() -> Result<()> {
 async fn run(config_path: &Path) -> Result<()> {
     let config_data = fs::read(config_path)?;
     let cfg: Config = toml::from_slice(&config_data)?;
+
+    let tweaks = cfg.tweaks.as_ref().cloned().unwrap_or_default();
+    TWEAKS.set(tweaks).expect("TWEAKS should not be set at this point");
 
     if !validate_config(&cfg) {
         bail!("Config didn't validate.");
@@ -265,6 +271,7 @@ async fn sctest(
     fill_byte: Option<String>,
     fill_random: bool,
 ) -> Result<()> {
+    TWEAKS.set(Tweaks::default());
     let meta = input
         .metadata()
         .expect("sctest could not get metadata for file");

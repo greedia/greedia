@@ -1,12 +1,7 @@
-use crate::{
-    downloaders::Change,
-    drive_access::DriveAccess,
-    hard_cache::HardCacheMetadata,
-    types::{
+use crate::{downloaders::Change, drive_access::DriveAccess, hard_cache::HardCacheMetadata, tweaks, types::{
         make_lookup_key, ArchivedDriveItem, ArchivedDriveItemData, DirItem, DriveItem,
         DriveItemData, ReverseAccess,
-    },
-};
+    }};
 use crate::{hard_cache::HardCacher, types::TreeKeys};
 use std::{
     collections::{HashMap, HashSet},
@@ -142,7 +137,11 @@ pub async fn scan_thread(drive_access: Arc<DriveAccess>) {
         count, size, name, drive_type, drive_id
     );
 
-    perform_caching(&trees, drive_access).await;
+    if tweaks().disable_scanner_caching {
+        println!("TWEAK: disabling scanner caching");
+    } else {
+        perform_caching(&trees, drive_access).await;
+    }
 
     println!("Finished caching {} ({}:{}).", name, drive_type, drive_id);
 }

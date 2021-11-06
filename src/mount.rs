@@ -25,7 +25,9 @@ const ITEM_MASK: u64 = DRIVE_OFFSET - 1;
 
 pub async fn mount_thread(drives: Vec<Arc<DriveAccess>>, mountpoint: PathBuf) {
     let mut config = KernelConfig::default();
-    if tweaks().mount_read_only {
+    if tweaks().mount_read_write {
+        println!("TWEAK: mounting read-write");
+    } else {
         config.mount_option("ro");
     }
     config.mount_option("allow_other");

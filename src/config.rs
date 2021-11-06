@@ -12,17 +12,23 @@ pub struct Tweaks {
     #[serde(default)]
     pub enable_kernel_dir_caching: bool,
 
-    /// Mount the FUSE endpoint as read-only. This will eventually
+    /// Mount the FUSE endpoint as read-write. This will eventually
     /// be a regular config option, but for now, use a tweak.
     #[serde(default)]
-    pub mount_read_only: bool,
+    pub mount_read_write: bool,
+
+    /// Stop the scanner from initial file caching. This is useful
+    /// to allow a quicker startup of greedia.
+    #[serde(default)]
+    pub disable_scanner_caching: bool,
 }
 
 impl Default for Tweaks {
     fn default() -> Self {
         Self {
             enable_kernel_dir_caching: false,
-            mount_read_only: true,
+            mount_read_write: false,
+            disable_scanner_caching: false,
         }
     }
 }

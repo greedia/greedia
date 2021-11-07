@@ -268,7 +268,6 @@ impl DbAccess {
             self.set_lookup(parent_inode, new_name, old_inode);
         }
 
-        println!("reached");
         Some(())
     }
 

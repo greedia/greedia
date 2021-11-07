@@ -61,7 +61,7 @@ impl DbAccess {
 
     pub fn set_access(&self, access_id: &str, inode: u64) -> Option<()> {
         let data = inode.to_le_bytes();
-        self.trees.access.set(access_id.as_bytes(), &data)?;
+        self.trees.access.set(access_id.as_bytes(), &data);
         Some(())
     }
 
@@ -111,7 +111,7 @@ impl DbAccess {
         serializer.serialize_value(&drive_item).unwrap();
         let data = serializer.into_serializer().into_inner();
 
-        self.trees.inode.set(inode.to_le_bytes(), data.as_slice())?;
+        self.trees.inode.set(inode.to_le_bytes(), data.as_slice());
 
         Some(())
     }
@@ -141,7 +141,7 @@ impl DbAccess {
     pub fn set_lookup(&self, parent_inode: u64, child_name: &str, child_inode: u64) -> Option<()> {
         let lookup_key = make_lookup_key(parent_inode, child_name);
         let child_inode = &child_inode.to_le_bytes()[..];
-        self.trees.lookup.set(lookup_key, child_inode)?;
+        self.trees.lookup.set(lookup_key, child_inode);
         Some(())
     }
 
@@ -165,7 +165,7 @@ impl DbAccess {
         let data = serializer.into_serializer().into_inner();
         self.trees
             .raccess
-            .set(access_id.as_bytes(), data.as_slice())?;
+            .set(access_id.as_bytes(), data.as_slice());
 
         Some(())
     }
@@ -201,7 +201,7 @@ impl DbAccess {
                 data: DriveItemData::Dir { items: new_items },
             };
 
-            self.set_inode(parent_inode, new_parent_drive_item)?;
+            self.set_inode(parent_inode, new_parent_drive_item);
             Some(())
         } else {
             None
@@ -232,10 +232,9 @@ impl DbAccess {
             data: DriveItemData::Dir { items: new_items },
         };
 
-        self.set_inode(parent_inode, new_parent_drive_item)?;
-        self.rm_lookup(parent_inode, child_name)?;
+        self.set_inode(parent_inode, new_parent_drive_item);
+        self.rm_lookup(parent_inode, child_name);
 
-        // KTODO: handle raccess
         Some(())
     }
 
@@ -263,11 +262,13 @@ impl DbAccess {
             data: DriveItemData::Dir { items: new_items },
         };
 
-        self.set_inode(parent_inode, new_parent_drive_item)?;
+        self.set_inode(parent_inode, new_parent_drive_item);
 
-        let old_inode = self.rm_lookup(parent_inode, child_name)?;
-        self.set_lookup(parent_inode, new_name, old_inode)?;
+        if let Some(old_inode) = self.rm_lookup(parent_inode, child_name) {
+            self.set_lookup(parent_inode, new_name, old_inode);
+        }
 
+        println!("reached");
         Some(())
     }
 
@@ -329,7 +330,7 @@ impl DbAccess {
                 items: new_items_new_parent,
             },
         };
-        self.set_inode(new_parent_inode, new_parent_drive_item)?;
+        self.set_inode(new_parent_inode, new_parent_drive_item);
 
         // Save old directory
         let new_items_old_parent = new_items_old_parent
@@ -343,17 +344,17 @@ impl DbAccess {
                 items: new_items_old_parent,
             },
         };
-        self.set_inode(parent_inode, parent_drive_item)?;
+        self.set_inode(parent_inode, parent_drive_item);
 
         let old_inode = self.rm_lookup(parent_inode, child_name)?;
-        self.set_lookup(new_parent_inode, new_name, old_inode)?;
+        self.set_lookup(new_parent_inode, new_name, old_inode);
 
-        self.rm_raccess(&parent_item.access_id)?;
+        self.rm_raccess(&parent_item.access_id);
         let new_raccess = ReverseAccess {
             parent_inode: new_parent_inode,
             name: new_name.to_string(),
         };
-        self.set_raccess(&parent_item.access_id, &new_raccess)?;
+        self.set_raccess(&parent_item.access_id, &new_raccess);
         Some(())
     }
 
@@ -368,7 +369,7 @@ impl DbAccess {
         serializer.serialize_value(&page_token.to_string()).unwrap();
 
         let data = serializer.into_serializer().into_inner();
-        self.trees.scan.set(b"last_page_token", data.as_slice())?;
+        self.trees.scan.set(b"last_page_token", data.as_slice());
 
         Some(())
     }
@@ -404,7 +405,7 @@ impl DbAccess {
     /// and delete last_scan_start.
     pub fn set_lmd_to_lss(&self) -> Option<()> {
         let lmd_int = self.rm_last_scan_start()?;
-        self.set_last_modified_date_int(lmd_int)?;
+        self.set_last_modified_date_int(lmd_int);
         Some(())
     }
 
@@ -446,7 +447,7 @@ impl DbAccess {
     fn set_next_inode(&self, next_inode: u64) -> Option<()> {
         self.trees
             .scan
-            .set(b"next_inode", &next_inode.to_le_bytes())?;
+            .set(b"next_inode", &next_inode.to_le_bytes());
         Some(())
     }
 

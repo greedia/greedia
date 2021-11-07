@@ -180,7 +180,7 @@ impl DbAccess {
         Some(reverse_access)
     }
 
-    pub fn add_children(&self, parent_inode: u64, children: &[DirItem]) -> Option<i64> {
+    pub fn add_children(&self, parent_inode: u64, children: &[DirItem]) -> Option<()> {
         let parent_item = self.get_inode(parent_inode)?;
         let parent_item = parent_item.borrow_dependent().archived;
 
@@ -202,14 +202,10 @@ impl DbAccess {
             };
 
             self.set_inode(parent_inode, new_parent_drive_item)?;
-
-            // KTODO: finish this function
+            Some(())
         } else {
-            return None;
+            None
         }
-        // KTODO: make merge_parent into this
-        // KTODO: handle raccess
-        todo!()
     }
 
     /// Remove a child from a directory, returning the value.

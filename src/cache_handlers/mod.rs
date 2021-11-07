@@ -9,12 +9,14 @@ use thiserror::Error;
 use tokio::io;
 
 pub use crate::downloaders::{DownloaderError, Page, PageItem};
-use crate::{downloaders::Change, types::DataIdentifier};
+use crate::{db::types::DataIdentifier, downloaders::Change, hard_cache::HardCacheMetadata};
 
 #[derive(Error, Debug)]
 pub enum CacheHandlerError {
     #[error("IO Error")]
     Io(#[from] io::Error),
+    #[error("Serde JSON Error")]
+    Serde(#[from] serde_json::Error),
     #[error("Downloader Error")]
     Downloader(#[from] DownloaderError),
     #[error("AppendChunkError at start_offset: {start_offset}")]
@@ -53,7 +55,6 @@ pub trait CacheDriveHandler: Send + Sync {
         offset: u64,
         write_hard_cache: bool,
     ) -> Result<Box<dyn CacheFileHandler>, CacheHandlerError>;
-    async fn clear_cache_item(&self, data_id: DataIdentifier);
     async fn unlink_file(
         &self,
         file_id: String,
@@ -65,6 +66,16 @@ pub trait CacheDriveHandler: Send + Sync {
         old_new_parent_ids: Option<(String, String)>,
         new_file_name: Option<String>,
     ) -> Result<(), CacheHandlerError>;
+    async fn get_cache_metadata(
+        &self,
+        data_id: DataIdentifier,
+    ) -> Result<HardCacheMetadata, CacheHandlerError>;
+    async fn set_cache_metadata(
+        &self,
+        data_id: DataIdentifier,
+        metadata: HardCacheMetadata,
+    ) -> Result<(), CacheHandlerError>;
+    async fn clear_cache_item(&self, data_id: DataIdentifier);
 }
 
 #[async_trait]

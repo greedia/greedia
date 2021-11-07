@@ -1,12 +1,13 @@
 mod access;
 mod storage;
 mod storage_tree;
-mod tree;
-mod types;
+pub mod tree; // KTODO: make private
+pub mod types;
 
 use std::path::Path;
 
 pub use access::DbAccess;
+
 use self::storage::InnerDb;
 
 #[derive(Clone)]

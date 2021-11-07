@@ -1,12 +1,18 @@
-use super::storage_tree::InnerTree;
 use super::storage::InnerDb;
+pub use super::storage_tree::InnerTree;
 
+#[derive(Clone)]
 pub struct Trees {
-    scan: InnerTree,
-    access: InnerTree,
-    inode: InnerTree,
-    lookup: InnerTree,
-    raccess: InnerTree,
+    /// Variables used for drive scanning
+    pub(super) scan: InnerTree,
+    /// Mapping from access ID to inode
+    pub(super) access: InnerTree,
+    /// Mapping from inode to DriveItem
+    pub(super) inode: InnerTree,
+    /// Mapping from parent and filename to inode
+    pub(super) lookup: InnerTree,
+    /// Mapping from access ID to ReverseAccess struct
+    pub(super) raccess: InnerTree,
 }
 
 impl Trees {
@@ -20,8 +26,6 @@ impl Trees {
             raccess: db.tree(&tree_keys.raccess_key),
         }
     }
-
-    
 }
 
 pub struct TreeKeys {

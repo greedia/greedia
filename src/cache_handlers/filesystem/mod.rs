@@ -30,8 +30,9 @@ use self::{
 };
 use super::{CacheDriveHandler, CacheFileHandler, CacheHandlerError, Page};
 use crate::{
+    db::types::DataIdentifier,
     downloaders::{DownloaderDrive, DownloaderError},
-    types::DataIdentifier,
+    hard_cache::HardCacheMetadata,
 };
 
 mod open_file;
@@ -226,6 +227,41 @@ impl CacheDriveHandler for FilesystemCacheHandler {
         let soft_cache_file_root = get_file_cache_path(&self.soft_cache_root, &data_id);
         let _ = fs::remove_dir_all(&hard_cache_file_root).await;
         let _ = fs::remove_dir_all(&soft_cache_file_root).await;
+    }
+
+    async fn get_cache_metadata(
+        &self,
+        data_id: DataIdentifier,
+    ) -> Result<HardCacheMetadata, CacheHandlerError> {
+        let hard_cache_path = get_file_cache_path(&self.hard_cache_root, &data_id);
+        let hcm_path = hard_cache_path.join("metadata.json");
+
+        if !hard_cache_path.exists() {
+            tokio::fs::create_dir_all(hard_cache_path).await?;
+        }
+        let meta_bytes = tokio::fs::read(hcm_path).await?;
+        let meta = serde_json::from_slice(&meta_bytes)?;
+
+        Ok(meta)
+    }
+
+    async fn set_cache_metadata(
+        &self,
+        data_id: DataIdentifier,
+        meta: HardCacheMetadata,
+    ) -> Result<(), CacheHandlerError> {
+        let hard_cache_path = get_file_cache_path(&self.hard_cache_root, &data_id);
+        let hcm_path = hard_cache_path.join("metadata.json");
+
+        if !hard_cache_path.exists() {
+            tokio::fs::create_dir_all(hard_cache_path).await?;
+        }
+        let mut hcm_file = File::create(hcm_path).await?;
+
+        let meta_bytes = serde_json::to_vec_pretty(&meta)?;
+        hcm_file.write_all(&meta_bytes).await?;
+
+        Ok(())
     }
 
     async fn unlink_file(

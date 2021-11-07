@@ -34,6 +34,3 @@ pub struct GdriveFileInfo {
     pub md5: String,
     pub size: u64,
 }
-
-
-

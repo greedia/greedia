@@ -2,10 +2,9 @@
 //! Everything handling the serialization side of things should be
 //! handled in db/mod.rs or db/tree.rs.
 
-use std::{path::Path};
+use std::path::Path;
 
-
-use super::storage_tree::InnerTree;
+pub use super::storage_tree::InnerTree;
 
 #[derive(Debug, Clone)]
 pub struct InnerDb {

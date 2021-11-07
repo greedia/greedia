@@ -28,7 +28,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tracing::instrument;
 
 use super::{Change, DownloaderClient, DownloaderDrive, DownloaderError, FileInfo, Page, PageItem};
-use crate::{prio_limit::PrioLimit, types::DataIdentifier};
+use crate::{db::types::DataIdentifier, prio_limit::PrioLimit};
 
 #[derive(Clone, Debug)]
 struct ConnInfo {

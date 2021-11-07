@@ -19,10 +19,10 @@ use tokio::{
 
 use crate::{
     cache_handlers::{CacheFileHandler, CacheHandlerError},
+    db::types::ArchivedDriveItemData,
     drive_access::{DriveAccess, TypeResult},
     fh_map::FhMap,
     tweaks,
-    types::ArchivedDriveItemData,
 };
 
 const TTL_LONG: Duration = Duration::from_secs(60 * 60 * 24 * 365);

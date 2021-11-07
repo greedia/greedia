@@ -1,4 +1,4 @@
-use rkyv::{Archive, Deserialize, Serialize};
+use rkyv::{Archive, Deserialize, Infallible, Serialize};
 
 #[derive(Debug, PartialEq, Archive, Serialize, Deserialize)]
 pub struct DriveItem {
@@ -53,11 +53,19 @@ struct ScanState {
     last_modified_date: i64,
 }
 
-/// Generate an internal lookup key, given a parent inode and name.
-pub fn make_lookup_key(parent: u64, name: &str) -> Vec<u8> {
-    let mut out = Vec::with_capacity(8 + name.len());
-    let parent_slice = parent.to_le_bytes();
-    out.extend_from_slice(&parent_slice);
-    out.extend_from_slice(name.as_bytes());
-    out
+impl Into<DataIdentifier> for &ArchivedDataIdentifier {
+    fn into(self) -> DataIdentifier {
+        self.deserialize(&mut Infallible).unwrap()
+    }
+}
+
+impl Into<DirItem> for &ArchivedDirItem {
+    fn into(self) -> DirItem {
+        self.deserialize(&mut Infallible).unwrap()
+    }
+}
+impl Into<DriveItemData> for ArchivedDriveItemData {
+    fn into(self) -> DriveItemData {
+        self.deserialize(&mut Infallible).unwrap()
+    }
 }

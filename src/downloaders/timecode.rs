@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use timecode_rs::TimecodeReader;
 
 use super::{DownloaderDrive, DownloaderError, FileInfo, Page, PageItem};
-use crate::types::DataIdentifier;
+use crate::db::types::DataIdentifier;
 
 /// A test drive that returns timecode files for testing offsets.
 pub struct TimecodeDrive {

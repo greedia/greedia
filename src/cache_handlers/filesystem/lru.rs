@@ -6,14 +6,13 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use rkyv::{de::deserializers::AllocDeserializer, Archive, Deserialize, Serialize};
+use rkyv::{Archive, Deserialize, Serialize};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use walkdir::{DirEntry, WalkDir};
 
 use crate::{
     cache_handlers::filesystem::get_file_cache_chunk_path,
-    db::{get_rkyv, get_rkyv_mut, serialize_rkyv, Db, InnerTree},
-    types::DataIdentifier,
+    db::{tree::InnerTree, types::DataIdentifier, Db},
 };
 
 /// Public interface to Lru thread.
@@ -213,7 +212,12 @@ fn handle_cache_cleanup(
 }
 
 /// Handle updating a file's timestamp or changing its reported size.
-fn handle_update_file(ts_tree: &InnerTree, data_tree: &InnerTree, data_id: &DataIdentifier, offset: u64) {
+fn handle_update_file(
+    ts_tree: &InnerTree,
+    data_tree: &InnerTree,
+    data_id: &DataIdentifier,
+    offset: u64,
+) {
     // Create a new timestamp key
     let ts_key = add_new_ts_key(ts_tree, data_id, offset);
 

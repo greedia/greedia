@@ -11,8 +11,8 @@ impl InnerTree {
         self.tree.get(key).unwrap()
     }
 
-    /// Get a value into the DB tree.
-    pub fn insert<K, V>(&self, key: K, value: V) -> Option<IVec>
+    /// Set a value in the DB tree.
+    pub fn set<K, V>(&self, key: K, value: V) -> Option<IVec>
     where
         K: AsRef<[u8]>,
         V: Into<IVec>,

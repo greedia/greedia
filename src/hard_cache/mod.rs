@@ -13,7 +13,8 @@ use std::{
 
 use async_trait::async_trait;
 use futures::{ready, Future, FutureExt};
-use rkyv::{Archive, Deserialize, Serialize};
+// use rkyv::{Archive, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use smart_cacher::{FileSpec, ScErr, ScOk, ScResult, SmartCacher};
 use tokio::io::{AsyncRead, AsyncSeek, ReadBuf};
 
@@ -24,8 +25,8 @@ use crate::{
         CacheHandlerError,
     },
     config::{DownloadAmount, SmartCacherConfig},
+    db::types::DataIdentifier,
     drive_access::DriveAccess,
-    types::DataIdentifier,
 };
 
 #[cfg(feature = "sctest")]
@@ -57,14 +58,12 @@ pub struct HardCacheItem {
     data_id: DataIdentifier,
     size: u64,
 }
-#[derive(Debug, Clone, PartialEq, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HardCacheMetadata {
     /// Name of the (smart) cacher used to cache this file.
     pub cacher: String,
     /// The global smart cacher version used to cache this file. (TODO)
     pub version: u64,
-    // The revision of the smart_cachers and generic_cacher sections of the config.
-    // pub config_revision: u64
 }
 
 pub struct HardCacher {
@@ -133,8 +132,7 @@ impl HardCacher {
         file_name: &str,
         data_id: &DataIdentifier,
         size: u64,
-        meta: Option<&ArchivedHardCacheMetadata>,
-    ) -> Result<HardCacheMetadata, CacheHandlerError> {
+    ) -> Result<(), CacheHandlerError> {
         let (crypt_context, new_file_name, size) = if let Some(drive_access) =
             self.drive_access.as_ref()
         {
@@ -159,7 +157,7 @@ impl HardCacher {
             size,
         };
 
-        self.process_inner(item, meta).await
+        self.process_inner(item).await
     }
 
     /// Process the provided sctest file.
@@ -176,19 +174,17 @@ impl HardCacher {
             size,
         };
 
-        self.process_inner(item, None).await.unwrap();
+        self.process_inner(item).await.unwrap();
     }
 
-    async fn process_inner(
-        &self,
-        item: HardCacheItem,
-        meta: Option<&ArchivedHardCacheMetadata>,
-    ) -> Result<HardCacheMetadata, CacheHandlerError> {
+    async fn process_inner(&self, item: HardCacheItem) -> Result<(), CacheHandlerError> {
+        let data_id = item.data_id.clone();
         // Short-circuit if finalized with latest version of smart_cacher
-        // TODO: bring hard cache metadata back to file on disk
-        if let Some(meta) = meta {
-            if self.is_latest(meta) {
-                return Ok(meta.deserialize(&mut AllocDeserializer).unwrap());
+        if let Some(drive_access) = &self.drive_access {
+            if let Ok(meta) = drive_access.get_cache_metadata(data_id.clone()).await {
+                if self.is_latest(&meta) {
+                    return Ok(());
+                }
             }
         }
         let file_spec = hard_cache_item_to_file_spec(&item);
@@ -219,10 +215,14 @@ impl HardCacher {
             );
             hcd.cache_data_fully().await?;
             hcd.save().await;
-            return Ok(HardCacheMetadata {
+            let hcm = HardCacheMetadata {
                 cacher: "min_size_cacher".to_string(),
                 version: 0,
-            });
+            };
+            if let Some(drive_access) = &self.drive_access {
+                drive_access.set_cache_metadata(data_id.clone(), hcm).await;
+                return Ok(());
+            }
         }
 
         // TODO: not hardcode this
@@ -244,10 +244,14 @@ impl HardCacher {
                     // Write metadata, save here
                     println!("Success with smart cacher {}", spec.name);
                     hcd.save().await;
-                    return Ok(HardCacheMetadata {
+                    let hcm = HardCacheMetadata {
                         cacher: spec.name.to_string(),
                         version: SMART_CACHER_VERSION,
-                    });
+                    };
+                    if let Some(drive_access) = &self.drive_access {
+                        drive_access.set_cache_metadata(data_id.clone(), hcm).await;
+                        return Ok(());
+                    }
                 }
                 Err(ScErr::Cancel) => {
                     println!("Preferred cacher {} failed, trying next...", spec.name);
@@ -280,10 +284,15 @@ impl HardCacher {
                     // Write metadata, save here
                     println!("Success with smart cacher {}", spec.name);
                     hcd.save().await;
-                    return Ok(HardCacheMetadata {
+                    let hcm = HardCacheMetadata {
                         cacher: spec.name.to_string(),
                         version: SMART_CACHER_VERSION,
-                    });
+                    };
+                    if let Some(drive_access) = &self.drive_access {
+                        drive_access.set_cache_metadata(data_id.clone(), hcm);
+                        return Ok(());
+                    }
+                    return Ok(());
                 }
                 Err(ScErr::Cancel) => {
                     println!("Smart cacher {} failed, trying next...", spec.name);
@@ -313,13 +322,17 @@ impl HardCacher {
         hcd.save().await;
 
         // Specify that we have successfully cached with generic_cacher.
-        Ok(HardCacheMetadata {
+        let hcm = HardCacheMetadata {
             cacher: "generic_cacher".to_string(),
             version: 0,
-        })
+        };
+        if let Some(drive_access) = &self.drive_access {
+            drive_access.set_cache_metadata(data_id.clone(), hcm).await;
+        }
+        return Ok(());
     }
 
-    pub fn is_latest(&self, meta: &ArchivedHardCacheMetadata) -> bool {
+    pub fn is_latest(&self, meta: &HardCacheMetadata) -> bool {
         meta.version >= SMART_CACHER_VERSION
     }
 }

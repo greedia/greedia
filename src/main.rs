@@ -21,7 +21,6 @@ use once_cell::sync::OnceCell;
 use scanner::scan_thread;
 use structopt::StructOpt;
 
-// New stuff
 mod cache_handlers;
 mod config;
 mod db;

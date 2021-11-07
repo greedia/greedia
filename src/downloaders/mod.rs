@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use futures::Stream;
 use thiserror::Error;
 
-use crate::types::DataIdentifier;
+use crate::db::types::DataIdentifier;
 
 pub mod gdrive;
 pub mod timecode;

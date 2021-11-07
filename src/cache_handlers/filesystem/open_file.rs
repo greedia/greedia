@@ -22,8 +22,8 @@ use tokio::{
 use super::{get_file_cache_path, lru::Lru, MAX_CHUNK_SIZE};
 use crate::{
     cache_handlers::CacheHandlerError,
+    db::types::DataIdentifier,
     downloaders::{DownloaderDrive, DownloaderError},
-    types::DataIdentifier,
 };
 
 /// OpenFile is a struct representing a single open file within the cache. It is a requirement

@@ -262,7 +262,7 @@ impl DriveAccess {
                     }
                 }
             }
-            ArchivedDriveItemData::Dir { items } => todo!(),
+            ArchivedDriveItemData::Dir { items: _ } => todo!(),
         };
 
         self.db.rm_child(parent_inode, &file_name)?;

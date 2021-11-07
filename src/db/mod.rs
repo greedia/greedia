@@ -1,12 +1,14 @@
 mod access;
+mod lru_access;
 mod storage;
 mod storage_tree;
-pub mod tree; // KTODO: make private
+mod tree; // KTODO: make private
 pub mod types;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub use access::DbAccess;
+pub use lru_access::LruAccess;
 
 use self::storage::InnerDb;
 
@@ -20,7 +22,7 @@ impl Db {
         let inner = InnerDb::new(db);
 
         Self {
-            inner: InnerDb::new(db),
+            inner,
         }
     }
 
@@ -29,6 +31,10 @@ impl Db {
     }
 
     pub fn drive_access(&self, drive_type: &str, drive_id: &str) -> DbAccess {
-        DbAccess::new(self.inner, drive_type, drive_id)
+        DbAccess::new(self.inner.clone(), drive_type, drive_id)
+    }
+
+    pub fn lru_access(&self, cache_root: PathBuf, size_limit: u64) -> LruAccess {
+        LruAccess::new(self.inner.clone(), cache_root, size_limit)
     }
 }

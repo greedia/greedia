@@ -1,4 +1,7 @@
-use rkyv::{Archive, Deserialize, Infallible, Serialize};
+use rkyv::{
+    ser::{serializers::AllocSerializer, Serializer},
+    Archive, Deserialize, Infallible, Serialize,
+};
 
 #[derive(Debug, PartialEq, Archive, Serialize, Deserialize)]
 pub struct DriveItem {
@@ -53,6 +56,68 @@ struct ScanState {
     last_modified_date: i64,
 }
 
+/// Key used for the LruTimestamp database tree.
+#[derive(Debug)]
+pub struct LruTimestampKey {
+    /// Unix timestamp in milliseconds.
+    pub timestamp: u64,
+    /// Extra value, for deduplication.
+    pub extra_val: u8,
+}
+
+impl LruTimestampKey {
+    pub fn to_bytes(&self) -> [u8; 9] {
+        let mut out = [0u8; 9];
+        out[..8].copy_from_slice(&self.timestamp.to_be_bytes());
+        out[8..].copy_from_slice(&self.extra_val.to_be_bytes());
+        out
+    }
+}
+
+#[derive(Debug, PartialEq, Archive, Serialize, Deserialize)]
+pub struct LruTimestampData {
+    pub data_id: DataIdentifier,
+    pub offset: u64,
+}
+
+impl LruTimestampData {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut serializer = AllocSerializer::<4096>::default();
+        serializer.serialize_value(self).unwrap();
+        serializer.into_serializer().into_inner().to_vec()
+    }
+}
+
+/// Key used for the LruData database tree.
+#[derive(Debug, Clone, PartialEq, Archive, Serialize, Deserialize)]
+pub struct LruDataKey {
+    #[archive(derive(Clone))]
+    pub data_id: DataIdentifier,
+    pub offset: u64,
+}
+
+impl LruDataKey {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut serializer = AllocSerializer::<4096>::default();
+        serializer.serialize_value(self).unwrap();
+        serializer.into_serializer().into_inner().to_vec()
+    }
+}
+
+/// Data used for the LruData database tree.
+#[derive(Debug, PartialEq, Archive, Serialize, Deserialize)]
+pub struct LruDataData {
+    pub timestamp_key: [u8; 9],
+}
+
+impl LruDataData {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut serializer = AllocSerializer::<4096>::default();
+        serializer.serialize_value(self).unwrap();
+        serializer.into_serializer().into_inner().to_vec()
+    }
+}
+
 impl Into<DataIdentifier> for &ArchivedDataIdentifier {
     fn into(self) -> DataIdentifier {
         self.deserialize(&mut Infallible).unwrap()
@@ -64,7 +129,7 @@ impl Into<DirItem> for &ArchivedDirItem {
         self.deserialize(&mut Infallible).unwrap()
     }
 }
-impl Into<DriveItemData> for ArchivedDriveItemData {
+impl Into<DriveItemData> for &ArchivedDriveItemData {
     fn into(self) -> DriveItemData {
         self.deserialize(&mut Infallible).unwrap()
     }

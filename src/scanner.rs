@@ -96,7 +96,7 @@ async fn watch_thread(db: DbAccess, drive_access: Arc<DriveAccess>) {
         // Hard cache the added files.
         for page_item in page_items {
             if let Some(drive_item) = db.get_access(&page_item.id) {
-                perform_one_cache(&db, &hard_cacher, drive_item).await;
+                perform_one_cache(&hard_cacher, drive_item).await;
             }
         }
 
@@ -171,13 +171,12 @@ async fn caching_thread(db: DbAccess, drive_access: Arc<DriveAccess>, recv: Rece
     let mut stream = recv.into_stream();
     while let Some(data) = stream.next().await {
         let item = db.get_inode_from_data(data).unwrap();
-        perform_one_cache(&db, &hard_cacher, item).await;
+        perform_one_cache(&hard_cacher, item).await;
     }
 }
 
 /// Cache one single item. Returns true if successful, or false if attempt needs to be made later.
 async fn perform_one_cache(
-    db: &DbAccess,
     hard_cacher: &HardCacher,
     item: &ArchivedDriveItem,
 ) -> bool {
@@ -284,7 +283,7 @@ fn handle_add_items(db: &DbAccess, parent: &str, items: &[&PageItem]) {
     }
 
     // Merge items into parent
-    let items = items
+    let mut items = items
         .iter()
         .filter(|x| item_inodes.contains_key(&x.id))
         .map(|x| DirItem {
@@ -296,7 +295,7 @@ fn handle_add_items(db: &DbAccess, parent: &str, items: &[&PageItem]) {
         .collect::<Vec<_>>();
 
     // Add existing items to new_items, if parent already exists
-    if let Some(existing_parent) = db.get_inode(parent_inode) {
+    if db.get_inode(parent_inode).is_some() {
         db.add_children(parent_inode, &mut items);
     } else {
         let parent_drive_item = DriveItem {
@@ -316,10 +315,12 @@ fn handle_update_parent(db: &DbAccess, parent: &str, modified_time: i64) {
             if old_drive_item.modified_time == modified_time {
                 return;
             }
+            let access_id = old_drive_item.access_id.to_string();
+            let data = (&old_drive_item.data).into();
             let new_drive_item = DriveItem {
-                access_id: old_drive_item.access_id.to_string(),
+                access_id,
                 modified_time,
-                data: old_drive_item.data.into(),
+                data,
             };
 
             db.set_inode(existing_inode, new_drive_item);

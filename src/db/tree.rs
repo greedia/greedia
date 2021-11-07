@@ -29,6 +29,8 @@ impl Trees {
 }
 
 pub struct TreeKeys {
+    // For keeping track of scans
+    pub scan_key: Vec<u8>,
     // For accessing a file by ID
     pub access_key: Vec<u8>,
     // For accessing a file by inode
@@ -37,8 +39,6 @@ pub struct TreeKeys {
     pub lookup_key: Vec<u8>,
     // For finding references to update upon file deletion
     pub raccess_key: Vec<u8>,
-    // For keeping track of scans
-    pub scan_key: Vec<u8>,
 }
 
 impl TreeKeys {

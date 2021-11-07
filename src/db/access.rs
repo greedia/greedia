@@ -33,7 +33,7 @@ pub struct DbAccess {
 impl DbAccess {
     pub fn new(db: InnerDb, drive_type: &str, drive_id: &str) -> Self {
         let trees = Trees::new(db, drive_type, drive_id);
-        let next_inode = Self::get_next_inode(trees).unwrap_or(1);
+        let next_inode = Self::get_next_inode(&trees).unwrap_or(1);
         let next_inode = Arc::new(AtomicU64::new(next_inode));
         DbAccess {
             drive_id: drive_id.to_string(),
@@ -100,8 +100,8 @@ impl DbAccess {
     pub fn set_inode(&self, inode: u64, drive_item: DriveItem) -> Option<()> {
         let mut serializer = AllocSerializer::<4096>::default();
         serializer.serialize_value(&drive_item).unwrap();
-
         let data = serializer.into_serializer().into_inner().as_slice();
+
         self.trees.inode.set(inode.to_le_bytes(), data)?;
 
         Some(())
@@ -155,8 +155,8 @@ impl DbAccess {
         let mut serializer = AllocSerializer::<4096>::default();
         serializer.serialize_value(raccess).unwrap();
 
-        let data = serializer.into_serializer().into_inner().as_slice();
-        self.trees.raccess.set(access_id.as_bytes(), data)?;
+        let data = serializer.into_serializer().into_inner();
+        self.trees.raccess.set(access_id.as_bytes(), data.as_slice())?;
 
         Some(())
     }
@@ -170,22 +170,26 @@ impl DbAccess {
     pub fn add_children(&self, parent_inode: u64, children: &[DirItem]) -> Option<i64> {
         let parent_item = self.get_inode(parent_inode)?;
 
-        if let ArchivedDriveItemData::Dir { items } = parent_item.data {
-            let mut children_set: HashMap<&str, DirItem> = children
+        if let ArchivedDriveItemData::Dir { items } = &parent_item.data {
+            let mut children_set: HashMap<String, DirItem> = children
                 .into_iter()
-                .map(|x| (x.name.as_str(), x.clone()))
+                .map(|x| (x.name.to_string(), x.clone()))
                 .collect();
             for item in items.into_iter().map(|x| x.into()) {
                 let item: DirItem = item;
-                children_set.insert(item.name.as_ref(), item);
+                children_set.insert(item.name.to_string(), item);
             }
 
-            let mut new_items = children_set.into_values().collect();
+            let new_items = children_set.into_values().collect();
             let new_parent_drive_item = DriveItem {
                 access_id: parent_item.access_id.to_string(),
                 modified_time: parent_item.modified_time.value(),
                 data: DriveItemData::Dir { items: new_items },
             };
+
+            self.set_inode(parent_inode, new_parent_drive_item)?;
+
+            // KTODO: finish this function
         } else {
             return None;
         }
@@ -199,7 +203,7 @@ impl DbAccess {
         let parent_item = self.get_inode(parent_inode)?;
 
         let mut new_items;
-        if let ArchivedDriveItemData::Dir { items } = parent_item.data {
+        if let ArchivedDriveItemData::Dir { items } = &parent_item.data {
             new_items = Vec::with_capacity(items.len());
             for item in items.iter() {
                 if item.name != child_name {
@@ -207,6 +211,8 @@ impl DbAccess {
                     new_items.push(item);
                 }
             }
+        } else {
+            new_items = vec![];
         }
 
         let new_parent_drive_item = DriveItem {
@@ -226,7 +232,7 @@ impl DbAccess {
         let parent_item = self.get_inode(parent_inode)?;
 
         let mut new_items;
-        if let ArchivedDriveItemData::Dir { items } = parent_item.data {
+        if let ArchivedDriveItemData::Dir { items } = &parent_item.data {
             new_items = Vec::with_capacity(items.len());
             for item in items.iter() {
                 let mut item: DirItem = item.into();
@@ -235,6 +241,8 @@ impl DbAccess {
                 }
                 new_items.push(item);
             }
+        } else {
+            new_items = vec![];
         }
 
         let new_parent_drive_item = DriveItem {
@@ -248,7 +256,6 @@ impl DbAccess {
         let old_inode = self.rm_lookup(parent_inode, child_name)?;
         self.set_lookup(parent_inode, new_name, old_inode)?;
 
-        // KTODO: handle raccess
         Some(())
     }
 
@@ -264,7 +271,7 @@ impl DbAccess {
         // Find original item
         let mut dir_item = None;
         let mut new_items_old_parent;
-        if let ArchivedDriveItemData::Dir { items } = parent_item.data {
+        if let ArchivedDriveItemData::Dir { items } = &parent_item.data {
             new_items_old_parent = Vec::with_capacity(items.len());
             for item in items.iter() {
                 if item.name == child_name {
@@ -273,6 +280,8 @@ impl DbAccess {
                     new_items_old_parent.push(item)
                 }
             }
+        } else {
+            new_items_old_parent = vec![];
         }
         // Bail if file not found
         let mut dir_item: DirItem = dir_item?.into();
@@ -280,9 +289,8 @@ impl DbAccess {
         let new_name = new_name.unwrap_or(child_name);
 
         // Add to new directory
-        let new_parent_item = self.get_inode(new_parent_inode)?;
         let mut new_items_new_parent;
-        if let ArchivedDriveItemData::Dir { items } = parent_item.data {
+        if let ArchivedDriveItemData::Dir { items } = &parent_item.data {
             dir_item.name = new_name.to_string();
             new_items_new_parent = Vec::with_capacity(items.len() + 1);
             for item in items.iter() {
@@ -292,6 +300,8 @@ impl DbAccess {
                 }
                 new_items_new_parent.push(item);
             }
+        } else {
+            new_items_new_parent = vec![];
         }
 
         // Save new directory
@@ -325,8 +335,7 @@ impl DbAccess {
         let old_inode = self.rm_lookup(parent_inode, child_name)?;
         self.set_lookup(new_parent_inode, new_name, old_inode)?;
 
-        // KTODO: handle raccess
-        let raccess = self.rm_raccess(&parent_item.access_id)?;
+        self.rm_raccess(&parent_item.access_id)?;
         let new_raccess = ReverseAccess {
             parent_inode: new_parent_inode,
             name: new_name.to_string(),
@@ -345,8 +354,8 @@ impl DbAccess {
         let mut serializer = AllocSerializer::<4096>::default();
         serializer.serialize_value(&page_token.to_string()).unwrap();
 
-        let data = serializer.into_serializer().into_inner().as_slice();
-        self.trees.scan.set(b"last_page_token", data)?;
+        let data = serializer.into_serializer().into_inner();
+        self.trees.scan.set(b"last_page_token", data.as_slice())?;
 
         Some(())
     }
@@ -420,7 +429,7 @@ impl DbAccess {
         new_inode
     }
 
-    fn get_next_inode(trees: Trees) -> Option<u64> {
+    fn get_next_inode(trees: &Trees) -> Option<u64> {
         let ni_data = trees.scan.get(b"next_inode")?;
         let ni_int = u64::from_le_bytes(
             ni_data

@@ -21,9 +21,7 @@ impl Db {
     pub fn new(db: sled::Db) -> Self {
         let inner = InnerDb::new(db);
 
-        Self {
-            inner,
-        }
+        Self { inner }
     }
 
     pub fn open(path: &Path) -> Result<Self, sled::Error> {

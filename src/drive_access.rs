@@ -364,10 +364,15 @@ impl DriveAccess {
 
         // Perform the move or rename in the DB
         if let Some(new_parent_inode) = new_parent {
-            self.db
-                .move_child(parent_inode, new_parent_inode, &file_name, new_file_name.as_deref())?;
+            self.db.move_child(
+                parent_inode,
+                new_parent_inode,
+                &file_name,
+                new_file_name.as_deref(),
+            )?;
         } else if let Some(new_file_name) = new_file_name {
-            self.db.rename_child(parent_inode, &file_name, &new_file_name)?;
+            self.db
+                .rename_child(parent_inode, &file_name, &new_file_name)?;
         }
 
         Some(())

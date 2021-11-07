@@ -220,7 +220,9 @@ impl HardCacher {
                 version: 0,
             };
             if let Some(drive_access) = &self.drive_access {
-                drive_access.set_cache_metadata(data_id.clone(), hcm).await?;
+                drive_access
+                    .set_cache_metadata(data_id.clone(), hcm)
+                    .await?;
                 return Ok(());
             }
         }
@@ -249,7 +251,9 @@ impl HardCacher {
                         version: SMART_CACHER_VERSION,
                     };
                     if let Some(drive_access) = &self.drive_access {
-                        drive_access.set_cache_metadata(data_id.clone(), hcm).await?;
+                        drive_access
+                            .set_cache_metadata(data_id.clone(), hcm)
+                            .await?;
                         return Ok(());
                     }
                 }
@@ -289,7 +293,9 @@ impl HardCacher {
                         version: SMART_CACHER_VERSION,
                     };
                     if let Some(drive_access) = &self.drive_access {
-                        drive_access.set_cache_metadata(data_id.clone(), hcm).await?;
+                        drive_access
+                            .set_cache_metadata(data_id.clone(), hcm)
+                            .await?;
                         return Ok(());
                     }
                     return Ok(());
@@ -327,7 +333,9 @@ impl HardCacher {
             version: 0,
         };
         if let Some(drive_access) = &self.drive_access {
-            drive_access.set_cache_metadata(data_id.clone(), hcm).await?;
+            drive_access
+                .set_cache_metadata(data_id.clone(), hcm)
+                .await?;
         }
         Ok(())
     }

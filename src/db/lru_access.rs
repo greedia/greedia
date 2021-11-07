@@ -1,12 +1,15 @@
 use std::{convert::TryInto, path::PathBuf, pin::Pin};
 
 use rkyv::{archived_root, archived_root_mut};
-use sled::{IVec, Iter};
 use self_cell::self_cell;
+use sled::{IVec, Iter};
 
 use super::{
     storage::{InnerDb, InnerTree},
-    types::{ArchivedLruDataData, ArchivedLruTimestampData, LruDataData, LruDataKey, LruTimestampData, LruTimestampKey},
+    types::{
+        ArchivedLruDataData, ArchivedLruTimestampData, LruDataData, LruDataKey, LruTimestampData,
+        LruTimestampKey,
+    },
 };
 
 /// Used to keep track of the soft cache LRU within the database.
@@ -58,7 +61,11 @@ impl LruAccess {
         self.data_tree.clear();
     }
 
-    pub fn add_new_timestamp_key(&self, timestamp: u64, data: &LruTimestampData) -> Option<[u8; 9]> {
+    pub fn add_new_timestamp_key(
+        &self,
+        timestamp: u64,
+        data: &LruTimestampData,
+    ) -> Option<[u8; 9]> {
         let mut res_ts_key = None;
         for extra_val in 0..u8::MAX {
             let ts_key = LruTimestampKey {
@@ -88,11 +95,10 @@ impl LruAccess {
     }
 
     pub fn get_ts_data_from_data(&self, data: IVec) -> Option<BorrowedLruTimestampData> {
-        let lru_timestamp_data =
-            BorrowedLruTimestampData::new(data, |data| {
-                let archived = unsafe { archived_root::<LruTimestampData>(data) };
-                LLruTimestampData { archived }
-            });
+        let lru_timestamp_data = BorrowedLruTimestampData::new(data, |data| {
+            let archived = unsafe { archived_root::<LruTimestampData>(data) };
+            LLruTimestampData { archived }
+        });
         Some(lru_timestamp_data)
     }
 
@@ -163,12 +169,9 @@ pub struct TsIterator {
 
 impl TsIterator {
     pub fn next(&mut self) -> Option<(IVec, IVec)> {
-        self.inner_iter
-            .next()
-            .and_then(|i| i.ok())
+        self.inner_iter.next().and_then(|i| i.ok())
     }
 }
-
 
 self_cell!(
     pub struct BorrowedLruDataData {

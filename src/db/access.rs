@@ -287,6 +287,7 @@ impl DbAccess {
         if let ArchivedDriveItemData::Dir { items } = &parent_item.data {
             new_items_old_parent = Vec::with_capacity(items.len());
             for item in items.iter() {
+                let item: DirItem = item.into();
                 if item.name == child_name {
                     dir_item = Some(item);
                 } else {
@@ -294,37 +295,42 @@ impl DbAccess {
                 }
             }
         } else {
-            new_items_old_parent = vec![];
+            // Bail if not a directory
+            return None;
         }
+
         // Bail if file not found
-        let mut dir_item: DirItem = dir_item?.into();
+        let mut dir_item = dir_item?;
+        let item_inode = dir_item.inode;
 
         let new_name = new_name.unwrap_or(child_name);
 
+        let new_parent_item = self.get_inode(new_parent_inode)?;
+        let new_parent_item = new_parent_item.borrow_dependent().archived;
+
         // Add to new directory
         let mut new_items_new_parent;
-        if let ArchivedDriveItemData::Dir { items } = &parent_item.data {
+        if let ArchivedDriveItemData::Dir { items } = &new_parent_item.data {
             dir_item.name = new_name.to_string();
             new_items_new_parent = Vec::with_capacity(items.len() + 1);
             for item in items.iter() {
+                let item: DirItem = item.into();
                 if item.name == new_name {
-                    // Filename already found in new directory, abort
+                    // Bail if filename already found in new directory
                     return None;
                 }
                 new_items_new_parent.push(item);
             }
+            new_items_new_parent.push(dir_item);
         } else {
-            new_items_new_parent = vec![];
+            // Bail if not a directory
+            return None;
         }
 
         // Save new directory
-        let new_items_new_parent = new_items_new_parent
-            .into_iter()
-            .map(|ai| ai.into())
-            .collect();
         let new_parent_drive_item = DriveItem {
-            access_id: parent_item.access_id.to_string(),
-            modified_time: parent_item.modified_time.value(),
+            access_id: new_parent_item.access_id.to_string(),
+            modified_time: new_parent_item.modified_time.value(),
             data: DriveItemData::Dir {
                 items: new_items_new_parent,
             },
@@ -332,10 +338,6 @@ impl DbAccess {
         self.set_inode(new_parent_inode, new_parent_drive_item);
 
         // Save old directory
-        let new_items_old_parent = new_items_old_parent
-            .into_iter()
-            .map(|ai| ai.into())
-            .collect();
         let parent_drive_item = DriveItem {
             access_id: parent_item.access_id.to_string(),
             modified_time: parent_item.modified_time.value(),
@@ -345,8 +347,8 @@ impl DbAccess {
         };
         self.set_inode(parent_inode, parent_drive_item);
 
-        let old_inode = self.rm_lookup(parent_inode, child_name)?;
-        self.set_lookup(new_parent_inode, new_name, old_inode);
+        self.rm_lookup(parent_inode, child_name);
+        self.set_lookup(new_parent_inode, new_name, item_inode);
 
         self.rm_raccess(&parent_item.access_id);
         let new_raccess = ReverseAccess {
@@ -354,6 +356,7 @@ impl DbAccess {
             name: new_name.to_string(),
         };
         self.set_raccess(&parent_item.access_id, &new_raccess);
+
         Some(())
     }
 

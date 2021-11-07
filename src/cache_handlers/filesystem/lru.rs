@@ -129,7 +129,7 @@ fn handle_cache_cleanup(
             "LRU inconsistent; tree empty, but space_usage is {}",
             *space_usage
         );
-        scan_soft_cache(&lru, space_usage);
+        scan_soft_cache(lru, space_usage);
     }
 
     if *space_usage < lru.size_limit {
@@ -140,6 +140,7 @@ fn handle_cache_cleanup(
     while let Some((key, val)) = ts_iter.next() {
         // Get the data_id
         let ts_data = lru.get_ts_data_from_data(val).unwrap();
+        let ts_data = ts_data.borrow_dependent().archived;
         let data_id: DataIdentifier = (&ts_data.data_id).into();
 
         // Skip any chunks in currently open files

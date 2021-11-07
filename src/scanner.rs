@@ -96,6 +96,7 @@ async fn watch_thread(db: DbAccess, drive_access: Arc<DriveAccess>) {
         // Hard cache the added files.
         for page_item in page_items {
             if let Some(drive_item) = db.get_access(&page_item.id) {
+                let drive_item = drive_item.borrow_dependent().archived;
                 perform_one_cache(&hard_cacher, drive_item).await;
             }
         }
@@ -104,6 +105,7 @@ async fn watch_thread(db: DbAccess, drive_access: Arc<DriveAccess>) {
         for r in removals {
             if let Change::Removed(id) = r {
                 if let Some((_, drive_item)) = db.rm_access_full(&id) {
+                    let drive_item = drive_item.borrow_dependent().archived;
                     // Remove from hard_cache and hc_meta_tree.
                     if let ArchivedDriveItemData::FileItem {
                         file_name: _,
@@ -116,6 +118,7 @@ async fn watch_thread(db: DbAccess, drive_access: Arc<DriveAccess>) {
                 }
 
                 if let Some(raccess_data) = db.rm_raccess(&id) {
+                    let raccess_data = raccess_data.borrow_dependent().archived;
                     db.rm_child(raccess_data.parent_inode.value(), &raccess_data.name);
                 }
             }
@@ -171,6 +174,7 @@ async fn caching_thread(db: DbAccess, drive_access: Arc<DriveAccess>, recv: Rece
     let mut stream = recv.into_stream();
     while let Some(data) = stream.next().await {
         let item = db.get_inode_from_data(data).unwrap();
+        let item = item.borrow_dependent().archived;
         perform_one_cache(&hard_cacher, item).await;
     }
 }
@@ -283,7 +287,7 @@ fn handle_add_items(db: &DbAccess, parent: &str, items: &[&PageItem]) {
     }
 
     // Merge items into parent
-    let mut items = items
+    let items = items
         .iter()
         .filter(|x| item_inodes.contains_key(&x.id))
         .map(|x| DirItem {
@@ -296,7 +300,7 @@ fn handle_add_items(db: &DbAccess, parent: &str, items: &[&PageItem]) {
 
     // Add existing items to new_items, if parent already exists
     if db.get_inode(parent_inode).is_some() {
-        db.add_children(parent_inode, &mut items);
+        db.add_children(parent_inode, &items);
     } else {
         let parent_drive_item = DriveItem {
             access_id: parent.to_string(),
@@ -312,6 +316,7 @@ fn handle_add_items(db: &DbAccess, parent: &str, items: &[&PageItem]) {
 fn handle_update_parent(db: &DbAccess, parent: &str, modified_time: i64) {
     if let Some(existing_inode) = db.get_access_to_inode(parent) {
         if let Some(old_drive_item) = db.get_inode(existing_inode) {
+            let old_drive_item = old_drive_item.borrow_dependent().archived;
             if old_drive_item.modified_time == modified_time {
                 return;
             }

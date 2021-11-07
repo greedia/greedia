@@ -1288,6 +1288,7 @@ mod test {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn tester_inner(
         init_offsets: &[u64],
         init_hard_cache: &[bool],

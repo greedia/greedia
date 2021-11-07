@@ -110,6 +110,7 @@ impl DriveAccess {
         offset: u64,
     ) -> Result<TypeResult<Box<dyn CacheFileHandler>>, CacheHandlerError> {
         Ok(if let Some(drive_item) = self.db.get_inode(inode) {
+            let drive_item = drive_item.borrow_dependent().archived;
             if let ArchivedDriveItemData::FileItem {
                 file_name,
                 data_id,
@@ -178,6 +179,7 @@ impl DriveAccess {
     pub fn check_dir(&self, inode: u64) -> Result<TypeResult<bool>, CacheHandlerError> {
         let scanning = self.scanning.load(Ordering::Acquire);
         Ok(if let Some(drive_item) = self.db.get_inode(inode) {
+            let drive_item = drive_item.borrow_dependent().archived;
             if let ArchivedDriveItemData::Dir { items: _ } = drive_item.data {
                 TypeResult::IsType(scanning)
             } else {
@@ -216,7 +218,8 @@ impl DriveAccess {
         let inode = self.lookup_inode(inode, &file_name)?;
 
         let drive_item = self.db.get_inode(inode)?;
-        Some(to_t(inode, &drive_item))
+        let drive_item = drive_item.borrow_dependent().archived;
+        Some(to_t(inode, drive_item))
     }
 
     /// Unlink a filename within an inode, assuming the inode is a directory.
@@ -245,6 +248,7 @@ impl DriveAccess {
 
         // Get drive item
         let drive_item = self.db.get_inode(inode)?;
+        let drive_item = drive_item.borrow_dependent().archived;
 
         // KTODO: handle directories
         match &drive_item.data {
@@ -317,15 +321,18 @@ impl DriveAccess {
 
         // Get item's file_id
         let drive_item = self.db.get_inode(inode)?;
+        let drive_item = drive_item.borrow_dependent().archived;
         let item_file_id = drive_item.access_id.to_string();
 
         // Get parent's file_id
         let parent_item = self.db.get_inode(parent_inode)?;
+        let parent_item = parent_item.borrow_dependent().archived;
         let parent_file_id = parent_item.access_id.to_string();
 
         // Get new_parent's file_id
         let new_parent_file_id = if let Some(new_parent) = new_parent {
             let new_parent_item = self.db.get_inode(new_parent)?;
+            let new_parent_item = new_parent_item.borrow_dependent().archived;
             Some(new_parent_item.access_id.to_string())
         } else {
             None
@@ -373,6 +380,7 @@ impl DriveAccess {
         to_t: impl FnOnce(&ArchivedDriveItem) -> T,
     ) -> Option<T> {
         let drive_item = self.db.get_inode(inode)?;
+        let drive_item = drive_item.borrow_dependent().archived;
         Some(to_t(drive_item))
     }
 
@@ -401,6 +409,7 @@ impl DriveAccess {
         };
 
         let dir = self.db.get_inode(inode)?;
+        let dir = dir.borrow_dependent().archived;
 
         if let ArchivedDriveItemData::Dir { items } = &dir.data {
             for (off, item) in items.iter().enumerate().skip(offset as usize) {

@@ -2,6 +2,7 @@ use std::{convert::TryInto, path::PathBuf, pin::Pin};
 
 use rkyv::{archived_root, archived_root_mut};
 use sled::{IVec, Iter};
+use self_cell::self_cell;
 
 use super::{
     storage::{InnerDb, InnerTree},
@@ -81,21 +82,18 @@ impl LruAccess {
         res_ts_key
     }
 
-    pub fn get_data(&self, key: LruDataKey) -> Option<&ArchivedLruDataData> {
-        let key_data = key.to_bytes();
-        let data = self.data_tree.get(&key_data)?;
-        let archived = unsafe { archived_root::<LruDataData>(&data) };
-        Some(archived)
-    }
-
     pub fn set_data(&self, key: LruDataKey, data: &[u8]) -> Option<()> {
         self.data_tree.set(key.to_bytes(), data)?;
         Some(())
     }
 
-    pub fn get_ts_data_from_data(&self, data: IVec) -> Option<&ArchivedLruTimestampData> {
-        let archived = unsafe { archived_root::<LruTimestampData>(&data) };
-        Some(archived)
+    pub fn get_ts_data_from_data(&self, data: IVec) -> Option<BorrowedLruTimestampData> {
+        let lru_timestamp_data =
+            BorrowedLruTimestampData::new(data, |data| {
+                let archived = unsafe { archived_root::<LruTimestampData>(data) };
+                LLruTimestampData { archived }
+            });
+        Some(lru_timestamp_data)
     }
 
     pub fn update_data_key(&self, data_key: LruDataKey, ts_key: [u8; 9]) -> Option<[u8; 9]> {
@@ -159,7 +157,7 @@ impl LruAccess {
     }
 }
 
-struct TsIterator {
+pub struct TsIterator {
     inner_iter: Iter,
 }
 
@@ -169,4 +167,31 @@ impl TsIterator {
             .next()
             .and_then(|i| i.ok())
     }
+}
+
+
+self_cell!(
+    pub struct BorrowedLruDataData {
+        owner: IVec,
+
+        #[covariant]
+        dependent: LLruDataData,
+    }
+);
+
+pub struct LLruDataData<'a> {
+    pub archived: &'a ArchivedLruDataData,
+}
+
+self_cell!(
+    pub struct BorrowedLruTimestampData {
+        owner: IVec,
+
+        #[covariant]
+        dependent: LLruTimestampData,
+    }
+);
+
+pub struct LLruTimestampData<'a> {
+    pub archived: &'a ArchivedLruTimestampData,
 }

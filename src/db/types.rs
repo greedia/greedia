@@ -118,19 +118,19 @@ impl LruDataData {
     }
 }
 
-impl Into<DataIdentifier> for &ArchivedDataIdentifier {
-    fn into(self) -> DataIdentifier {
-        self.deserialize(&mut Infallible).unwrap()
+impl From<&ArchivedDataIdentifier> for DataIdentifier {
+    fn from(val: &ArchivedDataIdentifier) -> Self {
+        val.deserialize(&mut Infallible).unwrap()
     }
 }
 
-impl Into<DirItem> for &ArchivedDirItem {
-    fn into(self) -> DirItem {
-        self.deserialize(&mut Infallible).unwrap()
+impl From<&ArchivedDirItem> for DirItem {
+    fn from(val: &ArchivedDirItem) -> Self {
+        val.deserialize(&mut Infallible).unwrap()
     }
 }
-impl Into<DriveItemData> for &ArchivedDriveItemData {
-    fn into(self) -> DriveItemData {
-        self.deserialize(&mut Infallible).unwrap()
+impl From<&ArchivedDriveItemData> for DriveItemData {
+    fn from(val: &ArchivedDriveItemData) -> Self {
+        val.deserialize(&mut Infallible).unwrap()
     }
 }

@@ -13,6 +13,7 @@ use rkyv::{
     archived_root,
     ser::{serializers::AllocSerializer, Serializer},
 };
+use self_cell::self_cell;
 use sled::{IVec, Iter};
 
 use super::{
@@ -53,7 +54,7 @@ impl DbAccess {
         Some(inode)
     }
 
-    pub fn get_access(&self, access_id: &str) -> Option<&ArchivedDriveItem> {
+    pub fn get_access(&self, access_id: &str) -> Option<BorrowedDriveItem> {
         let inode = self.get_access_to_inode(access_id)?;
         self.get_inode(inode)
     }
@@ -64,7 +65,7 @@ impl DbAccess {
         Some(())
     }
 
-    pub fn rm_access_full(&self, access_id: &str) -> Option<(u64, &ArchivedDriveItem)> {
+    pub fn rm_access_full(&self, access_id: &str) -> Option<(u64, BorrowedDriveItem)> {
         let inode = self.rm_access(access_id)?;
         let drive_item = self.rm_inode(inode)?;
         Some((inode, drive_item))
@@ -81,15 +82,23 @@ impl DbAccess {
         Some(inode)
     }
 
-    pub fn get_inode(&self, inode: u64) -> Option<&ArchivedDriveItem> {
+    pub fn get_inode(&self, inode: u64) -> Option<BorrowedDriveItem> {
         let data = self.trees.inode.get(inode.to_le_bytes())?;
-        let archived = unsafe { archived_root::<DriveItem>(&data) };
-        Some(archived)
+        let drive_item =
+            BorrowedDriveItem::new(data, |data| {
+                let archived = unsafe { archived_root::<DriveItem>(data) };
+                LDriveItem { archived }
+            });
+        Some(drive_item)
     }
 
-    pub fn get_inode_from_data(&self, data: IVec) -> Option<&ArchivedDriveItem> {
-        let archived = unsafe { archived_root::<DriveItem>(&data) };
-        Some(archived)
+    pub fn get_inode_from_data(&self, data: IVec) -> Option<BorrowedDriveItem> {
+        let drive_item =
+            BorrowedDriveItem::new(data, |data| {
+                let archived = unsafe { archived_root::<DriveItem>(data) };
+                LDriveItem { archived }
+            });
+        Some(drive_item)
     }
 
     pub fn iter_inode(&self) -> InodeIterator {
@@ -100,17 +109,21 @@ impl DbAccess {
     pub fn set_inode(&self, inode: u64, drive_item: DriveItem) -> Option<()> {
         let mut serializer = AllocSerializer::<4096>::default();
         serializer.serialize_value(&drive_item).unwrap();
-        let data = serializer.into_serializer().into_inner().as_slice();
+        let data = serializer.into_serializer().into_inner();
 
-        self.trees.inode.set(inode.to_le_bytes(), data)?;
+        self.trees.inode.set(inode.to_le_bytes(), data.as_slice())?;
 
         Some(())
     }
 
-    pub fn rm_inode(&self, inode: u64) -> Option<&ArchivedDriveItem> {
+    pub fn rm_inode(&self, inode: u64) -> Option<BorrowedDriveItem> {
         let data = self.trees.inode.remove(inode.to_le_bytes())?;
-        let archived = unsafe { archived_root::<DriveItem>(&data) };
-        Some(archived)
+        let drive_item =
+            BorrowedDriveItem::new(data, |data| {
+                let archived = unsafe { archived_root::<DriveItem>(data) };
+                LDriveItem { archived }
+            });
+        Some(drive_item)
     }
 
     pub fn get_lookup(&self, parent_inode: u64, child_name: &str) -> Option<u64> {
@@ -145,37 +158,38 @@ impl DbAccess {
         Some(child_inode)
     }
 
-    pub fn get_raccess(&self, access_id: &str) -> Option<&ArchivedReverseAccess> {
-        let data = self.trees.raccess.get(access_id.as_bytes())?;
-        let archived = unsafe { archived_root::<ReverseAccess>(&data) };
-        Some(archived)
-    }
-
     pub fn set_raccess(&self, access_id: &str, raccess: &ReverseAccess) -> Option<()> {
         let mut serializer = AllocSerializer::<4096>::default();
         serializer.serialize_value(raccess).unwrap();
 
         let data = serializer.into_serializer().into_inner();
-        self.trees.raccess.set(access_id.as_bytes(), data.as_slice())?;
+        self.trees
+            .raccess
+            .set(access_id.as_bytes(), data.as_slice())?;
 
         Some(())
     }
 
-    pub fn rm_raccess(&self, access_id: &str) -> Option<&ArchivedReverseAccess> {
+    pub fn rm_raccess(&self, access_id: &str) -> Option<BorrowedReverseAccess> {
         let data = self.trees.raccess.remove(access_id.as_bytes())?;
-        let archived = unsafe { archived_root::<ReverseAccess>(&data) };
-        Some(archived)
+        let reverse_access =
+            BorrowedReverseAccess::new(data, |data| {
+                let archived = unsafe { archived_root::<ReverseAccess>(data) };
+                LReverseAccess { archived }
+            });
+        Some(reverse_access)
     }
 
     pub fn add_children(&self, parent_inode: u64, children: &[DirItem]) -> Option<i64> {
         let parent_item = self.get_inode(parent_inode)?;
+        let parent_item = parent_item.borrow_dependent().archived;
 
         if let ArchivedDriveItemData::Dir { items } = &parent_item.data {
             let mut children_set: HashMap<String, DirItem> = children
-                .into_iter()
+                .iter()
                 .map(|x| (x.name.to_string(), x.clone()))
                 .collect();
-            for item in items.into_iter().map(|x| x.into()) {
+            for item in items.iter().map(|x| x.into()) {
                 let item: DirItem = item;
                 children_set.insert(item.name.to_string(), item);
             }
@@ -201,6 +215,7 @@ impl DbAccess {
     /// Remove a child from a directory, returning the value.
     pub fn rm_child(&self, parent_inode: u64, child_name: &str) -> Option<()> {
         let parent_item = self.get_inode(parent_inode)?;
+        let parent_item = parent_item.borrow_dependent().archived;
 
         let mut new_items;
         if let ArchivedDriveItemData::Dir { items } = &parent_item.data {
@@ -230,6 +245,7 @@ impl DbAccess {
 
     pub fn rename_child(&self, parent_inode: u64, child_name: &str, new_name: &str) -> Option<()> {
         let parent_item = self.get_inode(parent_inode)?;
+        let parent_item = parent_item.borrow_dependent().archived;
 
         let mut new_items;
         if let ArchivedDriveItemData::Dir { items } = &parent_item.data {
@@ -267,6 +283,7 @@ impl DbAccess {
         new_name: Option<&str>,
     ) -> Option<()> {
         let parent_item = self.get_inode(parent_inode)?;
+        let parent_item = parent_item.borrow_dependent().archived;
 
         // Find original item
         let mut dir_item = None;
@@ -395,17 +412,6 @@ impl DbAccess {
         Some(())
     }
 
-    pub fn get_last_scan_start(&self) -> Option<i64> {
-        let lss_data = self.trees.scan.get(b"last_scan_start")?;
-        let lss_int = i64::from_le_bytes(
-            lss_data
-                .as_ref()
-                .try_into()
-                .expect("try_into from_le_bytes failed. DB might be corrupt."),
-        );
-        Some(lss_int)
-    }
-
     pub fn rm_last_scan_start(&self) -> Option<i64> {
         let lss_data = self.trees.scan.remove(b"last_scan_start")?;
         let lss_int = i64::from_le_bytes(
@@ -488,7 +494,7 @@ pub fn make_lookup_key(parent_inode: u64, child_name: &str) -> Vec<u8> {
     out
 }
 
-struct InodeIterator {
+pub struct InodeIterator {
     inner_iter: Iter,
 }
 
@@ -499,4 +505,30 @@ impl InodeIterator {
             .and_then(|i| i.ok())
             .map(|(_, data)| data)
     }
+}
+
+self_cell!(
+    pub struct BorrowedDriveItem {
+        owner: IVec,
+
+        #[covariant]
+        dependent: LDriveItem,
+    }
+);
+
+pub struct LDriveItem<'a> {
+    pub archived: &'a ArchivedDriveItem,
+}
+
+self_cell!(
+    pub struct BorrowedReverseAccess {
+        owner: IVec,
+
+        #[covariant]
+        dependent: LReverseAccess,
+    }
+);
+
+pub struct LReverseAccess<'a> {
+    pub archived: &'a ArchivedReverseAccess,
 }

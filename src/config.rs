@@ -41,6 +41,7 @@ pub struct Config {
     pub generic_cacher: GenericCache,
     pub gdrive: Option<HashMap<String, ConfigGoogleDrive>>,
     pub timecode: Option<HashMap<String, ConfigTimecodeDrive>>,
+    pub scratch: Option<HashMap<String, ConfigScratch>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -116,6 +117,13 @@ pub struct ConfigGoogleDrive {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ConfigTimecodeDrive {
     pub drive_id: String,
+}
+
+/// Configuration for a Scratch drive. This is a passthrough drive to allow a downloader
+/// to "hard-link" files to another drive with upload enabled.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ConfigScratch {
+    pub path: PathBuf,
 }
 
 pub fn validate_config(_cfg: &Config) -> bool {

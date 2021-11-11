@@ -33,13 +33,14 @@ pub enum TypeResult<T> {
 }
 
 /// Abstraction between the FUSE mount and the drive handlers.
+/// This is for drives that use the cache backend.
 ///
 /// This is where directory traversal is handled, as well as
 /// things like encrypted drives and custom root paths.
 ///
 /// Many of the methods contain a `to_t` or `for_each` closure
 /// parameter. This allows for drive access with minimal copying.
-pub struct DriveAccess {
+pub struct CacheDriveAccess {
     /// The name of the drive
     pub name: String,
     /// Cache handler that handles actual storage and retrieval
@@ -67,7 +68,7 @@ pub struct DriveAccess {
     root_inode: AtomicU64,
 }
 
-impl std::fmt::Debug for DriveAccess {
+impl std::fmt::Debug for CacheDriveAccess {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DriveAccess")
             .field("name", &self.name)
@@ -75,7 +76,7 @@ impl std::fmt::Debug for DriveAccess {
     }
 }
 
-impl DriveAccess {
+impl CacheDriveAccess {
     /// Create a new DriveAccess.
     pub fn new(
         name: String,
@@ -84,7 +85,7 @@ impl DriveAccess {
         root_path: Option<PathBuf>,
         uses_crypt: bool,
         crypts: Vec<Arc<CryptContext>>,
-    ) -> DriveAccess {
+    ) -> CacheDriveAccess {
         let db = db.drive_access(
             cache_handler.get_drive_type(),
             &cache_handler.get_drive_id(),
@@ -92,7 +93,7 @@ impl DriveAccess {
         let root_inode = AtomicU64::new(u64::MAX);
         // Scanning is considered "on" by default.
         let scanning = AtomicBool::new(true);
-        DriveAccess {
+        CacheDriveAccess {
             name,
             cache_handler,
             db,
@@ -193,7 +194,7 @@ impl DriveAccess {
     /// Look up a filename within an inode, assuming the inode is a directory.
     ///
     /// If inode is file or file_name doesn't exist within the inode, return None.
-    pub fn lookup_item<T>(
+    pub fn lookup<T>(
         &self,
         inode: u64,
         file_name: &str,
@@ -225,7 +226,7 @@ impl DriveAccess {
     /// Unlink a filename within an inode, assuming the inode is a directory.
     ///
     /// If inode is file or file_name doesn't exist within the inode, return None.
-    pub async fn unlink_item(&self, parent: u64, file_name: &str) -> Option<()> {
+    pub async fn unlink(&self, parent: u64, file_name: &str) -> Option<()> {
         // KTODO: extract this to function
         let parent_inode = if parent == 0 {
             self.root_inode().unwrap_or(0)
@@ -276,7 +277,7 @@ impl DriveAccess {
 
     /// Rename and/or move a file.
     #[instrument]
-    pub async fn rename_item(
+    pub async fn rename(
         &self,
         parent: u64,
         file_name: &str,
@@ -379,11 +380,7 @@ impl DriveAccess {
     }
 
     /// Get the attributes for a given inode.
-    pub fn getattr_item<T>(
-        &self,
-        inode: u64,
-        to_t: impl FnOnce(&ArchivedDriveItem) -> T,
-    ) -> Option<T> {
+    pub fn getattr<T>(&self, inode: u64, to_t: impl FnOnce(&ArchivedDriveItem) -> T) -> Option<T> {
         let drive_item = self.db.get_inode(inode)?;
         let drive_item = drive_item.borrow_dependent().archived;
         Some(to_t(drive_item))

@@ -26,7 +26,7 @@ use crate::{
     },
     config::{DownloadAmount, SmartCacherConfig},
     db::types::DataIdentifier,
-    drive_access::DriveAccess,
+    drive_access::cache::CacheDriveAccess,
 };
 
 #[cfg(feature = "sctest")]
@@ -67,7 +67,7 @@ pub struct HardCacheMetadata {
 }
 
 pub struct HardCacher {
-    drive_access: Option<Arc<DriveAccess>>,
+    drive_access: Option<Arc<CacheDriveAccess>>,
     cacher: Arc<dyn HcCacher + Send + Sync>,
     cachers_by_ext: HashMap<&'static str, &'static dyn SmartCacher>,
     min_size: u64,
@@ -75,7 +75,7 @@ pub struct HardCacher {
 
 impl HardCacher {
     /// Create a new HardCacher for production use.
-    pub fn new(drive_access: Arc<DriveAccess>, min_size: u64) -> HardCacher {
+    pub fn new(drive_access: Arc<CacheDriveAccess>, min_size: u64) -> HardCacher {
         let cacher = Arc::new(HcDownloadCacher {
             drive_access: drive_access.clone(),
         });
@@ -106,7 +106,7 @@ impl HardCacher {
     fn new_inner(
         cacher: Arc<dyn HcCacher + Send + Sync>,
         min_size: u64,
-        drive_access: Option<Arc<DriveAccess>>,
+        drive_access: Option<Arc<CacheDriveAccess>>,
     ) -> HardCacher {
         let mut cachers_by_ext = HashMap::new();
 
@@ -374,7 +374,7 @@ pub trait HcCacherItem {
 }
 
 struct HcDownloadCacher {
-    drive_access: Arc<DriveAccess>,
+    drive_access: Arc<CacheDriveAccess>,
 }
 
 #[async_trait]
@@ -400,7 +400,7 @@ impl HcCacher for HcDownloadCacher {
 
 struct HcDownloadCacherItem {
     /// Access to the cache filesystem.
-    drive_access: Arc<DriveAccess>,
+    drive_access: Arc<CacheDriveAccess>,
     /// Details about the item to download.
     item: HardCacheItem,
     /// Set of readers at specific offsets.
@@ -408,7 +408,7 @@ struct HcDownloadCacherItem {
 }
 
 impl HcDownloadCacherItem {
-    async fn new(drive_access: Arc<DriveAccess>, item: HardCacheItem) -> HcDownloadCacherItem {
+    async fn new(drive_access: Arc<CacheDriveAccess>, item: HardCacheItem) -> HcDownloadCacherItem {
         HcDownloadCacherItem {
             drive_access,
             item,

@@ -12,7 +12,7 @@ use cache_handlers::{
 };
 use db::Db;
 use downloaders::{gdrive::GDriveClient, timecode::TimecodeDrive, DownloaderClient};
-use drive_access::DriveAccess;
+use drive_access::{cache::CacheDriveAccess, scratch::ScratchDriveAccess};
 use futures::future::join_all;
 #[cfg(feature = "sctest")]
 use hard_cache::HardCacher;
@@ -33,7 +33,11 @@ mod prio_limit;
 mod scanner;
 mod types;
 
-use config::{validate_config, Config, ConfigGoogleDrive, ConfigTimecodeDrive, Tweaks};
+use config::{
+    validate_config, Config, ConfigGoogleDrive, ConfigScratch, ConfigTimecodeDrive, Tweaks,
+};
+
+use crate::drive_access::GenericDrive;
 
 pub static TWEAKS: OnceCell<Tweaks> = OnceCell::new();
 
@@ -123,19 +127,22 @@ async fn run(config_path: &Path) -> Result<()> {
             get_gdrive_drives(&cfg.caching.db_path, lru.clone(), db.clone(), gdrives).await?,
         );
     }
-    if let Some(timecode_drives) = cfg.timecode {
+    if let Some(timecode_cfgs) = cfg.timecode {
         drives.extend(
-            get_timecode_drives(
-                &cfg.caching.db_path,
-                lru.clone(),
-                db.clone(),
-                timecode_drives,
-            )
-            .await?,
+            get_timecode_drives(&cfg.caching.db_path, lru.clone(), db.clone(), timecode_cfgs)
+                .await?,
         );
     }
 
+    // Scratch drives don't go through a cache, so handle them separately
+    let mut scratch_drives = Vec::new();
+
+    if let Some(scratch_cfgs) = cfg.scratch {
+        scratch_drives.extend(get_scratch_drives(scratch_cfgs).await?);
+    }
+
     // Start a scanner for each cache handler
+    // Don't include non-cache drive handlers
     let mut join_handles = vec![];
     for drive_access in drives
         .iter()
@@ -145,11 +152,15 @@ async fn run(config_path: &Path) -> Result<()> {
         join_handles.push(tokio::spawn(scan_thread(drive_access.clone())));
     }
 
+    // Combine cache and scratch drives to pass to mount
+    let drives = drives
+        .into_iter()
+        .map(|(cda, _)| GenericDrive::Drive(cda))
+        .chain(scratch_drives.into_iter().map(GenericDrive::Scratch))
+        .collect();
+
     // Start a mount thread
-    join_handles.push(tokio::spawn(mount_thread(
-        drives.into_iter().map(|(da, _)| da).collect(),
-        cfg.caching.mount_point,
-    )));
+    join_handles.push(tokio::spawn(mount_thread(drives, cfg.caching.mount_point)));
 
     join_all(join_handles).await;
 
@@ -161,7 +172,7 @@ async fn get_gdrive_drives(
     lru: Lru,
     db: Db,
     gdrives: HashMap<String, ConfigGoogleDrive>,
-) -> Result<Vec<(Arc<DriveAccess>, bool)>> {
+) -> Result<Vec<(Arc<CacheDriveAccess>, bool)>> {
     let hard_cache_root = cache_path.join("hard_cache");
     let soft_cache_root = cache_path.join("soft_cache");
 
@@ -219,7 +230,7 @@ async fn get_gdrive_drives(
 
         let root_path = cfg_drive.root_path.map(PathBuf::from);
 
-        let da = DriveAccess::new(
+        let da = CacheDriveAccess::new(
             name.clone(),
             cache_handler,
             db.clone(),
@@ -242,7 +253,7 @@ async fn get_timecode_drives(
     lru: Lru,
     db: Db,
     timecode_drives: HashMap<String, ConfigTimecodeDrive>,
-) -> Result<Vec<(Arc<DriveAccess>, bool)>> {
+) -> Result<Vec<(Arc<CacheDriveAccess>, bool)>> {
     let hard_cache_root = cache_path.join("hard_cache");
     let soft_cache_root = cache_path.join("soft_cache");
 
@@ -259,12 +270,26 @@ async fn get_timecode_drives(
             drive,
         ));
 
-        let da = DriveAccess::new(name.clone(), cache_handler, db.clone(), None, false, vec![]);
+        let da =
+            CacheDriveAccess::new(name.clone(), cache_handler, db.clone(), None, false, vec![]);
 
         da_out.push((Arc::new(da), true));
     }
 
     Ok(da_out)
+}
+
+async fn get_scratch_drives(
+    scratch_drives: HashMap<String, ConfigScratch>,
+) -> Result<Vec<ScratchDriveAccess>> {
+    let mut sa_out = Vec::new();
+    for (name, cfg_drive) in scratch_drives {
+        let sa = ScratchDriveAccess::new(name, cfg_drive.path);
+
+        sa_out.push(sa)
+    }
+
+    Ok(sa_out)
 }
 
 #[cfg(feature = "sctest")]

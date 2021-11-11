@@ -19,13 +19,13 @@ use crate::{
         DbAccess,
     },
     downloaders::Change,
-    drive_access::DriveAccess,
+    drive_access::cache::CacheDriveAccess,
     hard_cache::HardCacher,
     tweaks,
 };
 
 /// Main async task that runs the scanning for this drive.
-pub async fn scan_thread(drive_access: Arc<DriveAccess>) {
+pub async fn scan_thread(drive_access: Arc<CacheDriveAccess>) {
     let name = drive_access.name.clone();
     let drive_type = drive_access.cache_handler.get_drive_type();
     let drive_id = drive_access.cache_handler.get_drive_id().clone();
@@ -67,7 +67,7 @@ pub async fn scan_thread(drive_access: Arc<DriveAccess>) {
 }
 
 /// Async task that watches for changes to this drive.
-async fn watch_thread(db: DbAccess, drive_access: Arc<DriveAccess>) {
+async fn watch_thread(db: DbAccess, drive_access: Arc<CacheDriveAccess>) {
     let mut change_stream = drive_access.cache_handler.watch_changes();
     let hard_cacher = HardCacher::new(drive_access.clone(), 1_000_000); // TODO: not hardcode min_size
 
@@ -148,7 +148,7 @@ async fn perform_scan(
 }
 
 /// Use HardCacher to hard cache data required for all files.
-async fn perform_caching(db: &DbAccess, drive_access: Arc<DriveAccess>) {
+async fn perform_caching(db: &DbAccess, drive_access: Arc<CacheDriveAccess>) {
     // Start 10 threads for caching
     let mut thread_joiners = vec![];
     {
@@ -169,7 +169,7 @@ async fn perform_caching(db: &DbAccess, drive_access: Arc<DriveAccess>) {
     join_all(thread_joiners).await;
 }
 
-async fn caching_thread(db: DbAccess, drive_access: Arc<DriveAccess>, recv: Receiver<IVec>) {
+async fn caching_thread(db: DbAccess, drive_access: Arc<CacheDriveAccess>, recv: Receiver<IVec>) {
     let hard_cacher = HardCacher::new(drive_access.clone(), 1_000_000); // TODO: not hardcode min_size
     let mut stream = recv.into_stream();
     while let Some(data) = stream.next().await {

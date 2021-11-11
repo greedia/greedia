@@ -20,7 +20,7 @@ use tokio::{
 use crate::{
     cache_handlers::{CacheFileHandler, CacheHandlerError},
     db::types::ArchivedDriveItemData,
-    drive_access::{DriveAccess, TypeResult},
+    drive_access::{cache::TypeResult, GenericDrive},
     fh_map::FhMap,
     tweaks,
 };
@@ -30,7 +30,7 @@ const ITEM_BITS: usize = 48;
 const DRIVE_OFFSET: u64 = 1 << ITEM_BITS;
 const ITEM_MASK: u64 = DRIVE_OFFSET - 1;
 
-pub async fn mount_thread(drives: Vec<Arc<DriveAccess>>, mountpoint: PathBuf) {
+pub async fn mount_thread(drives: Vec<GenericDrive>, mountpoint: PathBuf) {
     let mut config = KernelConfig::default();
     if tweaks().mount_read_write {
         println!("TWEAK: mounting read-write");
@@ -87,14 +87,14 @@ struct FileHandle {
 }
 
 struct GreediaFS {
-    drives: Vec<Arc<DriveAccess>>,
+    drives: Vec<GenericDrive>,
     start_time: Duration,
     file_handles: FhMap<FileHandle>,
     kernel_dir_caching: bool,
 }
 
 impl GreediaFS {
-    pub fn new(drives: Vec<Arc<DriveAccess>>) -> GreediaFS {
+    pub fn new(drives: Vec<GenericDrive>) -> GreediaFS {
         let start = SystemTime::now();
         let start_time = start
             .duration_since(UNIX_EPOCH)
@@ -165,7 +165,7 @@ impl GreediaFS {
     /// Fill in the file attribute for a `getattr()` call to any file or directory within a drive.
     fn getattr_item(&self, drive: u16, inode: u64, file_attr: &mut FileAttr) -> Option<Duration> {
         let drive_access = self.drives.get(drive as usize)?;
-        drive_access.getattr_item(inode, |item| {
+        drive_access.getattr(inode, |item| {
             let global_inode = self.rev_inode(Inode::Drive(drive, inode));
             file_attr.ino(global_inode);
             match &item.data {
@@ -193,7 +193,8 @@ impl GreediaFS {
     /// the kernel is instructed to always cache the root.
     fn readdir_root(&self, offset: u64, readdir_out: &mut ReaddirOut) {
         for (num, drive) in self.drives.iter().skip(offset as usize).enumerate() {
-            let name = OsStr::new(&drive.name);
+            let name = drive.name();
+            let name = OsStr::new(name);
             let ino = self.rev_inode(Inode::Drive(num as u16, 0));
             let typ = libc::DT_DIR as u32;
             let off = num as u64 + 1;
@@ -238,11 +239,11 @@ impl GreediaFS {
     ///
     /// Returns an entry if a drive name within the root mount exists.
     fn lookup_root(&self, name: &OsStr) -> Option<EntryOut> {
-        let name = name.to_str()?;
+        let name = name;
         let drive_num = self
             .drives
             .iter()
-            .position(|drive_access| drive_access.name == name)?;
+            .position(|drive_access| drive_access.name() == name)?;
 
         let mut entry_out = EntryOut::default();
         entry_out.ino(self.rev_inode(Inode::Drive(drive_num as u16, 0)));
@@ -268,35 +269,34 @@ impl GreediaFS {
         let drive_access = self.drives.get(drive as usize)?;
         let file_name = name.to_str()?;
 
-        let reply_entry =
-            drive_access.lookup_item(inode, file_name, |child_inode, drive_item| {
-                let global_inode = self.rev_inode(Inode::Drive(drive, child_inode));
-                let dur = Duration::from_secs(drive_item.modified_time.value() as u64);
+        let reply_entry = drive_access.lookup(inode, file_name, |child_inode, drive_item| {
+            let global_inode = self.rev_inode(Inode::Drive(drive, child_inode));
+            let dur = Duration::from_secs(drive_item.modified_time.value() as u64);
 
-                let mut reply_entry = EntryOut::default();
-                let file_attr = reply_entry.attr();
-                if let ArchivedDriveItemData::FileItem {
-                    file_name: _,
-                    data_id: _,
-                    size,
-                } = drive_item.data
-                {
-                    file_attr.size(size.value());
-                    file_attr.mode(libc::S_IFREG as u32 | 0o444);
-                } else {
-                    file_attr.mode(libc::S_IFDIR as u32 | 0o555);
-                }
-                file_attr.ctime(dur);
-                file_attr.mtime(dur);
-                file_attr.ino(global_inode);
+            let mut reply_entry = EntryOut::default();
+            let file_attr = reply_entry.attr();
+            if let ArchivedDriveItemData::FileItem {
+                file_name: _,
+                data_id: _,
+                size,
+            } = drive_item.data
+            {
+                file_attr.size(size.value());
+                file_attr.mode(libc::S_IFREG as u32 | 0o444);
+            } else {
+                file_attr.mode(libc::S_IFDIR as u32 | 0o555);
+            }
+            file_attr.ctime(dur);
+            file_attr.mtime(dur);
+            file_attr.ino(global_inode);
 
-                reply_entry.ino(global_inode);
-                if self.kernel_dir_caching {
-                    reply_entry.ttl_attr(TTL_LONG);
-                    reply_entry.ttl_entry(TTL_LONG);
-                }
-                reply_entry
-            })?;
+            reply_entry.ino(global_inode);
+            if self.kernel_dir_caching {
+                reply_entry.ttl_attr(TTL_LONG);
+                reply_entry.ttl_entry(TTL_LONG);
+            }
+            reply_entry
+        })?;
 
         Some(reply_entry)
     }
@@ -309,7 +309,7 @@ impl GreediaFS {
         let drive_access = self.drives.get(drive as usize)?;
         let file_name = name.to_str()?;
 
-        drive_access.unlink_item(inode, file_name).await
+        drive_access.unlink(inode, file_name).await
     }
 
     /// Renames and/or moves a file within a drive directory.
@@ -338,7 +338,7 @@ impl GreediaFS {
         };
 
         drive_access
-            .rename_item(parent, file_name, new_parent, new_name)
+            .rename(parent, file_name, new_parent, new_name)
             .await
     }
 

@@ -26,7 +26,7 @@ mod config;
 mod db;
 mod downloaders;
 mod drive_access;
-mod fh_map;
+mod item_map;
 mod hard_cache;
 mod mount;
 mod prio_limit;
@@ -284,7 +284,7 @@ async fn get_scratch_drives(
 ) -> Result<Vec<ScratchDriveAccess>> {
     let mut sa_out = Vec::new();
     for (name, cfg_drive) in scratch_drives {
-        let sa = ScratchDriveAccess::new(name, cfg_drive.path);
+        let sa = ScratchDriveAccess::new(name, cfg_drive.path).await;
 
         sa_out.push(sa)
     }

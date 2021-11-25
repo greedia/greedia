@@ -80,6 +80,18 @@ impl GenericDrive {
         }
     }
 
+    pub async fn forget(
+        &self,
+        inode: u64
+    ) {
+        // Only forget on scratch drives.
+        // The CacheHandler doesn't need this functionality for now.
+        match self {
+            GenericDrive::Drive(_) => (),
+            GenericDrive::Scratch(s) => s.forget(inode).await,
+        }
+    }
+
     pub fn check_dir(&self, inode: u64) -> Result<TypeResult<bool>, CacheHandlerError> {
         match self {
             GenericDrive::Drive(d) => d.check_dir(inode),

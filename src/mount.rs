@@ -21,7 +21,7 @@ use crate::{
     cache_handlers::{CacheFileHandler, CacheHandlerError},
     db::types::ArchivedDriveItemData,
     drive_access::{cache::TypeResult, GenericDrive},
-    fh_map::FhMap,
+    item_map::ItemMap,
     tweaks,
 };
 
@@ -64,6 +64,11 @@ pub async fn mount_thread(drives: Vec<GenericDrive>, mountpoint: PathBuf) {
                 Operation::Release(op) => fs.do_release(&req, op).await?,
                 Operation::Unlink(op) => fs.do_unlink(&req, op).await?,
                 Operation::Rename(op) => fs.do_rename(&req, op).await?,
+                Operation::Forget(forgets) => {
+                    for op in forgets.as_ref() {
+                        fs.do_forget(&req, op).await?
+                    }
+                },
                 _ => req.reply_error(libc::ENOSYS)?,
             }
 
@@ -89,7 +94,7 @@ struct FileHandle {
 struct GreediaFS {
     drives: Vec<GenericDrive>,
     start_time: Duration,
-    file_handles: FhMap<FileHandle>,
+    file_handles: ItemMap<FileHandle>,
     kernel_dir_caching: bool,
 }
 
@@ -99,7 +104,7 @@ impl GreediaFS {
         let start_time = start
             .duration_since(UNIX_EPOCH)
             .expect("Could not get duration since unix epoch");
-        let file_handles = FhMap::new();
+        let file_handles = ItemMap::new();
         GreediaFS {
             drives,
             start_time,
@@ -357,7 +362,7 @@ impl GreediaFS {
                     TypeResult::IsType(reader) => {
                         let fh = self
                             .file_handles
-                            .open(FileHandle {
+                            .create(FileHandle {
                                 offset: 0,
                                 reader,
                                 buffer: vec![0u8; 65536],
@@ -385,7 +390,9 @@ impl GreediaFS {
     async fn opendir_root(&self) -> OpenOut {
         let mut open_out = OpenOut::default();
         open_out.fh(0);
-        open_out.cache_dir(true);
+        if self.kernel_dir_caching {
+            open_out.cache_dir(true);
+        }
         open_out
     }
 
@@ -404,8 +411,10 @@ impl GreediaFS {
                     TypeResult::IsType(scanning) => {
                         let mut open_out = OpenOut::default();
                         open_out.fh(0);
-                        open_out.keep_cache(!scanning);
-                        open_out.cache_dir(!scanning);
+                        if self.kernel_dir_caching {
+                            open_out.keep_cache(!scanning);
+                            open_out.cache_dir(!scanning);
+                        }
                         TypeResult::IsType(open_out)
                     }
                     TypeResult::IsNotType => TypeResult::IsNotType,
@@ -415,6 +424,15 @@ impl GreediaFS {
                 TypeResult::DoesNotExist
             },
         )
+    }
+
+    /// Tells a drive to forget an inode, because the kernel invalidated its cache.
+    /// 
+    /// Only really matters on scratch drives.
+    async fn forget_drive(&self, drive: u16, local_inode: u64) {
+        if let Some(drive_access) = self.drives.get(drive as usize) {
+            drive_access.forget(local_inode).await;
+        }
     }
 
     /// Pass a FUSE `getattr()` call to the correct sub-method (root, drive, item).
@@ -590,7 +608,7 @@ impl GreediaFS {
     /// This is usually called when a file is closed.
     async fn do_release(&self, req: &Request, op: op::Release<'_>) -> io::Result<()> {
         let fh = op.fh();
-        self.file_handles.close(fh).await;
+        self.file_handles.remove(fh).await;
         println!("REL {}, {}", fh, &self.file_handles.len().await);
 
         req.reply(())?;
@@ -652,6 +670,24 @@ impl GreediaFS {
         } else {
             req.reply_error(libc::ENOENT)?;
         }
+
+        Ok(())
+    }
+
+
+    /// Handle a FUSE `forget()` call.
+    /// 
+    /// This tells the filesystem that a kernel cache entry was removed.
+    /// Therefore, we can remove any information we're also caching.
+    async fn do_forget(&self, req: &Request, op: &op::Forget) -> io::Result<()> {
+        let inode = op.ino();
+        // Only do anything when forgetting drive items inodes.
+        if let Inode::Drive(drive, local_inode) = self.map_inode(inode) {
+            self.forget_drive(drive, local_inode).await
+        };
+        
+        // Always accept forget calls, and return success.
+        req.reply(())?;
 
         Ok(())
     }

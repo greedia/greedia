@@ -3,26 +3,30 @@ use std::sync::Arc;
 use rustc_hash::FxHashMap;
 use tokio::sync::{Mutex, RwLock};
 
-struct FhMapInner<T> {
+struct ItemMapInner<T> {
     map: FxHashMap<u64, Arc<Mutex<T>>>,
     next_fh: u64,
 }
 
-/// Map of open file handles on the FUSE side.
-pub struct FhMap<T>(RwLock<FhMapInner<T>>);
+/// Map of items addressed by u64, mostly used for file handles.
+pub struct ItemMap<T>(RwLock<ItemMapInner<T>>);
 
-impl<T> FhMap<T> {
-    pub fn new() -> FhMap<T> {
-        FhMap(RwLock::new(FhMapInner {
+impl<T> ItemMap<T> {
+    pub fn new() -> ItemMap<T> {
+        Self::new_start_at(0)
+    }
+
+    pub fn new_start_at(start: u64) -> ItemMap<T> {
+        ItemMap(RwLock::new(ItemMapInner {
             map: FxHashMap::default(),
-            next_fh: 0,
+            next_fh: start,
         }))
     }
 
-    pub async fn open(&self, file: T) -> u64 {
+    pub async fn create(&self, data: T) -> u64 {
         let mut inner_w = self.0.write().await;
 
-        let file = Arc::new(Mutex::new(file));
+        let file = Arc::new(Mutex::new(data));
 
         let fh = inner_w.next_fh;
         inner_w.next_fh += 1;
@@ -37,7 +41,7 @@ impl<T> FhMap<T> {
         inner_r.map.get(&fh).cloned()
     }
 
-    pub async fn close(&self, fh: u64) {
+    pub async fn remove(&self, fh: u64) {
         let mut inner_w = self.0.write().await;
         inner_w.map.remove(&fh);
     }

@@ -1,6 +1,9 @@
 # Greedia
 
-Greedia is a cloud-drive mounting application with the goal of heavily caching media and serving it fast. It does this by indexing the drive upfront and smart-caching the beginning of every media file (by default, 10 seconds).
+Greedia is a cloud-drive mounting application with the goal of heavily caching media and serving it fast. It does this by indexing the drive upfront and smart-caching the beginning of every media file (by default, 10 seconds of content).
+
+The Greedia cache contains a permanent cache with the first X seconds of each file (the "hard cache"), along with
+a space-limited cache for the rest of the data (the "soft cache").
 
 ***Greedia is extremely alpha at the moment, and the polish and documentation are very lacking. Expect things to break.***
 
@@ -19,7 +22,7 @@ Rclone-encrypted files are also supported.
 
 ## Installation
 
-Greedia will be added to cargo eventually, though for now you can install directly from git using:
+Greedia will be added to crates<span>.io eventually, however for now you can install directly from git using:
 
 ```
 cargo install --git https://github.com/greedia/greedia
@@ -27,7 +30,7 @@ cargo install --git https://github.com/greedia/greedia
 
 ## Configuration
 
-Greedia will eventually have an rclone-style initialization command, but at the moment configuration is manual.
+Greedia will eventually have an rclone-style initialization command but at the moment, configuration is manual.
 As Greedia is meant to be an `rclone mount` replacement, you should be able to base the Greedia configuration on an rclone configuration under most circumstances.
 
 For example, if you have an rclone configuration that looks like this:
@@ -73,12 +76,14 @@ If you have service accounts you want to use with a `gdrive`, save the JSON form
 service_accounts = [ "/path/to/sa1.json", "/path/to/sa2.json", "path/to/sa3.json" ]
 ```
 
-Rinse and repeat for each service account file you have. It is recommended to have at least a few service accounts, as they will speed up the initial scanning immensely.
+Rinse and repeat for each service account file you have. If you have many files, it is recommended to add at least a few service accounts, as they will speed up the initial scanning immensely.
 
 If you want `mydrive`'s root to be a directory within the drive, add this line to the `gdrive.mydrive` section:
 ```toml
 root_path = "/path/within/drive"
 ```
+
+For more options, look at `greedia_example_config.toml`.
 
 ## Running
 

@@ -1,0 +1,53 @@
+[caching]
+db_path = "/path/to/greedia/db"  # Greedia's database
+mount_point = "/path/to/mount/point"  # Where to FUSE-mount the drives
+soft_cache_limit = 10_000_000_000  # Limit the soft cache to 10GB
+min_size = 100_000  # If a file is below this size, hard-cache it.
+use_smart_caching = true  # Whether or not to smart-cache media headers and content.
+use_generic_caching = true  # If smart-caching fails, just cache the first and last bytes of a file.
+# If both use_smart_caching and use_generic_caching are false, disable hard caching.
+
+[smart_cachers]
+# Smart cachers can be enabled or disabled individually, and the number of seconds
+# at the start of a file to be cached can be configured as well.
+default = { enabled = true, seconds = 10 }  # Values to set for all smart cachers.
+sc_mp3 = { enabled = true, seconds = 10 }  # Values to set for the mp3 smart cacher.
+sc_mkv = { enabled = true, seconds = 10 }  # values to set for the mkv smart cacher.
+
+[generic_cacher]
+# When a smart cacher fails, Greedia will still attempt to cache data in a fairly crude manner.
+# Rather than figuring out exactly which bytes correspond to metadata and 10 seconds of content,
+# It will simply grab a set amount of bytes at the beginning and end of the file.
+start = { percent = 0.5, bytes = 10_240_000 }  # Download the first 0.5% of content, up to 10MB.
+end = { percent = 1, bytes = 512_000 }  # Download the final 1% of content, up to 0.5MB.
+
+
+# All google drive drives have the format "gdrive.<drive name>"
+[gdrive.mydrive]  # Make a google drive directory called "mydrive"
+client_id = "client-id.apps.googleusercontent.com"
+client_secret = "client-secret"
+refresh_token = "1/refresh-token"
+drive_id = "team_drive_id"
+password = "password1"
+password2 = "password2"
+root_path = "/inner_directory"
+service_accounts = [ "/sa/sa1.json", "sa/sa2.sjon", "sa/sa3.json" ]
+
+[gdrive.myotherdrive]  # Make a google drive directory called "myotherdrive"
+# This drive takes the same parameters as other gdrives.
+
+# This isn't meant for general usage, only debugging. A timecode drive only exposes
+# a single virtual file, `timecode.bin`. This file format allows discovering offsets from
+# the data itself. For more information, visit https://github.com/greedia/timecode_rs
+[timecode.timecodedrive]  # Make a "timecode" drive called "timecodedrive"
+drive_id = "test"  # The drive ID doesn't matter here, and is an internal detail for caching.
+
+
+# As greedia is heavily in development, there are several places where quick, easy-to-access values
+# are handy. This is the "tweak" system, and it holds unstable configuration options that don't have
+# a home in regular configurations yet.
+# The list of valid tweaks can be found in the source code, at the top of /src/config.rs.
+[tweaks]
+enable_kernel_dir_caching = false  # Makes directory listings much faster, but listings don't update.
+mount_read_write = true  # Mounts read-write, allowing moves and deletes but not uploads. Read-only by default.
+disable_scanner_caching = false  # Causes Greedia to not populate new files in the hard cache to speed up startup.

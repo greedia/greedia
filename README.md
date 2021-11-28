@@ -20,6 +20,8 @@ And smart-caches the following media formats:
 
 Rclone-encrypted files are also supported.
 
+Note that Greedia does not currently support file uploading, and gives read-only access to drives by default.
+
 ## Installation
 
 Greedia will be added to crates<span>.io eventually, however for now you can install directly from git using:

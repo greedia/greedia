@@ -6,9 +6,14 @@ use rclone_crypt::decrypter::{self, Decrypter};
 
 use super::{crypt_context::CryptContext, CacheFileHandler, CacheHandlerError};
 
+/// Special CacheFileHandler that adds decryption support to
+/// another CacheFileHandler.
 pub struct CryptPassthrough {
+    /// rclone-crypt's Decrypter, for decrypting blocks.
     decrypter: Decrypter,
+    /// Underlying CacheFileHandler to decrypt.
     reader: Box<dyn CacheFileHandler>,
+    /// Current block, as an optimization when seeks do not occur.
     cur_block: u64,
     /// The last block of decrypted bytes, if any.
     last_bytes: Option<Bytes>,

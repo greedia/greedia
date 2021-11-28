@@ -43,6 +43,8 @@ pub mod lru;
 
 const MAX_CHUNK_SIZE: u64 = 100_000_000;
 
+/// Filesystem-based CacheDriveHandler.
+/// 
 pub struct FilesystemCacheHandler {
     drive_id: String,
     lru: Option<Lru>,
@@ -167,6 +169,7 @@ impl FilesystemCacheHandler {
 
 #[async_trait]
 impl CacheDriveHandler for FilesystemCacheHandler {
+    /// Passthrough method for DownloaderDrive's scan_pages method.
     fn scan_pages(
         &self,
         last_page_token: Option<String>,
@@ -290,15 +293,21 @@ impl CacheDriveHandler for FilesystemCacheHandler {
     }
 }
 
+/// Handle to an open file, to be read and seeked.
 struct FilesystemCacheFileHandler {
+    /// Structure used for synchronizing between all readers.
     handle: Arc<Mutex<OpenFile>>,
+    /// ID for accessing data in cache
     data_id: DataIdentifier,
+    /// LRU for handling soft_cache space limiting
     lru: Option<Lru>,
     size: u64,
     offset: u64,
     hard_cache_file_root: PathBuf,
     soft_cache_file_root: PathBuf,
     write_hard_cache: bool,
+    /// Handle to cache file on disk (a "chunk") in
+    /// soft_cache or hard_cache directory.
     current_chunk: Option<CurrentChunk>,
 }
 
@@ -358,7 +367,7 @@ impl CacheFileHandler for FilesystemCacheFileHandler {
 }
 
 impl FilesystemCacheFileHandler {
-    /// Handle the read_into and cache_data methods
+    /// Handles both the read_into and cache_data methods
     async fn handle_read_into(
         &mut self,
         len: usize,
@@ -375,25 +384,37 @@ impl FilesystemCacheFileHandler {
             self.current_chunk = Some(new_chunk);
         }
 
+
         for attempt in 0..40 {
             if attempt > 20 {
                 sleep(Duration::from_millis(50 * attempt)).await;
             }
 
+            // Attempt to read from (or download to) a chunk file
             let handle_chunk_res = self.handle_chunk(len, &mut buf).await?;
             match handle_chunk_res {
                 Reader::Data(data_read) => {
+                    // We received the data we wanted, continue as normal.
                     return Ok(data_read);
                 }
                 Reader::LastData(data_read) => {
+                    // We received the data we wanted, but reached the end of the chunk.
+                    // On next read, try to read from the next adjacent chunk, or download
+                    // a new chunk.
                     self.current_chunk = None;
                     return Ok(data_read);
                 }
                 Reader::NeedsNewChunk => {
+                    // We received no data from the current chunk, which means we were either
+                    // at the end of the chunk, or no chunk was found at this offset.
+                    // Create a new chunk.
                     let new_chunk = self.new_current_chunk(None).await?;
                     self.current_chunk = Some(new_chunk);
                 }
                 Reader::Downgrade => {
+                    // The chunk has finished downloading, but there's more we can read.
+                    // This is usually returned when a different process was further ahead
+                    // in the chunk than we were.
                     let mut new_chunk = None;
                     mem::swap(&mut new_chunk, &mut self.current_chunk);
                     if let Some(CurrentChunk::Downloading { read_data, _dl }) = new_chunk {
@@ -404,6 +425,9 @@ impl FilesystemCacheFileHandler {
                     };
                 }
                 Reader::ContinueDownloading(prev_download_status) => {
+                    // We downloaded a chunk to its maximum size (100MB by default), and we need to
+                    // make a new chunk while still keeping the same download thread.
+                    // Create a new chunk using the old chunk's DownloadStatus struct.
                     let mut dl_status = prev_download_status.lock().await;
                     let mut new_dl_status = None;
                     mem::swap(&mut *dl_status, &mut new_dl_status);
@@ -413,9 +437,16 @@ impl FilesystemCacheFileHandler {
             }
         }
 
+        // Return an error up to the FUSE mount if 40 attempts to read a chunk failed.
+        // This only appears to happen if a downloader has a download quota reached,
+        // or if there is trouble with internet or downloader service access.
         Err(CacheHandlerError::HandleInto)
     }
 
+    /// Handle reading from, or downloading to, the current cache chunk file.
+    /// Make every attempt to read from a chunk file without locking the OpenFile struct.
+    /// 
+    /// Expects self.current_chunk to be Some(), otherwise it will panic.
     async fn handle_chunk(
         &mut self,
         len: usize,
@@ -424,6 +455,7 @@ impl FilesystemCacheFileHandler {
         if let Some(ref mut current_chunk) = self.current_chunk {
             let data_read = match current_chunk {
                 CurrentChunk::Downloading { read_data, _dl } => {
+                    // Chunk is in downloading state, so we might need to lock
                     if self.offset < read_data.end_offset {
                         // If we have any data before end_offset, read that first
                         let max_read_len = min(len, (read_data.end_offset - self.offset) as usize);
@@ -437,6 +469,8 @@ impl FilesystemCacheFileHandler {
                     }
                 }
                 CurrentChunk::Reading { read_data } => {
+                    // Chunk is in reading state, which means we won't have to lock until
+                    // we reach the end of it.
                     if self.offset < read_data.end_offset {
                         // If we have any data before end_offset, read that first
                         let max_read_len = min(len, (read_data.end_offset - self.offset) as usize);
@@ -475,7 +509,7 @@ impl FilesystemCacheFileHandler {
 
         // Where are we?
         match chunk {
-            // We're in the middle of a data chunk
+            // We're at the start of, or in the middle of, a chunk
             GetRange::Data {
                 start_offset,
                 size,
@@ -488,7 +522,7 @@ impl FilesystemCacheFileHandler {
                     self.start_copying(&mut of, chunk_start_offset, start_offset, size)
                         .await
                 } else {
-                    // Check if there's a downloader
+                    // Check if there's an active downloader
                     if let Some(download_status) = data.download_status.upgrade() {
                         self.start_reading(
                             chunk_start_offset,
@@ -518,8 +552,10 @@ impl FilesystemCacheFileHandler {
             } => {
                 if let Some(prev_range) = prev_range {
                     if self.write_hard_cache && !is_hard_cache {
-                        // Check hard_cache gap or final range, to see if we can append.
-                        // Otherwise, start new dl.
+                        // If we're writing to hard_cache and this gap exists in the soft_cache,
+                        // explicitly check the hard_cache to see if there's a gap, as we
+                        // might be able to append to a hard_cache chunk.
+                        // Otherwise, start downloading a new chunk.
                         let (hc_chunk, _) = of.get_chunk_at(self.offset, Cache::Hard);
                         match hc_chunk {
                             GetRange::Gap {
@@ -599,8 +635,10 @@ impl FilesystemCacheFileHandler {
                 data,
             } => {
                 if self.write_hard_cache && !is_hard_cache {
-                    // Check hard_cache gap, to see if we can append.
-                    // Otherwise, start new dl.
+                    // If we're writing to hard_cache and this gap exists in the soft_cache,
+                    // explicitly check the hard_cache to see if there's a gap, as we
+                    // might be able to append to a hard_cache chunk.
+                    // Otherwise, start downloading a new chunk.
                     let (hc_chunk, _) = of.get_chunk_at(self.offset, Cache::Hard);
                     match hc_chunk {
                         GetRange::Gap {
@@ -1105,6 +1143,29 @@ pub fn get_file_cache_chunk_path(
     get_file_cache_path(cache_root, data_id).join(format!("chunk_{}", offset))
 }
 
+/// CacheFileHandler uses proptest for testing.
+/// 
+/// The general strategy is to open one file with three handles, and
+/// have each handle perform random seeks, reads, and caches.
+/// Occasionally, they may also reopen the file.
+/// 
+/// When a file is opened, it may be opened to write to hard_cache,
+/// or it may be opened "normally" (like if a FUSE mount opened it).
+/// 
+/// Additionally, when a read occurs, timecode is used to ensure
+/// the data was read at the proper offset.
+/// 
+/// By default, the timecode drive is used for testing and is done
+/// locally, however this does not support CryptPassthrough.
+/// 
+/// In order to test crypt, a timecode.bin file needs to be uploaded
+/// to a google drive via an rclone drive+crypt drive, and
+/// environment variables at the start of tester_crypt() must be set
+/// to point to that file.
+/// 
+/// Some of the test methods have a `keep_path` variable that's set to
+/// false by default. If set to true, the cache directories will be kept
+/// which can allow for further debugging.
 #[cfg(test)]
 mod test {
     use std::env;
@@ -1135,7 +1196,7 @@ mod test {
     const MAX_CACHE_LEN: u64 = 65535;
 
     /// Limit the number of file handles for tests to only three.
-    /// Using an enum is probably a bit nicer than randomly generating a random number.
+    /// Using an enum is probably a bit nicer than generating a random number.
     #[derive(Debug, Clone)]
     enum TestFile {
         File0,
@@ -1256,6 +1317,10 @@ mod test {
         init_hard_cache: &[bool],
         actions: Vec<TestAction>,
     ) {
+        if env::var("TEST_CRYPT").is_err() {
+            println!("TEST_CRYPT environment variable not test, skipping.");
+            return
+        }
         let client_id = env::var("TEST_CLIENT_ID").unwrap();
         let client_secret = env::var("TEST_CLIENT_SECRET").unwrap();
         let refresh_token = env::var("TEST_REFRESH_TOKEN").unwrap();
@@ -1457,7 +1522,7 @@ mod test {
         let data_id = DataIdentifier::GlobalMd5(vec![0, 0, 0, 0]);
         let file_size = 1024u64.pow(3) * 10; // 10 GB
 
-        let keep_path = true;
+        let keep_path = false;
         let test_path = tempfile::tempdir().unwrap();
         let (hard_cache_root, soft_cache_root) = if keep_path {
             let test_path = test_path.into_path();
@@ -1480,6 +1545,8 @@ mod test {
         f.cache_exact(MAX_CHUNK_SIZE as usize * 3).await.unwrap();
     }
 
+    /// Test that a download thread is dropped when a file handle
+    /// is closed
     #[tokio::test]
     async fn test_dl_drop() {
         let d = Arc::new(TimecodeDrive {

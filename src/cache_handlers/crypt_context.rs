@@ -2,12 +2,18 @@ use rclone_crypt::{cipher::Cipher, decrypter, obscure};
 
 use super::CacheHandlerError;
 
+/// Handles everything related to rclone encryption.
+/// Mostly a passthrough to rclone_crypt's `Cipher`,
+/// but can also calculate a file's decrypted size.
 #[derive(Debug, Clone)]
 pub struct CryptContext {
     pub cipher: Cipher,
 }
 
 impl CryptContext {
+    /// Create a CryptContext using the two rclone passwords.
+    /// Note that these passwords must be obfuscated, like they
+    /// would show up in an rclone config file.
     pub fn new(password1: &str, password2: &str) -> Result<CryptContext, CacheHandlerError> {
         let password =
             obscure::reveal(password1).map_err(|_| CacheHandlerError::CryptPassthrough)?;

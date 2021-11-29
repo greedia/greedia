@@ -41,10 +41,11 @@ use tracing::instrument;
 
 pub mod lru;
 
+/// The largest size of chunk file allowed within cache directories.
+/// When this limit is reached, create a new adjacent chunk file.
 const MAX_CHUNK_SIZE: u64 = 100_000_000;
 
 /// Filesystem-based CacheDriveHandler.
-/// 
 pub struct FilesystemCacheHandler {
     drive_id: String,
     lru: Option<Lru>,

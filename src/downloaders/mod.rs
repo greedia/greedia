@@ -72,7 +72,7 @@ pub trait DownloaderDrive: Sync + Send + 'static {
     ///
     /// new_filename: New filename, if name change is desired.
     ///
-    /// new_parent: New parent, if moving the file is d
+    /// new_parent: New parent, if moving the file is desired.
     async fn move_file(
         &self,
         file_id: String,

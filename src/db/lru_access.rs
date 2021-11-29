@@ -20,7 +20,7 @@ pub struct LruAccess {
     /// For keeping track of oldest files in the LRU
     timestamp_tree: InnerTree,
     /// Mapping from LruDataKey to LruDataData
-    // For keeping track of the data in the LRU, to update timestamps
+    /// For keeping track of the data in the LRU, to update timestamps
     data_tree: InnerTree,
     /// Root path of the soft cache.
     pub cache_root: PathBuf,

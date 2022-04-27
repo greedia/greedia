@@ -45,7 +45,7 @@ use crate::{
 ///
 /// When an appended download occurs, the downloader must update the structure to keep track of how
 /// much data has been written to disk. This is in order to ensure other readers can read data chunks
-/// without having to re-lock the mutex on each read operation.
+/// directly from the filesystem without having to re-lock the mutex on each read operation.
 pub struct OpenFile {
     /// ID used within the downloader.
     file_id: String,

@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use rclone_crypt::decrypter::{self, Decrypter};
+use rclone_crypt::decrypter::Decrypter;
 use tracing::instrument;
 
 use crate::{
@@ -132,7 +132,7 @@ impl DriveAccess {
                 for cc in self.crypts.iter() {
                     file.seek_to(0).await?;
 
-                    let mut header = [0u8; decrypter::FILE_HEADER_SIZE];
+                    let mut header = [0u8; rclone_crypt::FILE_HEADER_SIZE];
                     file.read_exact(&mut header).await?;
                     if Decrypter::new(&cc.cipher.file_key, &header).is_ok() {
                         file.seek_to(0).await?;
@@ -364,10 +364,15 @@ impl DriveAccess {
 
         // Perform the move or rename in the DB
         if let Some(new_parent_inode) = new_parent {
-            self.db
-                .move_child(parent_inode, new_parent_inode, &file_name, new_file_name.as_deref())?;
+            self.db.move_child(
+                parent_inode,
+                new_parent_inode,
+                &file_name,
+                new_file_name.as_deref(),
+            )?;
         } else if let Some(new_file_name) = new_file_name {
-            self.db.rename_child(parent_inode, &file_name, &new_file_name)?;
+            self.db
+                .rename_child(parent_inode, &file_name, &new_file_name)?;
         }
 
         Some(())

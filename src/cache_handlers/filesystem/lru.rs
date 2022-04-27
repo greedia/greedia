@@ -8,7 +8,13 @@ use std::{
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use walkdir::{DirEntry, WalkDir};
 
-use crate::{cache_handlers::filesystem::get_file_cache_chunk_path, db::{Db, LruAccess, types::{DataIdentifier, LruDataKey, LruTimestampData}}};
+use crate::{
+    cache_handlers::filesystem::get_file_cache_chunk_path,
+    db::{
+        types::{DataIdentifier, LruDataKey, LruTimestampData},
+        Db, LruAccess,
+    },
+};
 
 /// Public interface to Lru thread.
 /// Lru is backgrounded and asynchronous - rather than
@@ -150,7 +156,8 @@ fn handle_cache_cleanup(
 
         // Delete the file, ignoring any errors we may get.
         // Get the file size from stat.
-        let file_path = get_file_cache_chunk_path(&lru.cache_root, &data_id, ts_data.offset.value());
+        let file_path =
+            get_file_cache_chunk_path(&lru.cache_root, &data_id, ts_data.offset.value());
         let file_len = file_path.metadata().ok().map(|x| x.len()).unwrap_or(0);
         if fs::remove_file(&file_path).is_err() {
             // If we can't delete the file, just ignore the error.

@@ -180,10 +180,7 @@ async fn caching_thread(db: DbAccess, drive_access: Arc<DriveAccess>, recv: Rece
 }
 
 /// Cache one single item. Returns true if successful, or false if attempt needs to be made later.
-async fn perform_one_cache(
-    hard_cacher: &HardCacher,
-    item: &ArchivedDriveItem,
-) -> bool {
+async fn perform_one_cache(hard_cacher: &HardCacher, item: &ArchivedDriveItem) -> bool {
     if let ArchivedDriveItemData::FileItem {
         file_name,
         data_id,

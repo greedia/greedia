@@ -53,7 +53,7 @@ enum Greedia {
     #[cfg(feature = "sctest")]
     /// Test a smart cacher by copying the cached portions of a file.
     Sctest {
-        /// Full file for this smart cacher to cache/copy.
+        /// Full file for the smart cachers to cache/copy.
         #[structopt()]
         input: PathBuf,
 
@@ -65,7 +65,7 @@ enum Greedia {
         #[structopt(short, long, default_value = "10")]
         seconds: u64,
 
-        /// Fill uncached bytes with a different byte instead (hex-encoded).
+        /// Fill uncached bytes with a different byte instead of null (hex-encoded).
         #[structopt(short, long)]
         fill_byte: Option<String>,
 
@@ -275,7 +275,7 @@ async fn sctest(
     fill_byte: Option<String>,
     fill_random: bool,
 ) -> Result<()> {
-    TWEAKS.set(Tweaks::default());
+    TWEAKS.set(Tweaks::default()).expect("TWEAKS should not be set at this point");
     let meta = input
         .metadata()
         .expect("sctest could not get metadata for file");

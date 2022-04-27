@@ -84,20 +84,18 @@ impl DbAccess {
 
     pub fn get_inode(&self, inode: u64) -> Option<BorrowedDriveItem> {
         let data = self.trees.inode.get(inode.to_le_bytes())?;
-        let drive_item =
-            BorrowedDriveItem::new(data, |data| {
-                let archived = unsafe { archived_root::<DriveItem>(data) };
-                LDriveItem { archived }
-            });
+        let drive_item = BorrowedDriveItem::new(data, |data| {
+            let archived = unsafe { archived_root::<DriveItem>(data) };
+            LDriveItem { archived }
+        });
         Some(drive_item)
     }
 
     pub fn get_inode_from_data(&self, data: IVec) -> Option<BorrowedDriveItem> {
-        let drive_item =
-            BorrowedDriveItem::new(data, |data| {
-                let archived = unsafe { archived_root::<DriveItem>(data) };
-                LDriveItem { archived }
-            });
+        let drive_item = BorrowedDriveItem::new(data, |data| {
+            let archived = unsafe { archived_root::<DriveItem>(data) };
+            LDriveItem { archived }
+        });
         Some(drive_item)
     }
 
@@ -118,11 +116,10 @@ impl DbAccess {
 
     pub fn rm_inode(&self, inode: u64) -> Option<BorrowedDriveItem> {
         let data = self.trees.inode.remove(inode.to_le_bytes())?;
-        let drive_item =
-            BorrowedDriveItem::new(data, |data| {
-                let archived = unsafe { archived_root::<DriveItem>(data) };
-                LDriveItem { archived }
-            });
+        let drive_item = BorrowedDriveItem::new(data, |data| {
+            let archived = unsafe { archived_root::<DriveItem>(data) };
+            LDriveItem { archived }
+        });
         Some(drive_item)
     }
 
@@ -172,11 +169,10 @@ impl DbAccess {
 
     pub fn rm_raccess(&self, access_id: &str) -> Option<BorrowedReverseAccess> {
         let data = self.trees.raccess.remove(access_id.as_bytes())?;
-        let reverse_access =
-            BorrowedReverseAccess::new(data, |data| {
-                let archived = unsafe { archived_root::<ReverseAccess>(data) };
-                LReverseAccess { archived }
-            });
+        let reverse_access = BorrowedReverseAccess::new(data, |data| {
+            let archived = unsafe { archived_root::<ReverseAccess>(data) };
+            LReverseAccess { archived }
+        });
         Some(reverse_access)
     }
 

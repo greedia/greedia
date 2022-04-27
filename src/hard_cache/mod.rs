@@ -62,13 +62,15 @@ pub struct HardCacheItem {
 pub struct HardCacheMetadata {
     /// Name of the (smart) cacher used to cache this file.
     pub cacher: String,
-    /// The global smart cacher version used to cache this file. (TODO)
+    /// The global smart cacher version used to cache this file.
     pub version: u64,
 }
 
 pub struct HardCacher {
     drive_access: Option<Arc<DriveAccess>>,
     cacher: Arc<dyn HcCacher + Send + Sync>,
+    // TODO: there may eventually be multiple smart cachers per ext,
+    // so this should probably be defined as a Vec<SmartCacher>.
     cachers_by_ext: HashMap<&'static str, &'static dyn SmartCacher>,
     min_size: u64,
 }
@@ -220,7 +222,9 @@ impl HardCacher {
                 version: 0,
             };
             if let Some(drive_access) = &self.drive_access {
-                drive_access.set_cache_metadata(data_id.clone(), hcm).await?;
+                drive_access
+                    .set_cache_metadata(data_id.clone(), hcm)
+                    .await?;
                 return Ok(());
             }
         }
@@ -249,7 +253,9 @@ impl HardCacher {
                         version: SMART_CACHER_VERSION,
                     };
                     if let Some(drive_access) = &self.drive_access {
-                        drive_access.set_cache_metadata(data_id.clone(), hcm).await?;
+                        drive_access
+                            .set_cache_metadata(data_id.clone(), hcm)
+                            .await?;
                         return Ok(());
                     }
                 }
@@ -289,7 +295,9 @@ impl HardCacher {
                         version: SMART_CACHER_VERSION,
                     };
                     if let Some(drive_access) = &self.drive_access {
-                        drive_access.set_cache_metadata(data_id.clone(), hcm).await?;
+                        drive_access
+                            .set_cache_metadata(data_id.clone(), hcm)
+                            .await?;
                         return Ok(());
                     }
                     return Ok(());
@@ -327,7 +335,9 @@ impl HardCacher {
             version: 0,
         };
         if let Some(drive_access) = &self.drive_access {
-            drive_access.set_cache_metadata(data_id.clone(), hcm).await?;
+            drive_access
+                .set_cache_metadata(data_id.clone(), hcm)
+                .await?;
         }
         Ok(())
     }

@@ -649,7 +649,7 @@ async fn open_request(
     access_instance: &AccessInstance,
 ) -> Result<reqwest::Response, DownloaderError> {
     let url = format!("https://www.googleapis.com/drive/v3/files/{}", file_id);
-    let range_string = format!("bytes={}-", offset);
+    let range_string = format!("bytes={}-{}", offset, offset + 100_000_000);
 
     let mut retry = false;
     let mut last_error = None;

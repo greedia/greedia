@@ -25,6 +25,8 @@ pub enum CacheHandlerError {
     CryptPassthrough,
     #[error("HANDLE_INTO Error")]
     HandleInto,
+    #[error("Bad Path")]
+    BadPath,
 }
 
 impl CacheHandlerError {

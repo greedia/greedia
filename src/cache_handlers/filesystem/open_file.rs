@@ -539,7 +539,7 @@ impl OpenFile {
     async fn get_cache_files(cache_root: &Path, data_id: &DataIdentifier) -> ByteRanger<ChunkData> {
         let mut br = ByteRanger::new();
 
-        let cache_path = get_file_cache_path(cache_root, data_id);
+        let cache_path = get_file_cache_path(cache_root, data_id).unwrap();
         if cache_path.exists() {
             let mut dirs = read_dir(cache_path).await.unwrap();
             while let Some(dir_entry) = dirs.next_entry().await.unwrap() {

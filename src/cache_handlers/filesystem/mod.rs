@@ -202,8 +202,8 @@ impl CacheDriveHandler for FilesystemCacheHandler {
         write_hard_cache: bool,
     ) -> Result<Box<dyn CacheFileHandler>, CacheHandlerError> {
         let handle = self.get_open_handle(&file_id, &data_id).await;
-        let hard_cache_file_root = get_file_cache_path(&self.hard_cache_root, &data_id);
-        let soft_cache_file_root = get_file_cache_path(&self.soft_cache_root, &data_id);
+        let hard_cache_file_root = get_file_cache_path(&self.hard_cache_root, &data_id).unwrap();
+        let soft_cache_file_root = get_file_cache_path(&self.soft_cache_root, &data_id).unwrap();
 
         Ok(Box::new(FilesystemCacheFileHandler {
             handle,
@@ -227,8 +227,8 @@ impl CacheDriveHandler for FilesystemCacheHandler {
     }
 
     async fn clear_cache_item(&self, data_id: DataIdentifier) {
-        let hard_cache_file_root = get_file_cache_path(&self.hard_cache_root, &data_id);
-        let soft_cache_file_root = get_file_cache_path(&self.soft_cache_root, &data_id);
+        let hard_cache_file_root = get_file_cache_path(&self.hard_cache_root, &data_id).unwrap();
+        let soft_cache_file_root = get_file_cache_path(&self.soft_cache_root, &data_id).unwrap();
         let _ = fs::remove_dir_all(&hard_cache_file_root).await;
         let _ = fs::remove_dir_all(&soft_cache_file_root).await;
     }
@@ -237,7 +237,9 @@ impl CacheDriveHandler for FilesystemCacheHandler {
         &self,
         data_id: DataIdentifier,
     ) -> Result<HardCacheMetadata, CacheHandlerError> {
-        let hard_cache_path = get_file_cache_path(&self.hard_cache_root, &data_id);
+        let hard_cache_path = get_file_cache_path(&self.hard_cache_root, &data_id).ok_or(CacheHandlerError::BadPath)?;
+        // KTODO: handle bad paths. This appears to be in the DB somehow.
+        // shows up as GlobalMd5([])
         let hcm_path = hard_cache_path.join("metadata.json");
 
         if !hard_cache_path.exists() {
@@ -254,7 +256,7 @@ impl CacheDriveHandler for FilesystemCacheHandler {
         data_id: DataIdentifier,
         meta: HardCacheMetadata,
     ) -> Result<(), CacheHandlerError> {
-        let hard_cache_path = get_file_cache_path(&self.hard_cache_root, &data_id);
+        let hard_cache_path = get_file_cache_path(&self.hard_cache_root, &data_id).unwrap();
         let hcm_path = hard_cache_path.join("metadata.json");
 
         if !hard_cache_path.exists() {
@@ -1119,12 +1121,12 @@ impl FilesystemCacheFileHandler {
 }
 
 /// Get the hard cache and soft cache paths, given an identifier.
-fn get_file_cache_path(cache_root: &Path, data_id: &DataIdentifier) -> PathBuf {
-    match data_id {
+fn get_file_cache_path(cache_root: &Path, data_id: &DataIdentifier) -> Option<PathBuf> {
+    Some(match data_id {
         DataIdentifier::GlobalMd5(ref md5) => {
             let hex_md5 = hex::encode(md5);
-            let dir_1 = hex_md5.get(0..2).unwrap();
-            let dir_2 = hex_md5.get(2..4).unwrap();
+            let dir_1 = hex_md5.get(0..2)?;
+            let dir_2 = hex_md5.get(2..4)?;
             cache_root
                 .join("global_md5")
                 .join(dir_1)
@@ -1133,7 +1135,7 @@ fn get_file_cache_path(cache_root: &Path, data_id: &DataIdentifier) -> PathBuf {
         }
         #[cfg(feature = "sctest")]
         DataIdentifier::None => PathBuf::new(),
-    }
+    })
 }
 
 pub fn get_file_cache_chunk_path(
@@ -1141,7 +1143,7 @@ pub fn get_file_cache_chunk_path(
     data_id: &DataIdentifier,
     offset: u64,
 ) -> PathBuf {
-    get_file_cache_path(cache_root, data_id).join(format!("chunk_{}", offset))
+    get_file_cache_path(cache_root, data_id).unwrap().join(format!("chunk_{}", offset))
 }
 
 /// CacheFileHandler uses proptest for testing.

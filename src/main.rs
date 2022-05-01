@@ -10,6 +10,7 @@ use cache_handlers::{
     crypt_context::CryptContext,
     filesystem::{lru::Lru, FilesystemCacheHandler},
 };
+use clap_verbosity_flag::{Verbosity, WarnLevel, LogLevel};
 use db::Db;
 use downloaders::{gdrive::GDriveClient, timecode::TimecodeDrive, DownloaderClient};
 use drive_access::DriveAccess;
@@ -19,7 +20,7 @@ use hard_cache::HardCacher;
 use mount::mount_thread;
 use once_cell::sync::OnceCell;
 use scanner::scan_thread;
-use structopt::StructOpt;
+use clap::Parser;
 
 mod cache_handlers;
 mod config;
@@ -34,6 +35,7 @@ mod scanner;
 mod types;
 
 use config::{validate_config, Config, ConfigGoogleDrive, ConfigTimecodeDrive, Tweaks};
+use tracing::log::Level;
 
 pub static TWEAKS: OnceCell<Tweaks> = OnceCell::new();
 
@@ -41,36 +43,39 @@ pub fn tweaks() -> &'static Tweaks {
     TWEAKS.get().expect("TWEAKS not initialized")
 }
 
-#[derive(Debug, StructOpt)]
-#[structopt(name = "greedia", about = "Greedily cache media and serve it up fast.")]
+#[derive(Debug, Parser)]
+#[clap(name = "greedia", about = "Greedily cache media and serve it up fast.")]
 enum Greedia {
     /// Run greedia with a given config file.
     Run {
-        #[structopt(short, long)]
+        #[clap(short, long)]
         config_path: PathBuf,
+
+        #[clap(flatten)]
+        verbose: Verbosity<WarnLevel>
     },
 
     #[cfg(feature = "sctest")]
     /// Test a smart cacher by copying the cached portions of a file.
     Sctest {
         /// Full file for the smart cachers to cache/copy.
-        #[structopt()]
+        #[clap()]
         input: PathBuf,
 
         /// Output file that only contains the cached portions.
-        #[structopt()]
+        #[clap()]
         output: PathBuf,
 
         /// Number of seconds to cache (default 10).
-        #[structopt(short, long, default_value = "10")]
+        #[clap(short, long, default_value = "10")]
         seconds: u64,
 
         /// Fill uncached bytes with a different byte instead of null (hex-encoded).
-        #[structopt(short, long)]
+        #[clap(short, long)]
         fill_byte: Option<String>,
 
         /// Fill uncached bytes with random bytes instead. Overrides fill_byte.
-        #[structopt(short = "r", long)]
+        #[clap(short = "r", long)]
         fill_random: bool,
     },
 }
@@ -78,11 +83,13 @@ enum Greedia {
 #[tokio::main]
 async fn main() -> Result<()> {
     console_subscriber::init();
-    //tracing_subscriber::fmt::init();
-    let opt = Greedia::from_args();
+    let args = Greedia::parse();
 
-    match opt {
-        Greedia::Run { config_path } => run(&config_path).await?,
+    match args {
+        Greedia::Run { config_path, verbose } => {
+            handle_log_level(verbose);
+            run(&config_path).await?
+        },
         #[cfg(feature = "sctest")]
         Greedia::Sctest {
             input,
@@ -94,6 +101,18 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn handle_log_level<T: LogLevel>(verbose: Verbosity<T>) {
+    let log_level = verbose.log_level();
+    if let Some(log_level) = log_level {
+        if log_level != Level::Warn {
+            println!("Log verbosity level: {log_level}");
+        }
+        tracing_subscriber::fmt()
+            .with_max_level(convert_log_level(log_level))
+            .init();
+    };
 }
 
 async fn run(config_path: &Path) -> Result<()> {
@@ -292,4 +311,14 @@ async fn sctest(
     hard_cacher.process_sctest(file_name, size).await;
 
     Ok(())
+}
+
+pub fn convert_log_level(level: tracing::log::Level) -> tracing::Level {
+    match level {
+        Level::Error => tracing::Level::ERROR,
+        Level::Warn => tracing::Level::WARN,
+        Level::Info => tracing::Level::INFO,
+        Level::Debug => tracing::Level::DEBUG,
+        Level::Trace => tracing::Level::TRACE,
+    }
 }

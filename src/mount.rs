@@ -16,6 +16,8 @@ use tokio::{
     io::{unix::AsyncFd, Interest},
     task::{self, JoinHandle},
 };
+use tracing::{trace_span, trace};
+use tracing_futures::Instrument;
 
 use crate::{
     cache_handlers::{CacheFileHandler, CacheHandlerError},
@@ -60,7 +62,10 @@ pub async fn mount_thread(drives: Vec<Arc<DriveAccess>>, mountpoint: Utf8PathBuf
                 Operation::Opendir(op) => fs.do_opendir(&req, op).await?,
                 Operation::Readdir(op) => fs.do_readdir(&req, op).await?,
                 Operation::Open(op) => fs.do_open(&req, op).await?,
-                Operation::Read(op) => fs.do_read(&req, op).await?,
+                Operation::Read(op) => {
+                    let span = trace_span!("fuse_read", fh=op.fh(), off=op.offset(), sz=op.size());
+                    fs.do_read(&req, op).instrument(span).await?
+                }
                 Operation::Release(op) => fs.do_release(&req, op).await?,
                 Operation::Unlink(op) => fs.do_unlink(&req, op).await?,
                 Operation::Rename(op) => fs.do_rename(&req, op).await?,
@@ -538,6 +543,7 @@ impl GreediaFS {
     /// This uses a file handle successfully retrieved from a previous `open()` call.
     /// The calls are passed through a `CacheFileHandler` reader, which does all the fun stuff.
     async fn do_read(&self, req: &Request, op: op::Read<'_>) -> io::Result<()> {
+        trace!("do_read");
         let fh = op.fh();
         let offset = op.offset();
         let size = op.size() as usize;

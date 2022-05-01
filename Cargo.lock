@@ -911,6 +911,7 @@ dependencies = [
  "tokio-stream",
  "toml",
  "tracing",
+ "tracing-futures",
  "tracing-subscriber",
  "walkdir",
 ]

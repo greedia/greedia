@@ -88,8 +88,8 @@ impl HardCacher {
     /// Create a new HardCacher for sctest use.
     #[cfg(feature = "sctest")]
     pub fn new_sctest(
-        input: PathBuf,
-        output: PathBuf,
+        input: Utf8PathBuf,
+        output: Utf8PathBuf,
         seconds: u64,
         fill_byte: Option<String>,
         fill_random: bool,

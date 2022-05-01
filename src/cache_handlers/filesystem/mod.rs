@@ -5,7 +5,6 @@ use std::{
     collections::HashMap,
     io::SeekFrom,
     mem,
-    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Weak,
@@ -16,6 +15,7 @@ use std::{
 use async_trait::async_trait;
 use byte_ranger::GetRange;
 use bytes::{Bytes, BytesMut};
+use camino::{Utf8PathBuf, Utf8Path};
 use futures::{Stream, StreamExt};
 use tokio::{
     fs::{self, File},
@@ -49,8 +49,8 @@ const MAX_CHUNK_SIZE: u64 = 100_000_000;
 pub struct FilesystemCacheHandler {
     drive_id: String,
     lru: Option<Lru>,
-    hard_cache_root: PathBuf,
-    soft_cache_root: PathBuf,
+    hard_cache_root: Utf8PathBuf,
+    soft_cache_root: Utf8PathBuf,
     open_files: Mutex<HashMap<String, Weak<Mutex<OpenFile>>>>,
     downloader_drive: Arc<dyn DownloaderDrive>,
 }
@@ -114,8 +114,8 @@ impl FilesystemCacheHandler {
     pub fn new(
         drive_id: &str,
         lru: Option<Lru>,
-        hard_cache_root: &Path,
-        soft_cache_root: &Path,
+        hard_cache_root: &Utf8Path,
+        soft_cache_root: &Utf8Path,
         downloader_drive: Arc<dyn DownloaderDrive>,
     ) -> FilesystemCacheHandler {
         let open_files = Mutex::new(HashMap::new());
@@ -306,8 +306,8 @@ struct FilesystemCacheFileHandler {
     lru: Option<Lru>,
     size: u64,
     offset: u64,
-    hard_cache_file_root: PathBuf,
-    soft_cache_file_root: PathBuf,
+    hard_cache_file_root: Utf8PathBuf,
+    soft_cache_file_root: Utf8PathBuf,
     write_hard_cache: bool,
     /// Handle to cache file on disk (a "chunk") in
     /// soft_cache or hard_cache directory.
@@ -1110,7 +1110,7 @@ impl FilesystemCacheFileHandler {
         Ok(Reader::Data(from_last_bytes.len()))
     }
 
-    fn get_file_cache_chunk_path(&self, hard_cache: bool, offset: u64) -> PathBuf {
+    fn get_file_cache_chunk_path(&self, hard_cache: bool, offset: u64) -> Utf8PathBuf {
         if hard_cache {
             &self.hard_cache_file_root
         } else {
@@ -1121,7 +1121,7 @@ impl FilesystemCacheFileHandler {
 }
 
 /// Get the hard cache and soft cache paths, given an identifier.
-fn get_file_cache_path(cache_root: &Path, data_id: &DataIdentifier) -> Option<PathBuf> {
+fn get_file_cache_path(cache_root: &Utf8Path, data_id: &DataIdentifier) -> Option<Utf8PathBuf> {
     Some(match data_id {
         DataIdentifier::GlobalMd5(ref md5) => {
             let hex_md5 = hex::encode(md5);
@@ -1134,15 +1134,15 @@ fn get_file_cache_path(cache_root: &Path, data_id: &DataIdentifier) -> Option<Pa
                 .join(hex_md5)
         }
         #[cfg(feature = "sctest")]
-        DataIdentifier::None => PathBuf::new(),
+        DataIdentifier::None => Utf8PathBuf::new(),
     })
 }
 
 pub fn get_file_cache_chunk_path(
-    cache_root: &Path,
+    cache_root: &Utf8Path,
     data_id: &DataIdentifier,
     offset: u64,
-) -> PathBuf {
+) -> Utf8PathBuf {
     get_file_cache_path(cache_root, data_id).unwrap().join(format!("chunk_{}", offset))
 }
 
@@ -1262,7 +1262,7 @@ mod test {
     }
 
     fn gen_init_offsets() -> impl Strategy<Value = Vec<u64>> {
-        collection::vec(0..MAX_OFFSET, 3)
+        collection::vec(0..1u64, 3)
     }
 
     fn gen_init_hard_caches() -> impl Strategy<Value = Vec<bool>> {
@@ -1370,12 +1370,12 @@ mod test {
         let keep_path = false;
         let test_path = tempfile::tempdir().unwrap();
         let (hard_cache_root, soft_cache_root) = if keep_path {
-            let test_path = test_path.into_path();
+            let test_path = Utf8PathBuf::from_path_buf(test_path.into_path()).unwrap();
             (test_path.join("hard_cache"), test_path.join("soft_cache"))
         } else {
             (
-                test_path.path().join("hard_cache"),
-                test_path.path().join("soft_cache"),
+                Utf8Path::from_path(test_path.path()).unwrap().join("hard_cache"),
+                Utf8Path::from_path(test_path.path()).unwrap().join("soft_cache"),
             )
         };
 
@@ -1528,13 +1528,13 @@ mod test {
         let keep_path = false;
         let test_path = tempfile::tempdir().unwrap();
         let (hard_cache_root, soft_cache_root) = if keep_path {
-            let test_path = test_path.into_path();
-            println!("Path: {}", test_path.display());
+            let test_path = Utf8PathBuf::from_path_buf(test_path.into_path()).unwrap();
+            println!("Path: {}", test_path);
             (test_path.join("hard_cache"), test_path.join("soft_cache"))
         } else {
             (
-                test_path.path().join("hard_cache"),
-                test_path.path().join("soft_cache"),
+                Utf8Path::from_path(test_path.path()).unwrap().join("hard_cache"),
+                Utf8Path::from_path(test_path.path()).unwrap().join("soft_cache"),
             )
         };
 
@@ -1563,13 +1563,13 @@ mod test {
         let keep_path = false;
         let test_path = tempfile::tempdir().unwrap();
         let (hard_cache_root, soft_cache_root) = if keep_path {
-            let test_path = test_path.into_path();
-            println!("Path: {}", test_path.display());
+            let test_path = Utf8PathBuf::from_path_buf(test_path.into_path()).unwrap();
+            println!("Path: {}", test_path);
             (test_path.join("hard_cache"), test_path.join("soft_cache"))
         } else {
             (
-                test_path.path().join("hard_cache"),
-                test_path.path().join("soft_cache"),
+                Utf8Path::from_path(test_path.path()).unwrap().join("hard_cache"),
+                Utf8Path::from_path(test_path.path()).unwrap().join("soft_cache"),
             )
         };
 

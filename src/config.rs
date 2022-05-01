@@ -1,5 +1,6 @@
-use std::{cmp::min, collections::HashMap, path::PathBuf};
+use std::{cmp::min, collections::HashMap};
 
+use camino::Utf8PathBuf;
 use serde::Deserialize;
 
 /// Tweaks are development or testing values used to modify the code.
@@ -45,8 +46,8 @@ pub struct Config {
 
 #[derive(Debug, Deserialize)]
 pub struct CachingConfig {
-    pub db_path: PathBuf,
-    pub mount_point: PathBuf,
+    pub db_path: Utf8PathBuf,
+    pub mount_point: Utf8PathBuf,
     pub soft_cache_limit: u64,
     pub min_size: u64,
     pub use_smart_caching: bool,
@@ -106,7 +107,7 @@ pub struct ConfigGoogleDrive {
     pub drive_id: String,
     pub root_path: Option<String>,
     /// service account json files that can access the drive
-    pub service_accounts: Option<Vec<PathBuf>>,
+    pub service_accounts: Option<Vec<Utf8PathBuf>>,
     /// rclone crypt passwords used for encrypting names and files
     pub password: Option<String>,
     pub password2: Option<String>,

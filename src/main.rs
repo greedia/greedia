@@ -1,7 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    path::{Path, PathBuf},
     sync::Arc,
 };
 
@@ -10,6 +9,7 @@ use cache_handlers::{
     crypt_context::CryptContext,
     filesystem::{lru::Lru, FilesystemCacheHandler},
 };
+use camino::{Utf8PathBuf, Utf8Path};
 use clap_verbosity_flag::{Verbosity, WarnLevel, LogLevel};
 use db::Db;
 use downloaders::{gdrive::GDriveClient, timecode::TimecodeDrive, DownloaderClient};
@@ -49,7 +49,7 @@ enum Greedia {
     /// Run greedia with a given config file.
     Run {
         #[clap(short, long)]
-        config_path: PathBuf,
+        config_path: Utf8PathBuf,
 
         #[clap(flatten)]
         verbose: Verbosity<WarnLevel>
@@ -60,11 +60,11 @@ enum Greedia {
     Sctest {
         /// Full file for the smart cachers to cache/copy.
         #[clap()]
-        input: PathBuf,
+        input: Utf8PathBuf,
 
         /// Output file that only contains the cached portions.
         #[clap()]
-        output: PathBuf,
+        output: Utf8PathBuf,
 
         /// Number of seconds to cache (default 10).
         #[clap(short, long, default_value = "10")]
@@ -115,7 +115,7 @@ fn handle_log_level<T: LogLevel>(verbose: Verbosity<T>) {
     };
 }
 
-async fn run(config_path: &Path) -> Result<()> {
+async fn run(config_path: &Utf8Path) -> Result<()> {
     let config_data = fs::read(config_path)?;
     let cfg: Config = toml::from_slice(&config_data)?;
 
@@ -177,7 +177,7 @@ async fn run(config_path: &Path) -> Result<()> {
 }
 
 async fn get_gdrive_drives(
-    cache_path: &Path,
+    cache_path: &Utf8Path,
     lru: Lru,
     db: Db,
     gdrives: HashMap<String, ConfigGoogleDrive>,
@@ -237,7 +237,7 @@ async fn get_gdrive_drives(
             drive.into(),
         ));
 
-        let root_path = cfg_drive.root_path.map(PathBuf::from);
+        let root_path = cfg_drive.root_path.map(Utf8PathBuf::from);
 
         let da = DriveAccess::new(
             name.clone(),
@@ -258,7 +258,7 @@ async fn get_gdrive_drives(
 }
 
 async fn get_timecode_drives(
-    cache_path: &Path,
+    cache_path: &Utf8Path,
     lru: Lru,
     db: Db,
     timecode_drives: HashMap<String, ConfigTimecodeDrive>,
@@ -289,8 +289,8 @@ async fn get_timecode_drives(
 
 #[cfg(feature = "sctest")]
 async fn sctest(
-    input: PathBuf,
-    output: PathBuf,
+    input: Utf8PathBuf,
+    output: Utf8PathBuf,
     seconds: u64,
     fill_byte: Option<String>,
     fill_random: bool,

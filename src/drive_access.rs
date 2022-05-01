@@ -1,12 +1,12 @@
 use std::{
     borrow::Cow,
-    path::{Component, Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
 };
 
+use camino::{Utf8PathBuf, Utf8Path, Utf8Component};
 use rclone_crypt::decrypter::Decrypter;
 use tracing::instrument;
 
@@ -53,7 +53,7 @@ pub struct DriveAccess {
     /// traversal, if this path exists, the inode gets stored
     /// in `root_inode`. If None, the root of the drive is
     /// the root for this `DriveAccess`.
-    pub root_path: Option<PathBuf>,
+    pub root_path: Option<Utf8PathBuf>,
     /// List of CryptContexts that could be used on this drive.
     pub crypts: Vec<Arc<CryptContext>>,
     /// This flag will be set to false by the scanner when complete.
@@ -81,7 +81,7 @@ impl DriveAccess {
         name: String,
         cache_handler: Box<dyn CacheDriveHandler>,
         db: Db,
-        root_path: Option<PathBuf>,
+        root_path: Option<Utf8PathBuf>,
         uses_crypt: bool,
         crypts: Vec<Arc<CryptContext>>,
     ) -> DriveAccess {
@@ -448,11 +448,11 @@ impl DriveAccess {
 
     /// Follow a path to find an inode. Used to find the root inode when root_path is specified.
     /// Note that paths here are assumed to be unencrypted, even if crypt is enabled.
-    fn resolve_inode_from_path(&self, inode: u64, path: &Path) -> Option<u64> {
+    fn resolve_inode_from_path(&self, inode: u64, path: &Utf8Path) -> Option<u64> {
         let mut last_inode = inode;
         for component in path.components() {
             let cstr = match component {
-                Component::Normal(os_str) => os_str.to_str()?,
+                Utf8Component::Normal(os_str) => os_str,
                 _ => continue,
             };
             last_inode = self.lookup_inode(inode, cstr)?;

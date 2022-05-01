@@ -5,9 +5,9 @@ mod storage_tree;
 mod tree; // KTODO: make private
 pub mod types;
 
-use std::path::{Path, PathBuf};
 
 pub use access::DbAccess;
+use camino::{Utf8PathBuf, Utf8Path};
 pub use lru_access::LruAccess;
 
 use self::storage::InnerDb;
@@ -24,7 +24,7 @@ impl Db {
         Self { inner }
     }
 
-    pub fn open(path: &Path) -> Result<Self, sled::Error> {
+    pub fn open(path: &Utf8Path) -> Result<Self, sled::Error> {
         sled::open(path).map(Self::new)
     }
 
@@ -32,7 +32,7 @@ impl Db {
         DbAccess::new(self.inner.clone(), drive_type, drive_id)
     }
 
-    pub fn lru_access(&self, cache_root: PathBuf, size_limit: u64) -> LruAccess {
+    pub fn lru_access(&self, cache_root: Utf8PathBuf, size_limit: u64) -> LruAccess {
         LruAccess::new(self.inner.clone(), cache_root, size_limit)
     }
 }

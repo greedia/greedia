@@ -10,6 +10,7 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use camino::Utf8Path;
 use chrono::{DateTime, Utc};
 use futures::{Stream, TryStreamExt};
 use jwt_simple::prelude::{Claims, Duration as JwtDuration, RS256KeyPair, RSAKeyPairLike};
@@ -181,7 +182,7 @@ pub struct ServiceAccountInstance {
 impl ServiceAccountInstance {
     pub async fn new(
         http_client: &Client,
-        path: &Path,
+        path: &Utf8Path,
     ) -> Result<ServiceAccountInstance, DownloaderError> {
         let rate_limiter = PrioLimit::new(1, 5, Duration::from_millis(100));
 
@@ -237,7 +238,7 @@ impl GDriveClient {
         client_id: &str,
         client_secret: &str,
         refresh_token: &str,
-        service_account_files: &[&Path],
+        service_account_files: &[&Utf8Path],
     ) -> Result<GDriveClient, DownloaderError> {
         let http_client = reqwest::Client::builder().referer(false).build().unwrap();
 

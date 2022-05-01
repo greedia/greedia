@@ -1,5 +1,6 @@
-use std::{convert::TryInto, path::PathBuf, pin::Pin};
+use std::{convert::TryInto, pin::Pin};
 
+use camino::Utf8PathBuf;
 use rkyv::{archived_root, archived_root_mut};
 use self_cell::self_cell;
 use sled::{IVec, Iter};
@@ -23,13 +24,13 @@ pub struct LruAccess {
     /// For keeping track of the data in the LRU, to update timestamps
     data_tree: InnerTree,
     /// Root path of the soft cache.
-    pub cache_root: PathBuf,
+    pub cache_root: Utf8PathBuf,
     /// Soft cache size limit in bytes.
     pub size_limit: u64,
 }
 
 impl LruAccess {
-    pub fn new(db: InnerDb, cache_root: PathBuf, size_limit: u64) -> Self {
+    pub fn new(db: InnerDb, cache_root: Utf8PathBuf, size_limit: u64) -> Self {
         let lru_tree = db.tree(b"lru");
         let lru_timestamp_tree = db.tree(b"lru_timestamp");
         let lru_data_tree = db.tree(b"lru_data");

@@ -13,8 +13,8 @@ use tokio::{
 use super::{HardCacheItem, HcCacher, HcCacherItem};
 use crate::{cache_handlers::CacheHandlerError, config::DownloadAmount};
 pub struct HcTestCacher {
-    pub input: PathBuf,
-    pub output: PathBuf,
+    pub input: Utf8PathBuf,
+    pub output: Utf8PathBuf,
     pub seconds: u64,
     pub fill_byte: Option<String>,
     pub fill_random: bool,

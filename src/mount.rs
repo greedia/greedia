@@ -1,12 +1,12 @@
 use std::{
     ffi::OsStr,
     io,
-    path::PathBuf,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::Result;
+use camino::Utf8PathBuf;
 use polyfuse::{
     op,
     reply::{AttrOut, EntryOut, FileAttr, OpenOut, ReaddirOut},
@@ -30,7 +30,7 @@ const ITEM_BITS: usize = 48;
 const DRIVE_OFFSET: u64 = 1 << ITEM_BITS;
 const ITEM_MASK: u64 = DRIVE_OFFSET - 1;
 
-pub async fn mount_thread(drives: Vec<Arc<DriveAccess>>, mountpoint: PathBuf) {
+pub async fn mount_thread(drives: Vec<Arc<DriveAccess>>, mountpoint: Utf8PathBuf) {
     let mut config = KernelConfig::default();
     if tweaks().mount_read_write {
         println!("TWEAK: mounting read-write");
@@ -662,9 +662,9 @@ struct AsyncSession {
 }
 
 impl AsyncSession {
-    async fn mount(mountpoint: PathBuf, config: KernelConfig) -> io::Result<Self> {
+    async fn mount(mountpoint: Utf8PathBuf, config: KernelConfig) -> io::Result<Self> {
         tokio::task::spawn_blocking(move || {
-            let session = Session::mount(mountpoint, config)?;
+            let session = Session::mount(mountpoint.into_std_path_buf(), config)?;
             //session.notifier()
             Ok(Self {
                 inner: AsyncFd::with_interest(session, Interest::READABLE)?,

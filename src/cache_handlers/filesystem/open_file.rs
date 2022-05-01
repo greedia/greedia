@@ -2,7 +2,6 @@ use std::{
     cmp::min,
     fmt,
     io::SeekFrom,
-    path::Path,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Weak,
@@ -11,6 +10,7 @@ use std::{
 
 use byte_ranger::{ByteRanger, GetRange};
 use bytes::Bytes;
+use camino::Utf8Path;
 use futures::Stream;
 use tokio::{
     fs::{read_dir, DirEntry, File, OpenOptions},
@@ -67,8 +67,8 @@ pub struct OpenFile {
 impl OpenFile {
     pub async fn new(
         lru: Option<Lru>,
-        hard_cache_root: &Path,
-        soft_cache_root: &Path,
+        hard_cache_root: &Utf8Path,
+        soft_cache_root: &Utf8Path,
         file_id: &str,
         data_id: &DataIdentifier,
         downloader_drive: Arc<dyn DownloaderDrive>,
@@ -183,7 +183,7 @@ impl OpenFile {
         &mut self,
         offset: u64,
         write_hard_cache: bool,
-        file_path: &Path,
+        file_path: &Utf8Path,
     ) -> Result<(File, DownloadHandle), CacheHandlerError> {
         let next_chunk = self.get_next_chunk(
             offset,
@@ -268,7 +268,7 @@ impl OpenFile {
         offset: u64,
         prev_download_status: DownloadStatus,
         write_hard_cache: bool,
-        file_path: &Path,
+        file_path: &Utf8Path,
     ) -> Result<(File, DownloadHandle), CacheHandlerError> {
         let next_chunk = self.get_next_chunk(
             offset,
@@ -347,7 +347,7 @@ impl OpenFile {
         chunk_start_offset: u64,
         start_offset: u64,
         write_hard_cache: bool,
-        file_path: &Path,
+        file_path: &Utf8Path,
     ) -> Result<(File, DownloadHandle), CacheHandlerError> {
         let next_chunk = self.get_next_chunk(
             start_offset,
@@ -421,10 +421,10 @@ impl OpenFile {
     pub async fn start_copy_chunk(
         &mut self,
         offset: u64,
-        source_file_path: &Path,
+        source_file_path: &Utf8Path,
         source_file_offset: u64,
         source_file_end_offset: u64,
-        file_path: &Path,
+        file_path: &Utf8Path,
     ) -> Result<(File, DownloadHandle), CacheHandlerError> {
         let next_chunk = self.get_next_chunk(offset, Cache::Hard);
 
@@ -536,7 +536,7 @@ impl OpenFile {
 
     /// Get all cache files in a list of directories.
     /// Earlier cache roots get priority over later cache roots.
-    async fn get_cache_files(cache_root: &Path, data_id: &DataIdentifier) -> ByteRanger<ChunkData> {
+    async fn get_cache_files(cache_root: &Utf8Path, data_id: &DataIdentifier) -> ByteRanger<ChunkData> {
         let mut br = ByteRanger::new();
 
         let cache_path = get_file_cache_path(cache_root, data_id).unwrap();

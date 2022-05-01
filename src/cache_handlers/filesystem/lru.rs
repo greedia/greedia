@@ -1,10 +1,10 @@
 use std::{
     collections::HashSet,
     fs,
-    path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use camino::{Utf8PathBuf, Utf8Path};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use walkdir::{DirEntry, WalkDir};
 
@@ -25,7 +25,7 @@ pub struct Lru {
 }
 
 impl Lru {
-    pub async fn new(db: &Db, db_path: &Path, size_limit: u64) -> Lru {
+    pub async fn new(db: &Db, db_path: &Utf8Path, size_limit: u64) -> Lru {
         let soft_cache_root = db_path.join("soft_cache");
         let db = db.clone();
         let (cmd_sender, recv) = channel(100);
@@ -92,7 +92,7 @@ enum LruInnerMsg {
 async fn run_background(
     db: Db,
     size_limit: u64,
-    soft_cache_root: PathBuf,
+    soft_cache_root: Utf8PathBuf,
     mut recv: Receiver<LruInnerMsg>,
 ) {
     let lru = db.lru_access(soft_cache_root, size_limit);

@@ -18,6 +18,7 @@ use tokio::{
     sync::Mutex,
     task,
 };
+use tracing::trace;
 
 use super::{get_file_cache_path, lru::Lru, MAX_CHUNK_SIZE};
 use crate::{
@@ -349,6 +350,7 @@ impl OpenFile {
         write_hard_cache: bool,
         file_path: &Utf8Path,
     ) -> Result<(File, DownloadHandle), CacheHandlerError> {
+        trace!("append_download_chunk {} {}", cso=chunk_start_offset, so=start_offset);
         let next_chunk = self.get_next_chunk(
             start_offset,
             if write_hard_cache {

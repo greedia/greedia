@@ -35,7 +35,9 @@ mod scanner;
 mod types;
 
 use config::{validate_config, Config, ConfigGoogleDrive, ConfigTimecodeDrive, Tweaks};
-use tracing::log::Level;
+use tracing::{log::Level, trace, trace_span};
+use tracing_futures::Instrument;
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 pub static TWEAKS: OnceCell<Tweaks> = OnceCell::new();
 
@@ -82,12 +84,24 @@ enum Greedia {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    console_subscriber::init();
+    // console_subscriber::init();
     let args = Greedia::parse();
 
     match args {
         Greedia::Run { config_path, verbose } => {
-            handle_log_level(verbose);
+            let log_level = verbose.log_level();
+            if let Some(log_level) = log_level {
+                if log_level != Level::Warn {
+                    println!("Log verbosity level: {log_level}");
+                }
+                tracing_subscriber::registry()
+                    .with(fmt::layer())
+                    .with(EnvFilter::from_default_env())
+                    // .with_max_level(convert_log_level(log_level))
+                    .init();
+
+                trace!("Hello");
+            };
             run(&config_path).await?
         },
         #[cfg(feature = "sctest")]
@@ -101,18 +115,6 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
-}
-
-fn handle_log_level<T: LogLevel>(verbose: Verbosity<T>) {
-    let log_level = verbose.log_level();
-    if let Some(log_level) = log_level {
-        if log_level != Level::Warn {
-            println!("Log verbosity level: {log_level}");
-        }
-        tracing_subscriber::fmt()
-            .with_max_level(convert_log_level(log_level))
-            .init();
-    };
 }
 
 async fn run(config_path: &Utf8Path) -> Result<()> {
@@ -166,10 +168,11 @@ async fn run(config_path: &Utf8Path) -> Result<()> {
     }
 
     // Start a mount thread
+    let mount_span = trace_span!("mount", mp=&cfg.caching.mount_point.as_str());
     join_handles.push(tokio::spawn(mount_thread(
         drives.into_iter().map(|(da, _)| da).collect(),
         cfg.caching.mount_point,
-    )));
+    ).instrument(mount_span)));
 
     join_all(join_handles).await;
 

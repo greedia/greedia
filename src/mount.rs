@@ -33,6 +33,7 @@ const DRIVE_OFFSET: u64 = 1 << ITEM_BITS;
 const ITEM_MASK: u64 = DRIVE_OFFSET - 1;
 
 pub async fn mount_thread(drives: Vec<Arc<DriveAccess>>, mountpoint: Utf8PathBuf) {
+    trace!("Starting mount thread");
     let mut config = KernelConfig::default();
     if tweaks().mount_read_write {
         println!("TWEAK: mounting read-write");
@@ -61,7 +62,10 @@ pub async fn mount_thread(drives: Vec<Arc<DriveAccess>>, mountpoint: Utf8PathBuf
                 Operation::Getattr(op) => fs.do_getattr(&req, op).await?,
                 Operation::Opendir(op) => fs.do_opendir(&req, op).await?,
                 Operation::Readdir(op) => fs.do_readdir(&req, op).await?,
-                Operation::Open(op) => fs.do_open(&req, op).await?,
+                Operation::Open(op) => {
+                    let span = trace_span!("fuse_open", ino=op.ino());
+                    fs.do_open(&req, op).instrument(span).await?
+                }
                 Operation::Read(op) => {
                     let span = trace_span!("fuse_read", fh=op.fh(), off=op.offset(), sz=op.size());
                     fs.do_read(&req, op).instrument(span).await?
@@ -500,6 +504,7 @@ impl GreediaFS {
     /// Pass a FUSE `open()` call to the correct sub-method. In this case it must be an
     /// item within a drive, or it must not exist, as the root only consists of directories.
     async fn do_open(&self, req: &Request, op: op::Open<'_>) -> io::Result<()> {
+        trace!("open");
         let inode = op.ino();
         let open = match self.map_inode(inode) {
             Inode::Drive(drive, local_inode) => self.open_drive(drive, local_inode).await,
@@ -543,7 +548,7 @@ impl GreediaFS {
     /// This uses a file handle successfully retrieved from a previous `open()` call.
     /// The calls are passed through a `CacheFileHandler` reader, which does all the fun stuff.
     async fn do_read(&self, req: &Request, op: op::Read<'_>) -> io::Result<()> {
-        trace!("do_read");
+        trace!("read begin");
         let fh = op.fh();
         let offset = op.offset();
         let size = op.size() as usize;
@@ -565,7 +570,7 @@ impl GreediaFS {
             }
 
             if *f_offset != offset {
-                println!("SEEK {}, {} to {}", fh, f_offset, offset);
+                trace!("SEEK {}, {} to {}", fh, f_offset, offset);
             }
 
             // println!("READ {}, {} {}, size: {}", fh, *f_offset, offset, size);
@@ -577,17 +582,24 @@ impl GreediaFS {
             }
 
             // Read, and push our expected offset forward.
-            if let Ok(read_len) = reader.read_exact(&mut buffer[..size]).await {
-                *f_offset = offset + read_len as u64;
+            trace!("begin actual read");
+            match reader.read_exact(&mut buffer[..size]).await {
+                Ok(read_len) => {
+                    trace!("end actual read");
+                    *f_offset = offset + read_len as u64;
 
-                req.reply(&buffer[..read_len])?
-            } else {
-                req.reply_error(libc::EIO)?
+                    req.reply(&buffer[..read_len])?
+                }
+                Err(e) => {
+                            trace!("end actual read, but with error: {e}");
+                            req.reply_error(libc::EIO)?
+                        }
             }
         } else {
             req.reply_error(libc::ENOENT)?
         }
 
+        trace!("read end");
         Ok(())
     }
 

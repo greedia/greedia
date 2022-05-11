@@ -6,7 +6,7 @@ use std::{
     },
 };
 
-use camino::{Utf8PathBuf, Utf8Path, Utf8Component};
+use camino::{Utf8Component, Utf8Path, Utf8PathBuf};
 use rclone_crypt::decrypter::Decrypter;
 use tracing::instrument;
 
@@ -382,11 +382,27 @@ impl DriveAccess {
     pub fn getattr_item<T>(
         &self,
         inode: u64,
-        to_t: impl FnOnce(&ArchivedDriveItem) -> T,
+        to_t: impl FnOnce(&ArchivedDriveItem, Option<u64>) -> T,
     ) -> Option<T> {
         let drive_item = self.db.get_inode(inode)?;
         let drive_item = drive_item.borrow_dependent().archived;
-        Some(to_t(drive_item))
+        let encrypted_size = if let ArchivedDriveItemData::FileItem {
+            file_name,
+            data_id: _,
+            size,
+        } = &drive_item.data
+        {
+            self
+                .crypts
+                .iter()
+                .any(|cc| cc.cipher.decrypt_segment(&file_name).is_ok()).then(|| {
+                    CryptContext::get_crypt_file_size(size.value())
+                })
+        } else {
+            None
+        };
+
+        Some(to_t(drive_item, encrypted_size))
     }
 
     /// Read the contents of a directory inode.

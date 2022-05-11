@@ -10,7 +10,7 @@ use cache_handlers::{
     filesystem::{lru::Lru, FilesystemCacheHandler},
 };
 use camino::{Utf8PathBuf, Utf8Path};
-use clap_verbosity_flag::{Verbosity, WarnLevel, LogLevel};
+use clap_verbosity_flag::{Verbosity, WarnLevel};
 use db::Db;
 use downloaders::{gdrive::GDriveClient, timecode::TimecodeDrive, DownloaderClient};
 use drive_access::DriveAccess;

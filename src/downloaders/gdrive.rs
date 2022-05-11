@@ -1007,7 +1007,6 @@ pub struct GChange {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GChangeItem {
-    change_type: String,
     removed: bool,
     file: Option<GChangeFile>,
 }
@@ -1034,28 +1033,18 @@ pub struct GErrorTop {
 #[derive(Debug, Deserialize)]
 pub struct GErrorInner {
     errors: Vec<GError>,
-    code: u64,
-    message: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct GError {
-    domain: String,
     reason: String,
-    message: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ServiceAccount {
-    project_id: String,
-    private_key_id: String,
     private_key: String,
     client_email: String,
-    client_id: String,
-    auth_uri: String,
     token_uri: String,
-    auth_provider_x509_cert_url: String,
-    client_x509_cert_url: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1068,8 +1057,6 @@ pub struct SaJwtClaims {
 #[derive(Debug, Deserialize)]
 pub struct SaJwtResponse {
     access_token: String,
-    expires_in: u64,
-    token_type: String,
 }
 
 #[cfg(test)]

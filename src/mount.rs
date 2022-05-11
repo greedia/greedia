@@ -174,7 +174,7 @@ impl GreediaFS {
     /// Fill in the file attribute for a `getattr()` call to any file or directory within a drive.
     fn getattr_item(&self, drive: u16, inode: u64, file_attr: &mut FileAttr) -> Option<Duration> {
         let drive_access = self.drives.get(drive as usize)?;
-        drive_access.getattr_item(inode, |item| {
+        drive_access.getattr_item(inode, |item, encrypted_size| {
             let global_inode = self.rev_inode(Inode::Drive(drive, inode));
             file_attr.ino(global_inode);
             match &item.data {
@@ -184,7 +184,7 @@ impl GreediaFS {
                     size,
                 } => {
                     file_attr.mode(libc::S_IFREG as u32 | 0o444);
-                    file_attr.size(size.value());
+                    file_attr.size(encrypted_size.unwrap_or(size.value()));
                 }
                 ArchivedDriveItemData::Dir { items: _ } => {
                     file_attr.mode(libc::S_IFDIR as u32 | 0o555);

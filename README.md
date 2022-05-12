@@ -27,7 +27,7 @@ Note that Greedia does not currently support file uploading, and gives read-only
 Greedia will be added to crates<span>.io eventually, however for now you can install directly from git using:
 
 ```
-cargo install --git https://github.com/greedia/greedia
+cargo install --locked --git https://github.com/greedia/greedia
 ```
 
 ## Configuration

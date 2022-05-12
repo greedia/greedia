@@ -11,6 +11,7 @@ use std::{
     task::{Context, Poll},
 };
 
+use camino::Utf8PathBuf;
 use async_trait::async_trait;
 use futures::{ready, Future, FutureExt};
 // use rkyv::{Archive, Deserialize, Serialize};
@@ -256,9 +257,9 @@ impl HardCacher {
                         drive_access
                             .set_cache_metadata(data_id.clone(), hcm)
                             .await?;
+                    }
                         return Ok(());
                     }
-                }
                 Err(ScErr::Cancel) => {
                     println!("Preferred cacher {} failed, trying next...", spec.name);
                 }

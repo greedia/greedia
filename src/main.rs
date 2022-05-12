@@ -77,7 +77,7 @@ enum Greedia {
         fill_byte: Option<String>,
 
         /// Fill uncached bytes with random bytes instead. Overrides fill_byte.
-        #[clap(short = "r", long)]
+        #[clap(short = 'r', long)]
         fill_random: bool,
     },
 }
@@ -305,8 +305,6 @@ async fn sctest(
     let file_name = input
         .file_name()
         .expect("sctest could not get input file name")
-        .to_str()
-        .expect("sctest could not convert file name to string")
         .to_string();
     let size = meta.len();
 

@@ -1,9 +1,9 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::SeekFrom,
-    path::PathBuf,
 };
 
+use camino::Utf8PathBuf;
 use async_trait::async_trait;
 use tokio::{
     fs::File,

@@ -2,7 +2,7 @@ use std::cmp::min;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use rclone_crypt::{decrypter::Decrypter, FILE_HEADER_SIZE, BLOCK_SIZE, BLOCK_DATA_SIZE};
+use rclone_crypt::{decrypter::Decrypter, BLOCK_DATA_SIZE, BLOCK_SIZE, FILE_HEADER_SIZE};
 
 use super::{crypt_context::CryptContext, CacheFileHandler, CacheHandlerError};
 
@@ -106,8 +106,7 @@ impl CacheFileHandler for CryptPassthrough {
         // and then decrypt them efficiently but this is easier to verify for now...
         let starting_block = offset / BLOCK_DATA_SIZE as u64;
 
-        let block_starting_offset =
-            FILE_HEADER_SIZE as u64 + (starting_block * BLOCK_SIZE as u64);
+        let block_starting_offset = FILE_HEADER_SIZE as u64 + (starting_block * BLOCK_SIZE as u64);
 
         // The 'offset' may be partially inside the block.
         // To compensate for this, calculate the offset into the decrypted block that

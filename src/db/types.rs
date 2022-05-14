@@ -50,7 +50,7 @@ impl std::fmt::Debug for DataIdentifier {
             Self::GlobalMd5(arg0) => {
                 let md5_hex = hex::encode(arg0);
                 f.write_fmt(format_args!("md5({md5_hex})"))
-            },
+            }
             #[cfg(feature = "sctest")]
             Self::None => write!(f, "None"),
         }

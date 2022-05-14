@@ -627,7 +627,8 @@ impl HcCacherItem for HcDownloadCacherItem {
         Ok(())
     }
 
-    async fn save(&mut self) {}
+    async fn save(&mut self) {
+    }
 }
 
 pub struct HardCacheDownloader {
@@ -730,8 +731,10 @@ pub struct HardCacheReader<'a> {
     last_fut: LastFut<Result<Vec<u8>, CacheHandlerError>>, // references HardCacheDownloader, must not escape
 }
 
-unsafe impl<'a> Send for HardCacheReader<'a> {}
-unsafe impl<'a> Sync for HardCacheReader<'a> {}
+unsafe impl<'a> Send for HardCacheReader<'a> {
+}
+unsafe impl<'a> Sync for HardCacheReader<'a> {
+}
 
 impl<'a> AsyncRead for HardCacheReader<'a> {
     fn poll_read(

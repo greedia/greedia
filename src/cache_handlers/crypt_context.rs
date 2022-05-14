@@ -1,4 +1,6 @@
-use rclone_crypt::{cipher::Cipher, obscure, BLOCK_HEADER_SIZE, BLOCK_DATA_SIZE, BLOCK_SIZE, FILE_HEADER_SIZE};
+use rclone_crypt::{
+    cipher::Cipher, obscure, BLOCK_DATA_SIZE, BLOCK_HEADER_SIZE, BLOCK_SIZE, FILE_HEADER_SIZE,
+};
 
 use super::CacheHandlerError;
 
@@ -27,8 +29,7 @@ impl CryptContext {
     pub fn get_crypt_file_size(size: u64) -> u64 {
         let size_minus_header = size.saturating_sub(FILE_HEADER_SIZE as u64);
         let last_block_size = size_minus_header % BLOCK_SIZE as u64;
-        let num_full_blocks =
-            size_minus_header.saturating_sub(last_block_size) / BLOCK_SIZE as u64;
+        let num_full_blocks = size_minus_header.saturating_sub(last_block_size) / BLOCK_SIZE as u64;
         let full_blocks_size = num_full_blocks * BLOCK_DATA_SIZE as u64;
 
         (full_blocks_size + last_block_size).saturating_sub(BLOCK_HEADER_SIZE as u64)

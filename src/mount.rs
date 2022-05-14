@@ -16,7 +16,7 @@ use tokio::{
     io::{unix::AsyncFd, Interest},
     task::{self, JoinHandle},
 };
-use tracing::{trace_span, trace};
+use tracing::{trace, trace_span};
 use tracing_futures::Instrument;
 
 use crate::{
@@ -63,11 +63,12 @@ pub async fn mount_thread(drives: Vec<Arc<DriveAccess>>, mountpoint: Utf8PathBuf
                 Operation::Opendir(op) => fs.do_opendir(&req, op).await?,
                 Operation::Readdir(op) => fs.do_readdir(&req, op).await?,
                 Operation::Open(op) => {
-                    let span = trace_span!("fuse_open", ino=op.ino());
+                    let span = trace_span!("fuse_open", ino = op.ino());
                     fs.do_open(&req, op).instrument(span).await?
                 }
                 Operation::Read(op) => {
-                    let span = trace_span!("fuse_read", fh=op.fh(), off=op.offset(), sz=op.size());
+                    let span =
+                        trace_span!("fuse_read", fh = op.fh(), off = op.offset(), sz = op.size());
                     fs.do_read(&req, op).instrument(span).await?
                 }
                 Operation::Release(op) => fs.do_release(&req, op).await?,
@@ -591,9 +592,9 @@ impl GreediaFS {
                     req.reply(&buffer[..read_len])?
                 }
                 Err(e) => {
-                            trace!("end actual read, but with error: {e}");
-                            req.reply_error(libc::EIO)?
-                        }
+                    trace!("end actual read, but with error: {e}");
+                    req.reply_error(libc::EIO)?
+                }
             }
         } else {
             req.reply_error(libc::ENOENT)?

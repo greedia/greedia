@@ -15,7 +15,7 @@ use std::{
 use async_trait::async_trait;
 use byte_ranger::GetRange;
 use bytes::{Bytes, BytesMut};
-use camino::{Utf8PathBuf, Utf8Path};
+use camino::{Utf8Path, Utf8PathBuf};
 use futures::{Stream, StreamExt};
 use tokio::{
     fs::{self, File},
@@ -237,7 +237,8 @@ impl CacheDriveHandler for FilesystemCacheHandler {
         &self,
         data_id: DataIdentifier,
     ) -> Result<HardCacheMetadata, CacheHandlerError> {
-        let hard_cache_path = get_file_cache_path(&self.hard_cache_root, &data_id).ok_or(CacheHandlerError::BadPath)?;
+        let hard_cache_path = get_file_cache_path(&self.hard_cache_root, &data_id)
+            .ok_or(CacheHandlerError::BadPath)?;
         // KTODO: handle bad paths. This appears to be in the DB somehow.
         // shows up as GlobalMd5([])
         let hcm_path = hard_cache_path.join("metadata.json");
@@ -387,7 +388,6 @@ impl FilesystemCacheFileHandler {
             self.current_chunk = Some(new_chunk);
         }
 
-
         for attempt in 0..40 {
             if attempt > 20 {
                 sleep(Duration::from_millis(50 * attempt)).await;
@@ -450,7 +450,7 @@ impl FilesystemCacheFileHandler {
 
     /// Handle reading from, or downloading to, the current cache chunk file.
     /// Make every attempt to read from a chunk file without locking the OpenFile struct.
-    /// 
+    ///
     /// Expects self.current_chunk to be Some(), otherwise it will panic.
     async fn handle_chunk(
         &mut self,
@@ -580,10 +580,7 @@ impl FilesystemCacheFileHandler {
                                                 .await;
                                         } else {
                                             return self
-                                                .start_append_dl(
-                                                    &mut of,
-                                                    chunk_start_offset,
-                                                )
+                                                .start_append_dl(&mut of, chunk_start_offset)
                                                 .await;
                                         }
                                     }
@@ -600,9 +597,7 @@ impl FilesystemCacheFileHandler {
                                             .transfer_dl(&mut of, prev_download_status)
                                             .await;
                                     } else {
-                                        return self
-                                            .start_append_dl(&mut of, start_offset)
-                                            .await;
+                                        return self.start_append_dl(&mut of, start_offset).await;
                                     }
                                 }
                             }
@@ -618,8 +613,7 @@ impl FilesystemCacheFileHandler {
                         if let Some(prev_download_status) = prev_download_status {
                             return self.transfer_dl(&mut of, prev_download_status).await;
                         } else {
-                            self.start_append_dl(&mut of, chunk_start_offset)
-                                .await
+                            self.start_append_dl(&mut of, chunk_start_offset).await
                         }
                     } else {
                         // We're not at the end of the previous chunk, but have space to write
@@ -674,9 +668,7 @@ impl FilesystemCacheFileHandler {
                                 if let Some(prev_download_status) = prev_download_status {
                                     return self.transfer_dl(&mut of, prev_download_status).await;
                                 } else {
-                                    return self
-                                        .start_append_dl(&mut of, start_offset)
-                                        .await;
+                                    return self.start_append_dl(&mut of, start_offset).await;
                                 }
                             }
                         }
@@ -692,8 +684,7 @@ impl FilesystemCacheFileHandler {
                     if let Some(prev_download_status) = prev_download_status {
                         return self.transfer_dl(&mut of, prev_download_status).await;
                     } else {
-                        self.start_append_dl(&mut of, chunk_start_offset)
-                            .await
+                        self.start_append_dl(&mut of, chunk_start_offset).await
                     }
                 } else {
                     // We're not at the end of the previous chunk, but have space to write
@@ -993,7 +984,7 @@ impl FilesystemCacheFileHandler {
                                         Reader::Data(lb_res)
                                     }
                                 } else {
-                                trace!("nnc d");
+                                    trace!("nnc d");
                                     Reader::NeedsNewChunk
                                 }
                             }
@@ -1128,29 +1119,31 @@ pub fn get_file_cache_chunk_path(
     data_id: &DataIdentifier,
     offset: u64,
 ) -> Utf8PathBuf {
-    get_file_cache_path(cache_root, data_id).unwrap().join(format!("chunk_{}", offset))
+    get_file_cache_path(cache_root, data_id)
+        .unwrap()
+        .join(format!("chunk_{}", offset))
 }
 
 /// CacheFileHandler uses proptest for testing.
-/// 
+///
 /// The general strategy is to open one file with three handles, and
 /// have each handle perform random seeks, reads, and caches.
 /// Occasionally, they may also reopen the file.
-/// 
+///
 /// When a file is opened, it may be opened to write to hard_cache,
 /// or it may be opened "normally" (like if a FUSE mount opened it).
-/// 
+///
 /// Additionally, when a read occurs, timecode is used to ensure
 /// the data was read at the proper offset.
-/// 
+///
 /// By default, the timecode drive is used for testing and is done
 /// locally, however this does not support CryptPassthrough.
-/// 
+///
 /// In order to test crypt, a timecode.bin file needs to be uploaded
 /// to a google drive via an rclone drive+crypt drive, and
 /// environment variables at the start of tester_crypt() must be set
 /// to point to that file.
-/// 
+///
 /// Some of the test methods have a `keep_path` variable that's set to
 /// false by default. If set to true, the cache directories will be kept
 /// which can allow for further debugging.
@@ -1307,7 +1300,7 @@ mod test {
     ) {
         if env::var("TEST_CRYPT").is_err() {
             println!("TEST_CRYPT environment variable not test, skipping.");
-            return
+            return;
         }
         let client_id = env::var("TEST_CLIENT_ID").unwrap();
         let client_secret = env::var("TEST_CLIENT_SECRET").unwrap();
@@ -1359,8 +1352,12 @@ mod test {
             (test_path.join("hard_cache"), test_path.join("soft_cache"))
         } else {
             (
-                Utf8Path::from_path(test_path.path()).unwrap().join("hard_cache"),
-                Utf8Path::from_path(test_path.path()).unwrap().join("soft_cache"),
+                Utf8Path::from_path(test_path.path())
+                    .unwrap()
+                    .join("hard_cache"),
+                Utf8Path::from_path(test_path.path())
+                    .unwrap()
+                    .join("soft_cache"),
             )
         };
 
@@ -1518,8 +1515,12 @@ mod test {
             (test_path.join("hard_cache"), test_path.join("soft_cache"))
         } else {
             (
-                Utf8Path::from_path(test_path.path()).unwrap().join("hard_cache"),
-                Utf8Path::from_path(test_path.path()).unwrap().join("soft_cache"),
+                Utf8Path::from_path(test_path.path())
+                    .unwrap()
+                    .join("hard_cache"),
+                Utf8Path::from_path(test_path.path())
+                    .unwrap()
+                    .join("soft_cache"),
             )
         };
 
@@ -1553,8 +1554,12 @@ mod test {
             (test_path.join("hard_cache"), test_path.join("soft_cache"))
         } else {
             (
-                Utf8Path::from_path(test_path.path()).unwrap().join("hard_cache"),
-                Utf8Path::from_path(test_path.path()).unwrap().join("soft_cache"),
+                Utf8Path::from_path(test_path.path())
+                    .unwrap()
+                    .join("hard_cache"),
+                Utf8Path::from_path(test_path.path())
+                    .unwrap()
+                    .join("soft_cache"),
             )
         };
 

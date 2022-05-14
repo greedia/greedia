@@ -5,9 +5,8 @@ mod storage_tree;
 mod tree; // KTODO: make private
 pub mod types;
 
-
 pub use access::DbAccess;
-use camino::{Utf8PathBuf, Utf8Path};
+use camino::{Utf8Path, Utf8PathBuf};
 pub use lru_access::LruAccess;
 
 use self::storage::InnerDb;

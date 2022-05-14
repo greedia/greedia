@@ -9,7 +9,8 @@ use cache_handlers::{
     crypt_context::CryptContext,
     filesystem::{lru::Lru, FilesystemCacheHandler},
 };
-use camino::{Utf8PathBuf, Utf8Path};
+use camino::{Utf8Path, Utf8PathBuf};
+use clap::Parser;
 use clap_verbosity_flag::{Verbosity, WarnLevel};
 use db::Db;
 use downloaders::{gdrive::GDriveClient, timecode::TimecodeDrive, DownloaderClient};
@@ -20,7 +21,6 @@ use hard_cache::HardCacher;
 use mount::mount_thread;
 use once_cell::sync::OnceCell;
 use scanner::scan_thread;
-use clap::Parser;
 
 mod cache_handlers;
 mod config;
@@ -37,7 +37,7 @@ mod types;
 use config::{validate_config, Config, ConfigGoogleDrive, ConfigTimecodeDrive, Tweaks};
 use tracing::{log::Level, trace, trace_span};
 use tracing_futures::Instrument;
-use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 pub static TWEAKS: OnceCell<Tweaks> = OnceCell::new();
 
@@ -54,7 +54,7 @@ enum Greedia {
         config_path: Utf8PathBuf,
 
         #[clap(flatten)]
-        verbose: Verbosity<WarnLevel>
+        verbose: Verbosity<WarnLevel>,
     },
 
     #[cfg(feature = "sctest")]
@@ -88,7 +88,10 @@ async fn main() -> Result<()> {
     let args = Greedia::parse();
 
     match args {
-        Greedia::Run { config_path, verbose } => {
+        Greedia::Run {
+            config_path,
+            verbose,
+        } => {
             let log_level = verbose.log_level();
             if let Some(log_level) = log_level {
                 if log_level != Level::Warn {
@@ -103,7 +106,7 @@ async fn main() -> Result<()> {
                 trace!("Hello");
             };
             run(&config_path).await?
-        },
+        }
         #[cfg(feature = "sctest")]
         Greedia::Sctest {
             input,
@@ -168,11 +171,14 @@ async fn run(config_path: &Utf8Path) -> Result<()> {
     }
 
     // Start a mount thread
-    let mount_span = trace_span!("mount", mp=&cfg.caching.mount_point.as_str());
-    join_handles.push(tokio::spawn(mount_thread(
-        drives.into_iter().map(|(da, _)| da).collect(),
-        cfg.caching.mount_point,
-    ).instrument(mount_span)));
+    let mount_span = trace_span!("mount", mp = &cfg.caching.mount_point.as_str());
+    join_handles.push(tokio::spawn(
+        mount_thread(
+            drives.into_iter().map(|(da, _)| da).collect(),
+            cfg.caching.mount_point,
+        )
+        .instrument(mount_span),
+    ));
 
     join_all(join_handles).await;
 
@@ -298,7 +304,9 @@ async fn sctest(
     fill_byte: Option<String>,
     fill_random: bool,
 ) -> Result<()> {
-    TWEAKS.set(Tweaks::default()).expect("TWEAKS should not be set at this point");
+    TWEAKS
+        .set(Tweaks::default())
+        .expect("TWEAKS should not be set at this point");
     let meta = input
         .metadata()
         .expect("sctest could not get metadata for file");

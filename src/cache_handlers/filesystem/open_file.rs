@@ -350,7 +350,11 @@ impl OpenFile {
         write_hard_cache: bool,
         file_path: &Utf8Path,
     ) -> Result<(File, DownloadHandle), CacheHandlerError> {
-        trace!("append_download_chunk {} {}", cso=chunk_start_offset, so=start_offset);
+        trace!(
+            "append_download_chunk {} {}",
+            cso = chunk_start_offset,
+            so = start_offset
+        );
         let next_chunk = self.get_next_chunk(
             start_offset,
             if write_hard_cache {
@@ -538,7 +542,10 @@ impl OpenFile {
 
     /// Get all cache files in a list of directories.
     /// Earlier cache roots get priority over later cache roots.
-    async fn get_cache_files(cache_root: &Utf8Path, data_id: &DataIdentifier) -> ByteRanger<ChunkData> {
+    async fn get_cache_files(
+        cache_root: &Utf8Path,
+        data_id: &DataIdentifier,
+    ) -> ByteRanger<ChunkData> {
         let mut br = ByteRanger::new();
 
         let cache_path = get_file_cache_path(cache_root, data_id).unwrap();

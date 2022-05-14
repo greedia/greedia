@@ -392,12 +392,10 @@ impl DriveAccess {
             size,
         } = &drive_item.data
         {
-            self
-                .crypts
+            self.crypts
                 .iter()
-                .any(|cc| cc.cipher.decrypt_segment(&file_name).is_ok()).then(|| {
-                    CryptContext::get_crypt_file_size(size.value())
-                })
+                .any(|cc| cc.cipher.decrypt_segment(&file_name).is_ok())
+                .then(|| CryptContext::get_crypt_file_size(size.value()))
         } else {
             None
         };

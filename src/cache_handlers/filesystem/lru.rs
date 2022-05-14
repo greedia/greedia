@@ -4,7 +4,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use camino::{Utf8PathBuf, Utf8Path};
+use camino::{Utf8Path, Utf8PathBuf};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use walkdir::{DirEntry, WalkDir};
 

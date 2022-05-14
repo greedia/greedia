@@ -341,7 +341,7 @@ async fn scanner_bg_thread(
                 if let Some(files) = page.files {
                     let items = files
                         .into_iter()
-                        .filter(|x| accepted_document_type(x))
+                        .filter(accepted_document_type)
                         .map(to_page_item)
                         .collect();
 

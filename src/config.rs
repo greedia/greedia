@@ -5,7 +5,7 @@ use serde::Deserialize;
 
 /// Tweaks are development or testing values used to modify the code.
 /// Every value must have a default.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Default)]
 pub struct Tweaks {
     /// Enable directory caching in the kernel. File contents will
     /// be cached, but directory listings and file metadata such
@@ -22,16 +22,6 @@ pub struct Tweaks {
     /// to allow a quicker startup of greedia.
     #[serde(default)]
     pub disable_scanner_caching: bool,
-}
-
-impl Default for Tweaks {
-    fn default() -> Self {
-        Self {
-            enable_kernel_dir_caching: false,
-            mount_read_write: false,
-            disable_scanner_caching: false,
-        }
-    }
 }
 
 #[derive(Debug, Deserialize)]

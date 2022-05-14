@@ -218,7 +218,7 @@ async fn get_gdrive_drives(
         let client = if let Some(client) = clients.get(&cfg_drive.client_id) {
             client.clone()
         } else {
-            let service_accounts = cfg_drive.service_accounts.unwrap_or_else(Vec::new);
+            let service_accounts = cfg_drive.service_accounts.unwrap_or_default();
             let sa_refs: Vec<_> = service_accounts.iter().map(|sa| sa.as_path()).collect();
 
             let new_client = Arc::new(
@@ -257,7 +257,7 @@ async fn get_gdrive_drives(
             client_crypts
                 .get(&cfg_drive.drive_id)
                 .cloned()
-                .unwrap_or_else(Vec::new),
+                .unwrap_or_default(),
         );
 
         da_out.push((Arc::new(da), do_scan));

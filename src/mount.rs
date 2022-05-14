@@ -185,7 +185,7 @@ impl GreediaFS {
                     size,
                 } => {
                     file_attr.mode(libc::S_IFREG as u32 | 0o444);
-                    file_attr.size(encrypted_size.unwrap_or(size.value()));
+                    file_attr.size(encrypted_size.unwrap_or_else(|| size.value()));
                 }
                 ArchivedDriveItemData::Dir { items: _ } => {
                     file_attr.mode(libc::S_IFDIR as u32 | 0o555);

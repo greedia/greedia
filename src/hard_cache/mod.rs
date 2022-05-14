@@ -49,7 +49,11 @@ Attempt to arbitrarily download some percentage of the file's start and end.
 
 static SMART_CACHERS: &[&dyn SmartCacher] = &[&sc_mp3::ScMp3, &sc_mkv::ScMkv];
 /// Skip these extensions, and just generic cache them.
-static SKIP_EXTS: &[&str] = &["avi", "mp4", "m4v"];
+/// These are media formats that don't have smart cachers, and we know for sure
+/// won't work with any existing smart cachers.
+static SKIP_EXTS: &[&str] = &[
+    "avi", "mp4", "m4a", "m4v", "wmv", "mov", "ogg", "opus", "flac", "aac", "bin", "cue", "iso",
+];
 
 #[derive(Debug, Clone)]
 pub struct HardCacheItem {
@@ -627,8 +631,7 @@ impl HcCacherItem for HcDownloadCacherItem {
         Ok(())
     }
 
-    async fn save(&mut self) {
-    }
+    async fn save(&mut self) {}
 }
 
 pub struct HardCacheDownloader {
@@ -731,10 +734,8 @@ pub struct HardCacheReader<'a> {
     last_fut: LastFut<Result<Vec<u8>, CacheHandlerError>>, // references HardCacheDownloader, must not escape
 }
 
-unsafe impl<'a> Send for HardCacheReader<'a> {
-}
-unsafe impl<'a> Sync for HardCacheReader<'a> {
-}
+unsafe impl<'a> Send for HardCacheReader<'a> {}
+unsafe impl<'a> Sync for HardCacheReader<'a> {}
 
 impl<'a> AsyncRead for HardCacheReader<'a> {
     fn poll_read(

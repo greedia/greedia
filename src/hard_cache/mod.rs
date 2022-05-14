@@ -49,7 +49,7 @@ Attempt to arbitrarily download some percentage of the file's start and end.
 
 static SMART_CACHERS: &[&dyn SmartCacher] = &[&sc_mp3::ScMp3, &sc_mkv::ScMkv];
 /// Skip these extensions, and just generic cache them.
-static SKIP_EXTS: &[&str] = &["avi", "mp4"];
+static SKIP_EXTS: &[&str] = &["avi", "mp4", "m4v"];
 
 #[derive(Debug, Clone)]
 pub struct HardCacheItem {

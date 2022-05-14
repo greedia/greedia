@@ -31,7 +31,7 @@ impl HcCacher for HcTestCacher {
         let output = File::create(&self.output).await.unwrap();
         Box::new(HcTestCacherItem {
             input,
-            input_size: item.size,
+            input_size: item.file_size,
             output,
             bridge_points: BTreeSet::new(),
             ranges_to_cache: BTreeMap::new(),

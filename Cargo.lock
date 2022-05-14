@@ -731,16 +731,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ffprobe"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4151d364a3709c400c4aaca1988324f02dfde8d3e2e8543176e596d39eb414ac"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "flate2"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -942,7 +932,6 @@ dependencies = [
  "clap",
  "clap-verbosity-flag",
  "console-subscriber",
- "ffprobe",
  "flume",
  "futures",
  "hex",

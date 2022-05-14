@@ -1,18 +1,16 @@
-#[cfg(feature = "sctest")]
-use std::path::PathBuf;
 use std::{
     cmp::min,
     collections::{BTreeMap, HashMap},
-    ffi::OsStr,
     io::SeekFrom,
-    path::Path,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
 };
 
-use camino::Utf8PathBuf;
 use async_trait::async_trait;
+use camino::Utf8Path;
+#[cfg(feature = "sctest")]
+use camino::Utf8PathBuf;
 use futures::{ready, Future, FutureExt};
 // use rkyv::{Archive, Deserialize, Serialize};
 use serde::{Deserialize, Serialize};
@@ -50,15 +48,40 @@ Attempt to arbitrarily download some percentage of the file's start and end.
 */
 
 static SMART_CACHERS: &[&dyn SmartCacher] = &[&sc_mp3::ScMp3, &sc_mkv::ScMkv];
+/// Skip these extensions, and just generic cache them.
+static SKIP_EXTS: &[&str] = &["avi", "mp4"];
+
+#[derive(Debug, Clone)]
+pub struct HardCacheItem {
+    /// Downloader access_id.
+    access_id: String,
+    /// File name. May be decrypted file name, in which case encrypted file name is in crypt_item.file_name.
+    file_name: String,
+    /// File size. May be decrypted file size, in which case encrypted file size is in crypt_item.size.
+    file_size: u64,
+    /// Data ID, for cache on disk.
+    data_id: DataIdentifier,
+    /// Crypt parameters, if file is encrypted.
+    crypt_item: Option<CryptItem>,
+    // crypt_context: Option<Arc<CryptContext>>,
+}
 
 #[derive(Clone)]
-pub struct HardCacheItem {
-    access_id: String,
-    file_name: String,
-    crypt_context: Option<Arc<CryptContext>>,
-    data_id: DataIdentifier,
+pub struct CryptItem {
+    /// Raw encrypted file size.
     size: u64,
+    /// Crypt context, for decryption.
+    context: Arc<CryptContext>,
 }
+
+impl std::fmt::Debug for CryptItem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CryptItem")
+            .field("size", &self.size)
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HardCacheMetadata {
     /// Name of the (smart) cacher used to cache this file.
@@ -136,28 +159,36 @@ impl HardCacher {
         data_id: &DataIdentifier,
         size: u64,
     ) -> Result<(), CacheHandlerError> {
-        let (crypt_context, new_file_name, size) = if let Some(drive_access) =
-            self.drive_access.as_ref()
-        {
-            if let Some((cc, file_name, crypt_size)) = drive_access.crypts.iter().find_map(|cc| {
-                let file_name = cc.cipher.decrypt_segment(file_name).ok()?;
-                let crypt_size = CryptContext::get_crypt_file_size(size);
-                Some((cc.clone(), file_name, crypt_size))
-            }) {
-                (Some(cc), file_name, crypt_size)
+        // If drive has crypt data, try to decrypt file
+        let (crypt_item, dec_file_name, dec_file_size) =
+            if let Some(drive_access) = self.drive_access.as_ref() {
+                if let Some((crypt_item, dec_file_name, dec_size)) =
+                    drive_access.crypts.iter().find_map(|cc| {
+                        let enc_file_name = file_name;
+                        let enc_size = size;
+                        let dec_file_name = cc.cipher.decrypt_segment(enc_file_name).ok()?;
+                        let dec_size = CryptContext::get_crypt_file_size(enc_size);
+                        let crypt_item = CryptItem {
+                            size: enc_size,
+                            context: cc.clone(),
+                        };
+                        Some((crypt_item, dec_file_name, dec_size))
+                    })
+                {
+                    (Some(crypt_item), dec_file_name, dec_size)
+                } else {
+                    (None, file_name.to_string(), size)
+                }
             } else {
                 (None, file_name.to_string(), size)
-            }
-        } else {
-            (None, file_name.to_string(), size)
-        };
+            };
 
         let item = HardCacheItem {
             access_id: access_id.to_string(),
-            file_name: new_file_name,
-            crypt_context,
+            file_name: dec_file_name,
+            file_size: dec_file_size,
             data_id: data_id.clone(),
-            size,
+            crypt_item,
         };
 
         self.process_inner(item).await
@@ -165,16 +196,16 @@ impl HardCacher {
 
     /// Process the provided sctest file.
     #[cfg(feature = "sctest")]
-    pub async fn process_sctest(&self, file_name: String, size: u64) {
+    pub async fn process_sctest(&self, file_name: String, file_size: u64) {
         println!("SCTEST");
 
         // Create fake item for process_partial_cache
         let item = HardCacheItem {
             access_id: String::new(),
             file_name,
-            crypt_context: None,
+            file_size,
             data_id: DataIdentifier::None,
-            size,
+            crypt_item: None,
         };
 
         self.process_inner(item).await.unwrap();
@@ -191,12 +222,17 @@ impl HardCacher {
             }
         }
         let file_spec = hard_cache_item_to_file_spec(&item);
-        let item_size = item.size;
+        let item_size = item.file_size;
 
-        let preferred_cacher = Path::new(&item.file_name)
-            .extension()
-            .and_then(OsStr::to_str)
-            .and_then(|ext| self.cachers_by_ext.get(ext));
+        let ext = Utf8Path::new(&item.file_name).extension();
+
+        let skip_ext = ext.map(|ext| SKIP_EXTS.contains(&ext)).unwrap_or(false);
+
+        let preferred_cacher = if skip_ext {
+            None
+        } else {
+            ext.and_then(|ext| self.cachers_by_ext.get(ext))
+        };
 
         let file_item = item.clone();
 
@@ -238,16 +274,16 @@ impl HardCacher {
 
         if let Some(pc) = preferred_cacher {
             let spec = pc.spec();
-            println!(
-                "Trying preferred cacher {} on {} ({} bytes, '{}')",
-                spec.name, file_spec.name, file_spec.size, hex_md5
-            );
+            // println!(
+            //     "Trying preferred cacher {} on {} ({} bytes, '{}')",
+            //     spec.name, file_spec.name, file_spec.size, hex_md5
+            // );
             let res: ScResult = pc.cache(&smart_cacher_config, &file_spec, &mut hcd).await;
 
             match res {
                 Ok(ScOk::Finalize) => {
                     // Write metadata, save here
-                    println!("Success with smart cacher {}", spec.name);
+                    // println!("Success with smart cacher {}", spec.name);
                     hcd.save().await;
                     let hcm = HardCacheMetadata {
                         cacher: spec.name.to_string(),
@@ -258,10 +294,13 @@ impl HardCacher {
                             .set_cache_metadata(data_id.clone(), hcm)
                             .await?;
                     }
-                        return Ok(());
-                    }
+                    return Ok(());
+                }
                 Err(ScErr::Cancel) => {
-                    println!("Preferred cacher {} failed, trying next...", spec.name);
+                    println!(
+                        "Preferred cacher {} failed on {}, trying next...",
+                        spec.name, file_spec.name
+                    );
                 }
                 Err(ScErr::CacheHandlerError(e)) => {
                     println!("Cache handler error {} {:?}", e, e);
@@ -270,51 +309,54 @@ impl HardCacher {
             }
         }
 
-        for cacher in SMART_CACHERS {
-            let spec = cacher.spec();
-            if let Some(pc) = preferred_cacher {
-                let pc_spec = pc.spec();
-                if spec.name == pc_spec.name {
-                    continue;
+        if !skip_ext {
+            for cacher in SMART_CACHERS {
+                let spec = cacher.spec();
+                if let Some(pc) = preferred_cacher {
+                    let pc_spec = pc.spec();
+                    if spec.name == pc_spec.name {
+                        continue;
+                    }
                 }
-            }
-            println!(
-                "Trying smart cacher {} for {} ({} bytes, '{}')",
-                spec.name, file_spec.name, file_spec.size, hex_md5
-            );
-            let res: ScResult = cacher
-                .cache(&smart_cacher_config, &file_spec, &mut hcd)
-                .await;
+                println!(
+                    "Trying smart cacher {} for {} ({} bytes, '{}')",
+                    spec.name, file_spec.name, file_spec.size, hex_md5
+                );
+                let res: ScResult = cacher
+                    .cache(&smart_cacher_config, &file_spec, &mut hcd)
+                    .await;
 
-            match res {
-                Ok(ScOk::Finalize) => {
-                    // Write metadata, save here
-                    println!("Success with smart cacher {}", spec.name);
-                    hcd.save().await;
-                    let hcm = HardCacheMetadata {
-                        cacher: spec.name.to_string(),
-                        version: SMART_CACHER_VERSION,
-                    };
-                    if let Some(drive_access) = &self.drive_access {
-                        drive_access
-                            .set_cache_metadata(data_id.clone(), hcm)
-                            .await?;
+                match res {
+                    Ok(ScOk::Finalize) => {
+                        // Write metadata, save here
+                        println!("Success with smart cacher {}", spec.name);
+                        hcd.save().await;
+                        let hcm = HardCacheMetadata {
+                            cacher: spec.name.to_string(),
+                            version: SMART_CACHER_VERSION,
+                        };
+                        if let Some(drive_access) = &self.drive_access {
+                            drive_access
+                                .set_cache_metadata(data_id.clone(), hcm)
+                                .await?;
+                        }
                         return Ok(());
                     }
-                    return Ok(());
+                    Err(ScErr::Cancel) => {
+                        println!("Smart cacher {} failed, trying next...", spec.name);
+                    }
+                    Err(ScErr::CacheHandlerError(e)) => return Err(e),
                 }
-                Err(ScErr::Cancel) => {
-                    println!("Smart cacher {} failed, trying next...", spec.name);
-                }
-                Err(ScErr::CacheHandlerError(e)) => return Err(e),
             }
         }
 
         // If we reach here, try a generic start-end downloader.
-        println!(
-            "Using generic cacher for {} ({} bytes, '{}')",
-            file_spec.name, file_spec.size, hex_md5
-        );
+        if !skip_ext {
+            println!(
+                "Using generic cacher for {} ({} bytes, '{}')",
+                file_spec.name, file_spec.size, hex_md5
+            );
+        }
 
         let (start_dl, end_dl) = &self.cacher.generic_cache_sizes();
 
@@ -424,21 +466,21 @@ impl HcDownloadCacherItem {
         &mut self,
         offset: u64,
     ) -> Result<Box<dyn CacheFileHandler>, CacheHandlerError> {
-        if let Some(ref crypt_context) = self.item.crypt_context {
+        if let Some(ref crypt_item) = self.item.crypt_item {
             let reader = self
                 .drive_access
                 .cache_handler
                 .open_file(
                     self.item.access_id.clone(),
                     self.item.data_id.clone(),
-                    self.item.size,
+                    crypt_item.size, // FIXME: TODO: is this the bug? should be full size?
                     0,
                     true,
                 )
                 .await?;
 
             return Ok(Box::new(
-                CryptPassthrough::new(crypt_context, offset, reader).await?,
+                CryptPassthrough::new(&crypt_item.context, offset, reader).await?,
             ));
         }
 
@@ -447,7 +489,7 @@ impl HcDownloadCacherItem {
             .open_file(
                 self.item.access_id.clone(),
                 self.item.data_id.clone(),
-                self.item.size,
+                self.item.file_size,
                 offset,
                 true,
             )
@@ -463,6 +505,7 @@ impl HcCacherItem for HcDownloadCacherItem {
             reader.read_exact(&mut buf).await?;
             self.readers.insert(offset + size, reader);
         } else {
+            // TODO: Look for readers <10KB before our position, and bridge from them
             let mut reader = self.open_reader(offset).await?;
             reader.read_exact(&mut buf).await?;
             self.readers.insert(offset + size, reader);
@@ -509,7 +552,7 @@ impl HcCacherItem for HcDownloadCacherItem {
     }
 
     async fn cache_data(&mut self, offset: u64, size: u64) -> Result<(), CacheHandlerError> {
-        if self.item.size > offset {
+        if self.item.file_size > offset {
             return Ok(());
         }
         if let Some(mut reader) = self.readers.remove(&offset) {
@@ -523,7 +566,7 @@ impl HcCacherItem for HcDownloadCacherItem {
                 .open_file(
                     self.item.access_id.clone(),
                     self.item.data_id.clone(),
-                    self.item.size,
+                    self.item.file_size,
                     offset,
                     true,
                 )
@@ -554,7 +597,7 @@ impl HcCacherItem for HcDownloadCacherItem {
             .open_file(
                 self.item.access_id.clone(),
                 self.item.data_id.clone(),
-                self.item.size,
+                self.item.file_size,
                 0,
                 true,
             )
@@ -574,18 +617,17 @@ impl HcCacherItem for HcDownloadCacherItem {
             .open_file(
                 self.item.access_id.clone(),
                 self.item.data_id.clone(),
-                self.item.size,
+                self.item.file_size,
                 0,
                 true,
             )
             .await?;
-        reader.cache_exact(self.item.size as usize).await?;
+        reader.cache_exact(self.item.file_size as usize).await?;
 
         Ok(())
     }
 
-    async fn save(&mut self) {
-    }
+    async fn save(&mut self) {}
 }
 
 pub struct HardCacheDownloader {
@@ -667,7 +709,7 @@ impl HardCacheDownloader {
     }
 
     pub fn reader(&mut self, offset: u64) -> HardCacheReader<'_> {
-        let size = self.file_item.size;
+        let size = self.file_item.file_size;
         HardCacheReader {
             dl_ptr: self,
             dl: self,
@@ -688,10 +730,8 @@ pub struct HardCacheReader<'a> {
     last_fut: LastFut<Result<Vec<u8>, CacheHandlerError>>, // references HardCacheDownloader, must not escape
 }
 
-unsafe impl<'a> Send for HardCacheReader<'a> {
-}
-unsafe impl<'a> Sync for HardCacheReader<'a> {
-}
+unsafe impl<'a> Send for HardCacheReader<'a> {}
+unsafe impl<'a> Sync for HardCacheReader<'a> {}
 
 impl<'a> AsyncRead for HardCacheReader<'a> {
     fn poll_read(
@@ -774,6 +814,6 @@ impl<'a> HardCacheReader<'a> {
 fn hard_cache_item_to_file_spec(item: &HardCacheItem) -> FileSpec {
     FileSpec {
         name: item.file_name.clone(),
-        size: item.size,
+        size: item.file_size,
     }
 }

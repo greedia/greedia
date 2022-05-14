@@ -31,7 +31,7 @@ pub struct DirItem {
 }
 
 /// Identifier used to find the cache storage on disk for a particular file.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Archive, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, Archive, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum DataIdentifier {
     /// Data is referred to globally within Greedia by an md5 hash.
@@ -42,6 +42,19 @@ pub enum DataIdentifier {
     /// The sctest functionality doesn't store cache data, so it can use None.
     #[cfg(feature = "sctest")]
     None,
+}
+
+impl std::fmt::Debug for DataIdentifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::GlobalMd5(arg0) => {
+                let md5_hex = hex::encode(arg0);
+                f.write_fmt(format_args!("md5({md5_hex})"))
+            },
+            #[cfg(feature = "sctest")]
+            Self::None => write!(f, "None"),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Archive, Serialize, Deserialize)]
